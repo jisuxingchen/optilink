@@ -1,0 +1,45 @@
+name: Project task
+description: Track an OptiLink story, task, spike, gate, or project-management item
+title: "[TASK-ID] — "
+body:
+  - type: dropdown
+    id: type
+    attributes:
+      label: Work type
+      options:
+        - Product discovery
+        - User story
+        - Technical spike
+        - Engineering task
+        - Review gate
+        - Project management
+    validations:
+      required: true
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What uncertainty, user value, or delivery outcome does this item address?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps / subtasks
+      placeholder: "- [ ] Step 1\n- [ ] Step 2"
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance evidence
+      description: What observable evidence is required before this item is complete?
+    validations:
+      required: true
+  - type: textarea
+    id: decisions
+    attributes:
+      label: Decisions / owner review needed
+      description: List unresolved decisions. Write "None" if there are none.
+    validations:
+      required: true

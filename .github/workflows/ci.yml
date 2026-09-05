@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  project-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate project structure and dashboard data
+        run: python scripts/validate_project.py
+
+  dashboard-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build static dashboard artifact
+        run: |
+          mkdir -p _site/data
+          cp dashboard/index.html _site/index.html
+          cp project/PROJECT_STATUS.json _site/data/status.json
+          test -s _site/index.html
+          test -s _site/data/status.json
+      - name: Upload dashboard preview artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: optilink-dashboard-${{ github.sha }}
+          path: _site
