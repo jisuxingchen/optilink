@@ -50,6 +50,44 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .method ol { margin-bottom: 0; padding-left: 22px; color: #475467; font-size: 13px; }
 .method li + li { margin-top: 6px; }
 
+.multiqr-stage {
+  width: min(100%, 1000px);
+  margin: 0 auto;
+  padding: 8px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 480px));
+  gap: 8px;
+  justify-content: center;
+  background: #fff;
+  border: 2px solid #172033;
+  border-radius: 12px;
+}
+.multiqr-stage canvas { width: 100%; height: auto; display: block; image-rendering: pixelated; background: #fff; }
+.multiqr-camera-stage #camera { object-fit: contain; background: #000; }
+.multiqr-reticle {
+  position: absolute;
+  width: min(88%, 58vh);
+  aspect-ratio: 1;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  border: 2px solid rgba(255,255,255,.9);
+  border-radius: 12px;
+  box-shadow: 0 0 0 999px rgba(0,0,0,.12);
+  pointer-events: none;
+}
+.multiqr-reticle::before,
+.multiqr-reticle::after,
+.multiqr-reticle i::before,
+.multiqr-reticle i::after { content: ''; position: absolute; background: rgba(255,255,255,.72); }
+.multiqr-reticle::before { left: 50%; top: 0; bottom: 0; width: 1px; }
+.multiqr-reticle::after { top: 50%; left: 0; right: 0; height: 1px; }
+.multiqr-reticle i:first-child::before { left: 3%; top: 3%; width: 22%; height: 3px; }
+.multiqr-reticle i:first-child::after { left: 3%; top: 3%; width: 3px; height: 22%; }
+.multiqr-reticle i:last-child::before { right: 3%; bottom: 3%; width: 22%; height: 3px; }
+.multiqr-reticle i:last-child::after { right: 3%; bottom: 3%; width: 3px; height: 22%; }
+.receiver-hint { color: #53627a; font-size: 12px; margin: 10px 2px 14px; }
+
 body[data-role="receiver"] .manual-receiver-actions { display: none; }
 body[data-role="receiver"] .camera-stage { min-height: 58vh; }
 body[data-role="receiver"] #camera { height: 58vh; }
@@ -71,4 +109,5 @@ body[data-role="receiver"] #labStart, body[data-role="receiver"] #labStop { min-
   #camera { height: 360px; }
   body[data-role="receiver"] .camera-stage { min-height: 52vh; }
   body[data-role="receiver"] #camera { height: 52vh; }
+  .multiqr-stage { gap: 4px; padding: 4px; }
 }
