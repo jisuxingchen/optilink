@@ -56,8 +56,10 @@ jobs:
         run: npm install --no-audit --no-fund
       - name: Protocol tests
         run: npm test
-      - name: Validate lab coordinator syntax
-        run: node --check lab-server.mjs
+      - name: Validate lab coordinator and tunnel launcher syntax
+        run: |
+          node --check lab-server.mjs
+          node --check lab-tunnel.mjs
       - name: Smoke-test lab HTTP routes
         run: |
           node lab-server.mjs > /tmp/optilink-lab.log 2>&1 &
@@ -72,6 +74,21 @@ jobs:
           grep -q '"status": "OK"' /tmp/health.json
           curl --fail --silent 'http://127.0.0.1:5173/?role=sender' | grep -q 'Single-code optical baseline'
           curl --fail --silent 'http://127.0.0.1:5173/?role=receiver' | grep -q 'Receiver / Camera'
+      - name: Smoke-test lab token protection
+        run: |
+          PORT=5180 OPTILINK_LAB_TOKEN=ci-secret node lab-server.mjs > /tmp/optilink-lab-token.log 2>&1 &
+          LAB_PID=$!
+          trap 'kill $LAB_PID || true' EXIT
+          for i in {1..20}; do
+            if curl --fail --silent http://127.0.0.1:5180/api/lab/health > /tmp/token-health.json; then
+              break
+            fi
+            sleep 0.5
+          done
+          grep -q '"protected": true' /tmp/token-health.json
+          test "$(curl --silent --output /tmp/no-token.txt --write-out '%{http_code}' 'http://127.0.0.1:5180/?role=sender')" = "401"
+          curl --fail --silent --cookie-jar /tmp/lab-cookie.txt 'http://127.0.0.1:5180/?role=sender&token=ci-secret' | grep -q 'Single-code optical baseline'
+          curl --fail --silent --cookie /tmp/lab-cookie.txt 'http://127.0.0.1:5180/api/lab/latest' | grep -q 'NO_RUN'
       - name: Typecheck and build browser spike
         run: npm run build
       - name: Upload TF-002 static build
