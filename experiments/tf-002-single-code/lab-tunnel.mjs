@@ -92,9 +92,13 @@ function waitForLocalHealth() {
 }
 
 async function verifyLocalPageMode() {
-  const path = page === 'fountain' ? '/fountain.html?role=sender' : '/?role=sender';
+  const route = page === 'fountain' ? '/fountain.html' : '/';
   const expected = page === 'fountain' ? 'Fountain / rateless single-QR benchmark' : 'Single-code optical baseline';
-  const response = await fetch(`http://127.0.0.1:${port}${path}`);
+  const url = new URL(`http://127.0.0.1:${port}${route}`);
+  url.searchParams.set('role', 'sender');
+  url.searchParams.set('token', token);
+  url.searchParams.set('run', instanceId);
+  const response = await fetch(url);
   if (!response.ok) throw new Error(`Local ${page} page check failed: HTTP ${response.status}`);
   const html = await response.text();
   if (!html.includes(expected)) {
