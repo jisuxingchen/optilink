@@ -121,7 +121,9 @@ async function finalizeReceiver(): Promise<void> {
   const hashMs = finishedAt - hashStarted;
   const ok = actualHash === receivedManifest.sha256;
 
-  receiverLastBlob = new Blob([reconstructed], {type: 'application/octet-stream'});
+  const blobBytes = new Uint8Array(reconstructed.length);
+  blobBytes.set(reconstructed);
+  receiverLastBlob = new Blob([blobBytes.buffer], {type: 'application/octet-stream'});
   receiverLastName = receivedManifest.fileName || 'optilink-received.bin';
   downloadButton.disabled = !ok;
   setReceiverStatus([
