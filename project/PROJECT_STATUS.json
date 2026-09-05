@@ -1,0 +1,88 @@
+{
+  "project": "OptiLink",
+  "phase": "Phase 0 — Product Discovery & Feasibility",
+  "sprint": "Sprint 0 — Product Discovery",
+  "overallProgress": 10,
+  "lastUpdated": "2026-09-05",
+  "summary": "G0 is approved. Repository governance, discovery documentation, dashboard baseline and CI are being established before technical architecture is frozen.",
+  "currentFocus": [
+    "Build and score the scenario library",
+    "Define reproducible optical throughput benchmark conditions",
+    "Prepare G1 technical-path proposal for owner review"
+  ],
+  "approvals": [
+    {
+      "id": "G0",
+      "title": "First MVP hypothesis",
+      "status": "APPROVED",
+      "decision": "Computer to Android; screen-to-camera; one-way offline file transfer; browser sender preferred; 100 KB/s net goodput validation target"
+    },
+    {
+      "id": "G1",
+      "title": "Technical path",
+      "status": "NOT_READY",
+      "decision": "Pending discovery and benchmark design"
+    }
+  ],
+  "epics": [
+    {
+      "id": "E0",
+      "title": "Product Discovery",
+      "status": "IN_PROGRESS",
+      "progress": 45,
+      "start": "2026-09-05",
+      "end": "2026-09-12",
+      "scheduleType": "forecast",
+      "tasks": [
+        {"id": "PD-001", "title": "Product vision and G0", "status": "DONE", "progress": 100, "subtasks": ["Record problem hypothesis", "Record approved G0"]},
+        {"id": "PD-002", "title": "Scenario library", "status": "IN_PROGRESS", "progress": 40, "subtasks": ["Seed initial scenarios", "Define screening criteria", "Score scenarios", "Select top candidates"]},
+        {"id": "PD-003", "title": "Requirements baseline", "status": "IN_PROGRESS", "progress": 55, "subtasks": ["Record approved requirements", "List open G1 questions", "Define non-goals"]}
+      ]
+    },
+    {
+      "id": "E1",
+      "title": "Technical Feasibility",
+      "status": "PLANNED",
+      "progress": 5,
+      "start": "2026-09-08",
+      "end": "2026-09-19",
+      "scheduleType": "forecast",
+      "tasks": [
+        {"id": "TF-001", "title": "Benchmark design", "status": "PLANNED", "progress": 10, "subtasks": ["Define test devices", "Define distance/lighting", "Define goodput metric", "Define pass/fail evidence"]},
+        {"id": "TF-002", "title": "Single-QR spike", "status": "BLOCKED_BY_GATE", "progress": 0, "subtasks": ["Sender harness", "Receiver harness", "Measurements"]},
+        {"id": "TF-003", "title": "Multi-QR spike", "status": "BLOCKED_BY_GATE", "progress": 0, "subtasks": ["Parallel layout", "Decode pipeline", "Measurements"]}
+      ]
+    },
+    {
+      "id": "E2",
+      "title": "Prototype",
+      "status": "PLANNED",
+      "progress": 0,
+      "start": "2026-09-20",
+      "end": "2026-10-04",
+      "scheduleType": "forecast",
+      "tasks": [
+        {"id": "PR-001", "title": "Browser sender", "status": "PLANNED", "progress": 0, "subtasks": ["File selection", "Chunking", "Frame rendering"]},
+        {"id": "PR-002", "title": "Android receiver", "status": "PLANNED", "progress": 0, "subtasks": ["Camera capture", "Decode", "Reassembly", "Integrity check"]}
+      ]
+    },
+    {
+      "id": "E3",
+      "title": "MVP & Productization",
+      "status": "PLANNED",
+      "progress": 0,
+      "start": "2026-10-05",
+      "end": "2026-10-31",
+      "scheduleType": "forecast",
+      "tasks": [
+        {"id": "MVP-001", "title": "MVP hardening", "status": "PLANNED", "progress": 0, "subtasks": ["Recovery", "UX", "Packaging", "Release evidence"]},
+        {"id": "PX-001", "title": "Commercial direction", "status": "BLOCKED_BY_GATE", "progress": 0, "subtasks": ["Customer segment", "Value proposition", "OEM/enterprise options"]}
+      ]
+    }
+  ],
+  "blockers": [
+    "No technical architecture is frozen before G1 approval.",
+    "Feasibility spikes requiring a final carrier/receiver baseline wait for G1."
+  ],
+  "terminology": ["ADR", "PR", "CI", "MVP", "Spike", "Epic", "Story", "Task", "FEC", "CRC", "Net goodput"]
+}
