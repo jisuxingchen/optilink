@@ -58,6 +58,20 @@ jobs:
         run: npm test
       - name: Validate lab coordinator syntax
         run: node --check lab-server.mjs
+      - name: Smoke-test lab HTTP routes
+        run: |
+          node lab-server.mjs > /tmp/optilink-lab.log 2>&1 &
+          LAB_PID=$!
+          trap 'kill $LAB_PID || true' EXIT
+          for i in {1..20}; do
+            if curl --fail --silent http://127.0.0.1:5173/api/lab/health > /tmp/health.json; then
+              break
+            fi
+            sleep 0.5
+          done
+          grep -q '"status": "OK"' /tmp/health.json
+          curl --fail --silent 'http://127.0.0.1:5173/?role=sender' | grep -q 'Single-code optical baseline'
+          curl --fail --silent 'http://127.0.0.1:5173/?role=receiver' | grep -q 'Receiver / Camera'
       - name: Typecheck and build browser spike
         run: npm run build
       - name: Upload TF-002 static build
