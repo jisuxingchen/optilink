@@ -1,48 +1,48 @@
 {
   "project": "OptiLink",
   "tagline": "Offline optical data exchange · screen → camera",
-  "phase": "Phase 0 — Product Discovery & Feasibility",
-  "sprint": "Sprint 0 — Technical Feasibility",
-  "overallProgress": 31,
-  "sprintProgress": 76,
-  "lastUpdated": "2026-09-05",
-  "summary": "G1 D1–D7 is approved. PR #8 is merged, the benchmark baseline is frozen, and TF-002 is now implementing the first real single-code browser→camera feasibility harness for the moto razr 40 ultra. No physical performance claim exists yet.",
+  "phase": "Phase 0 — Technical Feasibility",
+  "sprint": "Sprint 0 — Carrier Feasibility / OptiGrid",
+  "overallProgress": 44,
+  "sprintProgress": 86,
+  "lastUpdated": "2026-09-06",
+  "summary": "G1 is approved. Single-QR + Fountain achieved a verified 1 MiB SHA-256 PASS at 2.40 KB/s; native 4QR + Fountain improved to 3.62 KB/s but scaled only ~1.51× despite 4× displayed QR capacity. TF-003 is closed and the performance path has pivoted to TF-004 OptiGrid v0: a project-owned dense monochrome carrier with direct pixel sampling and Fountain retained above it. The >=100 KB/s target remains unclaimed.",
   "repository": {
     "name": "jisuxingchen/optilink",
     "url": "https://github.com/jisuxingchen/optilink",
-    "workingBranch": "spike/tf-002-single-code-baseline",
+    "workingBranch": "spike/tf-004-optigrid-monochrome",
     "pullRequest": {
-      "number": 11,
-      "title": "TF-002: single-code optical baseline spike",
-      "url": "https://github.com/jisuxingchen/optilink/pull/11",
+      "number": 17,
+      "title": "TF-004: OptiGrid dense monochrome carrier spike",
+      "url": "https://github.com/jisuxingchen/optilink/pull/17",
       "status": "DRAFT"
     }
   },
   "metrics": {
     "openIssues": 5,
     "ownerActions": 0,
-    "blockers": 2,
-    "ciStatus": "PASSING",
+    "blockers": 1,
+    "ciStatus": "RUNNING",
     "ciUrl": "https://github.com/jisuxingchen/optilink/actions/workflows/ci.yml"
   },
   "currentFocus": [
     {
-      "title": "Build the TF-002 single-code physical benchmark harness",
-      "detail": "Browser sender and Android-browser receiver now build in CI. Next evidence is a real screen→camera run on the moto razr 40 ultra at the 24 Hz baseline.",
+      "title": "TF-004 · Calibrate OptiGrid v0",
+      "detail": "Implement and physically measure a direct-sampled monochrome matrix at 64/80/96/120/160 cells while keeping 60 Hz physical display and 24 Hz optical update fixed.",
       "status": "IN_PROGRESS",
-      "link": "https://github.com/jisuxingchen/optilink/issues/9"
+      "link": "https://github.com/jisuxingchen/optilink/issues/16"
     },
     {
-      "title": "Measure the single-code bottleneck honestly",
-      "detail": "Tune only explicit experiment variables such as payload/frame, QR size and update rate; keep the ≥100 KB/s G0 target unchanged.",
+      "title": "Select one dense carrier configuration from evidence",
+      "detail": "Choose matrix density by unique optical payload ingress, CRC/alignment reject rate and receiver CPU timing; do not select by theoretical capacity alone.",
       "status": "IN_PROGRESS",
-      "link": "https://github.com/jisuxingchen/optilink/blob/spike/tf-002-single-code-baseline/docs/BENCHMARK_SPEC.md"
+      "link": "https://github.com/jisuxingchen/optilink/pull/17"
     },
     {
-      "title": "Keep TF-003 blocked until TF-002 evidence exists",
-      "detail": "Multi-code optimization starts only after the first single-code optical/decode ceiling is measured.",
-      "status": "BLOCKED_BY_EVIDENCE",
-      "link": "https://github.com/jisuxingchen/optilink/issues/10"
+      "title": "Retain Fountain above the carrier",
+      "detail": "After carrier calibration, integrate the selected OptiGrid frame format with the already proven rateless recovery layer and require a 1 MiB SHA-256 PASS.",
+      "status": "NEXT",
+      "link": "https://github.com/jisuxingchen/optilink/issues/13"
     }
   ],
   "approvals": [
@@ -51,15 +51,22 @@
       "title": "First MVP hypothesis",
       "status": "APPROVED",
       "ownerAction": false,
-      "decision": "Computer → Android; screen-to-camera; one-way offline file transfer; ≥100 KB/s net-goodput validation target."
+      "decision": "Computer → Android; screen-to-camera; one-way offline file transfer; >=100 KB/s net-goodput validation target."
     },
     {
       "id": "G1",
       "title": "Initial technical and product path",
       "status": "APPROVED",
       "ownerAction": false,
-      "decision": "Enterprise/industrial platform direction; Browser/TypeScript sender; Android browser first; single QR → multi-code → custom only if measured; fountain-style one-way recovery candidate; permissive OSS policy; frozen benchmark method. Receiver baseline: moto razr 40 ultra; initial visual update target: 24 Hz.",
+      "decision": "Enterprise/industrial platform; Browser/TypeScript sender first; Android browser first; evidence-driven carrier escalation; Fountain/rateless one-way recovery; frozen benchmark rules.",
       "link": "https://github.com/jisuxingchen/optilink/issues/3"
+    },
+    {
+      "id": "G2",
+      "title": "Prototype carrier decision",
+      "status": "NOT_READY",
+      "ownerAction": false,
+      "decision": "Wait for OptiGrid carrier calibration and at least one verified 1 MiB OptiGrid + Fountain result before freezing the prototype carrier."
     }
   ],
   "reviewQueue": [],
@@ -68,82 +75,36 @@
       "id": "E0",
       "title": "Product Discovery",
       "status": "IN_PROGRESS",
-      "progress": 90,
+      "progress": 92,
       "start": "2026-09-05",
       "end": "2026-09-12",
       "scheduleType": "forecast",
       "tasks": [
         {
-          "id": "PD-001",
-          "title": "Product vision and G0",
-          "status": "DONE",
-          "progress": 100,
-          "subtasks": [
-            {"title": "Record problem hypothesis", "status": "DONE"},
-            {"title": "Approve G0", "status": "DONE"}
-          ]
-        },
-        {
           "id": "PD-002",
           "title": "Scenario library",
           "status": "IN_PROGRESS",
           "progress": 82,
-          "issue": "https://github.com/jisuxingchen/optilink/issues/1",
           "subtasks": [
             {"title": "Expand candidate scenarios", "status": "DONE"},
             {"title": "Weighted scoring", "status": "DONE"},
-            {"title": "Select top five hypotheses", "status": "DONE"},
+            {"title": "Select top hypotheses", "status": "DONE"},
             {"title": "Deep buyer/workflow validation", "status": "TODO"}
-          ]
-        },
-        {
-          "id": "PD-003",
-          "title": "Requirements baseline",
-          "status": "DONE",
-          "progress": 100,
-          "subtasks": [
-            {"title": "G0 requirements", "status": "DONE"},
-            {"title": "Net-goodput metric", "status": "DONE"},
-            {"title": "G1 decisions", "status": "DONE"},
-            {"title": "Benchmark invariants", "status": "DONE"}
-          ]
+          ],
+          "subs": ["DONE · Expand candidate scenarios", "DONE · Weighted scoring", "DONE · Select top hypotheses", "TODO · Deep buyer/workflow validation"]
         },
         {
           "id": "PD-004",
           "title": "Competitive landscape and differentiation",
           "status": "IN_PROGRESS",
           "progress": 80,
-          "issue": "https://github.com/jisuxingchen/optilink/issues/6",
           "subtasks": [
             {"title": "Prior-art scan", "status": "DONE"},
             {"title": "License notes", "status": "DONE"},
-            {"title": "G1 positioning recommendation", "status": "DONE"},
+            {"title": "Enterprise/industrial differentiation", "status": "DONE"},
             {"title": "Deep capability comparison", "status": "TODO"}
-          ]
-        },
-        {
-          "id": "PM-001",
-          "title": "Project dashboard publishing",
-          "status": "DONE",
-          "progress": 100,
-          "issue": "https://github.com/jisuxingchen/optilink/issues/4",
-          "subtasks": [
-            {"title": "Cockpit UI", "status": "DONE"},
-            {"title": "Gantt/task drill-down", "status": "DONE"},
-            {"title": "GitHub Pages deployment", "status": "DONE"}
-          ]
-        },
-        {
-          "id": "PM-002",
-          "title": "Automate dashboard status from GitHub metadata",
-          "status": "BACKLOG",
-          "progress": 0,
-          "issue": "https://github.com/jisuxingchen/optilink/issues/7",
-          "subtasks": [
-            {"title": "Issue/PR aggregation", "status": "TODO"},
-            {"title": "CI aggregation", "status": "TODO"},
-            {"title": "Keep Gates human-controlled", "status": "TODO"}
-          ]
+          ],
+          "subs": ["DONE · Prior-art scan", "DONE · License notes", "DONE · Enterprise/industrial differentiation", "TODO · Deep capability comparison"]
         }
       ]
     },
@@ -151,75 +112,87 @@
       "id": "E1",
       "title": "Technical Feasibility",
       "status": "IN_PROGRESS",
-      "progress": 45,
-      "start": "2026-09-08",
-      "end": "2026-09-19",
-      "scheduleType": "forecast",
+      "progress": 72,
+      "start": "2026-09-05",
+      "end": "2026-09-20",
+      "scheduleType": "evidence-driven",
       "tasks": [
         {
           "id": "TF-001",
           "title": "Benchmark design",
           "status": "DONE",
           "progress": 100,
-          "issue": "https://github.com/jisuxingchen/optilink/issues/2",
           "subtasks": [
             {"title": "Net-goodput timing", "status": "DONE"},
-            {"title": "10 MiB incompressible payload", "status": "DONE"},
-            {"title": "5/5 SHA-256 rule", "status": "DONE"},
-            {"title": "moto razr 40 ultra baseline", "status": "DONE"},
-            {"title": "24 Hz initial visual update target", "status": "DONE"}
-          ]
+            {"title": "10 MiB / 5-of-5 acceptance definition", "status": "DONE"},
+            {"title": "SHA-256 rule", "status": "DONE"},
+            {"title": "60 Hz physical display baseline", "status": "DONE"}
+          ],
+          "subs": ["DONE · Net-goodput timing", "DONE · Acceptance definition", "DONE · SHA-256 rule", "DONE · 60 Hz display baseline"]
         },
         {
           "id": "TF-002",
-          "title": "Single-code optical baseline spike",
-          "status": "IN_PROGRESS",
-          "progress": 55,
-          "issue": "https://github.com/jisuxingchen/optilink/issues/9",
+          "title": "Single-code optical baseline + Fountain",
+          "status": "DONE",
+          "progress": 100,
           "subtasks": [
-            {"title": "Frame protocol + CRC32", "status": "DONE"},
-            {"title": "Browser sender harness", "status": "DONE"},
-            {"title": "Android-browser camera receiver", "status": "DONE"},
-            {"title": "SHA-256 reconstruction path", "status": "DONE"},
-            {"title": "CI unit tests and build", "status": "DONE"},
-            {"title": "Physical 1 MiB optical run", "status": "TODO"},
-            {"title": "10 MiB repeated benchmark", "status": "TODO"}
-          ]
+            {"title": "Cyclic baseline", "status": "DONE"},
+            {"title": "Fountain recovery", "status": "DONE"},
+            {"title": "1 MiB SHA-256 PASS", "status": "DONE"},
+            {"title": "Verified goodput 2403.70 B/s", "status": "DONE"}
+          ],
+          "subs": ["DONE · Cyclic baseline exposed tail stall", "DONE · Fountain recovery", "DONE · 1 MiB SHA-256 PASS", "EVIDENCE · 2403.70 B/s"]
         },
         {
           "id": "TF-003",
           "title": "Multi-code optical performance spike",
-          "status": "BLOCKED_BY_EVIDENCE",
-          "progress": 0,
-          "issue": "https://github.com/jisuxingchen/optilink/issues/10",
+          "status": "DONE_PIVOT",
+          "progress": 100,
           "subtasks": [
-            {"title": "Measure TF-002 ceiling first", "status": "BLOCKED"},
-            {"title": "Parallel visual layout", "status": "BLOCKED"},
-            {"title": "Parallel decode pipeline", "status": "BLOCKED"},
-            {"title": "Physical measurements", "status": "BLOCKED"}
-          ]
+            {"title": "4QR sequential ZXing run", "status": "DONE"},
+            {"title": "Native BarcodeDetector correction", "status": "DONE"},
+            {"title": "1 MiB SHA-256 PASS", "status": "DONE"},
+            {"title": "Pivot decision: stop 9QR/16QR primary route", "status": "DONE"}
+          ],
+          "subs": ["DONE · 4QR v1 exposed decode scheduling bottleneck", "DONE · Native BarcodeDetector correction", "EVIDENCE · 3618.15 B/s verified", "DECISION · Do not scale standard QR further"]
+        },
+        {
+          "id": "TF-004",
+          "title": "OptiGrid dense monochrome carrier spike",
+          "status": "IN_PROGRESS",
+          "progress": 35,
+          "subtasks": [
+            {"title": "Binary matrix codec + CRC32", "status": "DONE"},
+            {"title": "Border rings + corner pilots", "status": "DONE"},
+            {"title": "Direct pixel-sampling receiver", "status": "DONE"},
+            {"title": "Automated density sweep", "status": "DONE"},
+            {"title": "First physical carrier calibration", "status": "TODO"},
+            {"title": "Fountain integration + 1 MiB SHA-256", "status": "TODO"}
+          ],
+          "subs": ["DONE · Binary matrix codec + CRC32", "DONE · Border/pilot framing", "DONE · Direct pixel sampler", "DONE · 64→160 auto sweep", "NEXT · Physical calibration", "NEXT · Fountain integration"]
         }
       ]
     },
     {
       "id": "E2",
       "title": "Prototype",
-      "status": "PLANNED",
+      "status": "PLANNED_AFTER_G2",
       "progress": 0,
-      "start": "2026-09-20",
-      "end": "2026-10-04",
+      "start": "2026-09-21",
+      "end": "2026-10-08",
       "scheduleType": "forecast",
       "tasks": [
         {
           "id": "PROTO-001",
           "title": "Transport prototype",
-          "status": "PLANNED_AFTER_SPIKE",
+          "status": "BLOCKED_BY_G2",
           "progress": 0,
           "subtasks": [
-            {"title": "Use TF-002/TF-003 evidence", "status": "TODO"},
+            {"title": "Freeze carrier", "status": "BLOCKED"},
             {"title": "Production recovery strategy", "status": "TODO"},
             {"title": "Offline packaging", "status": "TODO"}
-          ]
+          ],
+          "subs": ["BLOCKED · Freeze carrier at G2", "TODO · Production recovery strategy", "TODO · Offline packaging"]
         }
       ]
     },
@@ -228,7 +201,7 @@
       "title": "MVP & Productization",
       "status": "PLANNED",
       "progress": 0,
-      "start": "2026-10-05",
+      "start": "2026-10-09",
       "end": "2026-10-31",
       "scheduleType": "forecast",
       "tasks": [
@@ -238,136 +211,66 @@
           "status": "PLANNED",
           "progress": 0,
           "subtasks": [
-            {"title": "Recovery", "status": "TODO"},
+            {"title": "Reliability", "status": "TODO"},
             {"title": "UX", "status": "TODO"},
             {"title": "Packaging", "status": "TODO"},
             {"title": "Release evidence", "status": "TODO"}
-          ]
+          ],
+          "subs": ["TODO · Reliability", "TODO · UX", "TODO · Packaging", "TODO · Release evidence"]
         }
       ]
     }
   ],
   "documents": [
-    {
-      "title": "Product Vision",
-      "type": "Product",
-      "status": "BASELINE",
-      "note": "Problem framing and long-term enterprise/industrial direction.",
-      "url": "https://github.com/jisuxingchen/optilink/blob/main/docs/PRODUCT_VISION.md"
-    },
-    {
-      "title": "Scenario Library",
-      "type": "Discovery",
-      "status": "SCORING_V1",
-      "note": "Candidate scenarios scored and ranked; deeper workflow validation continues.",
-      "url": "https://github.com/jisuxingchen/optilink/blob/main/docs/SCENARIO_LIBRARY.md"
-    },
-    {
-      "title": "Benchmark Specification",
-      "type": "Feasibility",
-      "status": "G1_APPROVED",
-      "note": "Frozen TF-002 baseline including moto razr 40 ultra and initial 24 Hz visual update target.",
-      "url": "https://github.com/jisuxingchen/optilink/blob/spike/tf-002-single-code-baseline/docs/BENCHMARK_SPEC.md"
-    },
-    {
-      "title": "ADR-0002 G1 Initial Technical Path",
-      "type": "ADR",
-      "status": "ACCEPTED",
-      "note": "Approved G1 D1–D7 and first physical benchmark baseline.",
-      "url": "https://github.com/jisuxingchen/optilink/blob/spike/tf-002-single-code-baseline/docs/adr/ADR-0002-g1-initial-technical-path.md"
-    },
-    {
-      "title": "TF-002 Single-code Spike",
-      "type": "Experiment",
-      "status": "IN_PROGRESS",
-      "note": "Executable browser sender/receiver harness; physical evidence not yet recorded.",
-      "url": "https://github.com/jisuxingchen/optilink/tree/spike/tf-002-single-code-baseline/experiments/tf-002-single-code"
-    },
-    {
-      "title": "Competitive Landscape",
-      "type": "Discovery",
-      "status": "WORKING",
-      "note": "Prior art and differentiation evidence supporting the platform positioning.",
-      "url": "https://github.com/jisuxingchen/optilink/blob/main/docs/COMPETITIVE_LANDSCAPE.md"
-    },
-    {
-      "title": "ADR-0001 Development Governance",
-      "type": "ADR",
-      "status": "ACCEPTED",
-      "note": "Issue → branch → CI → PR → owner review → merge.",
-      "url": "https://github.com/jisuxingchen/optilink/blob/main/docs/adr/ADR-0001-development-governance.md"
-    }
+    {"title": "TF-004 OptiGrid Issue", "type": "Experiment", "status": "ACTIVE", "note": "Custom dense monochrome carrier goals, sequence and success gates.", "url": "https://github.com/jisuxingchen/optilink/issues/16"},
+    {"title": "PR #17 OptiGrid Spike", "type": "PR", "status": "DRAFT", "note": "OptiGrid v0 codec, direct sampler, Auto Lab and CI implementation.", "url": "https://github.com/jisuxingchen/optilink/pull/17"},
+    {"title": "TF-003 Multi-code Evidence", "type": "Experiment", "status": "COMPLETED", "note": "4QR v2 PASS at 3618.15 B/s; standard-QR scaling judged sub-linear.", "url": "https://github.com/jisuxingchen/optilink/issues/10"},
+    {"title": "TF-002B Fountain Evidence", "type": "Experiment", "status": "COMPLETED", "note": "Single-QR 1 MiB SHA-256 PASS at 2403.70 B/s; Fountain retained as recovery layer.", "url": "https://github.com/jisuxingchen/optilink/issues/13"},
+    {"title": "Benchmark Specification", "type": "Feasibility", "status": "G1_APPROVED", "note": "Frozen correctness and Net Goodput acceptance rules.", "url": "https://github.com/jisuxingchen/optilink/blob/spike/tf-002b-fountain-transport/docs/BENCHMARK_SPEC.md"},
+    {"title": "ADR-0001 Development Governance", "type": "ADR", "status": "ACCEPTED", "note": "Issue → branch → CI → Draft PR → owner review → merge.", "url": "https://github.com/jisuxingchen/optilink/blob/main/docs/adr/ADR-0001-development-governance.md"}
   ],
   "health": [
-    {
-      "name": "Scope control",
-      "status": "HEALTHY",
-      "detail": "G0 and G1 are explicit; the first code remains isolated under experiments/."
-    },
-    {
-      "name": "Technical feasibility",
-      "status": "ACTIVE_TESTING",
-      "detail": "Synthetic protocol tests and browser build pass. Real screen→camera performance remains unmeasured."
-    },
-    {
-      "name": "Product differentiation",
-      "status": "WATCH",
-      "detail": "Enterprise/industrial positioning is approved, but buyer/workflow evidence still needs strengthening."
-    },
-    {
-      "name": "CI / repository hygiene",
-      "status": "HEALTHY",
-      "detail": "Project validation, dashboard build, TF-002 protocol tests and web build are automated."
-    },
-    {
-      "name": "Schedule",
-      "status": "FORECAST_ONLY",
-      "detail": "TF-003 timing intentionally depends on TF-002 evidence."
-    }
+    {"name": "Scope control", "status": "HEALTHY", "detail": "G0/G1 remain fixed; TF-004 changes the optical carrier only after measured QR scaling evidence."},
+    {"name": "Technical feasibility", "status": "ACTIVE_PIVOT", "detail": "Correct screen→camera reconstruction is proven; throughput is still far below target, so carrier-density R&D is active."},
+    {"name": "Evidence quality", "status": "HEALTHY", "detail": "Single-QR and 4QR performance decisions are backed by physical 1 MiB SHA-256 evidence; no >=100 KB/s claim exists."},
+    {"name": "CI / repository hygiene", "status": "ACTIVE", "detail": "OptiGrid codec, lab route, TypeScript build and dashboard preview are under GitHub Actions on PR #17."},
+    {"name": "Schedule", "status": "EVIDENCE_DRIVEN", "detail": "Prototype timing waits for G2; no 9QR detour is planned."}
   ],
   "activity": [
-    {
-      "date": "2026-09-05",
-      "title": "PR #8 approved and merged",
-      "detail": "Scenario scoring, benchmark spec and competitive landscape entered main."
-    },
-    {
-      "date": "2026-09-05",
-      "title": "Gate G1 approved",
-      "detail": "Owner approved D1–D7 and supplied moto razr 40 ultra / 24 Hz first-test baseline."
-    },
-    {
-      "date": "2026-09-05",
-      "title": "TF-001 benchmark definition completed",
-      "detail": "Benchmark invariants frozen before physical implementation."
-    },
-    {
-      "date": "2026-09-05",
-      "title": "TF-002 branch and PR #11 opened",
-      "detail": "First executable single-code optical benchmark harness isolated from main."
-    },
-    {
-      "date": "2026-09-05",
-      "title": "TF-002 CI turned green",
-      "detail": "Protocol tests, TypeScript typecheck and Vite production build all pass."
-    }
+    {"date": "2026-09-06", "title": "TF-004 OptiGrid implementation started", "detail": "Created Issue #16, branch spike/tf-004-optigrid-monochrome and Draft PR #17; first direct-sampling carrier calibration slice implemented."},
+    {"date": "2026-09-06", "title": "TF-003 completed with pivot decision", "detail": "4QR v2 used native BarcodeDetector and passed 1 MiB at 3618.15 B/s, but spatial scaling remained strongly sub-linear."},
+    {"date": "2026-09-05", "title": "Single-QR Fountain physical PASS", "detail": "1 MiB reconstructed exactly with SHA-256 PASS at 2403.70 B/s; rateless recovery retained."},
+    {"date": "2026-09-05", "title": "G1 approved", "detail": "Owner approved D1–D7, Browser/Android-first feasibility path and evidence-driven carrier escalation."}
   ],
-  "blockers": [
-    "No physical screen→camera result has been measured yet on the moto razr 40 ultra.",
-    "TF-003 multi-code optimization remains blocked until TF-002 exposes the single-code bottleneck."
+  "blockers": ["G2 is intentionally blocked until OptiGrid physical calibration and a verified OptiGrid + Fountain 1 MiB result exist."],
+  "terminology": ["G0", "G1", "G2", "ADR", "PR", "CI", "Net Goodput", "Fountain", "FEC", "CRC", "ROI", "OptiGrid"],
+  "reviews": [],
+  "focus": [
+    {"title": "TF-004 · OptiGrid v0 carrier calibration", "status": "IN PROGRESS", "detail": "Direct black/white cell sampling; automatic 64→160 matrix sweep; first physical evidence next.", "url": "https://github.com/jisuxingchen/optilink/issues/16"},
+    {"title": "PR #17 · OptiGrid implementation", "status": "DRAFT", "detail": "Codec, pilots, CRC, receiver sampling, Auto Lab and CI are being implemented on an isolated branch.", "url": "https://github.com/jisuxingchen/optilink/pull/17"},
+    {"title": "G2 · Prototype carrier decision", "status": "BLOCKED BY EVIDENCE", "detail": "Carrier is not frozen until OptiGrid physical evidence exists."}
   ],
-  "terminology": [
-    "ADR",
-    "PR",
-    "CI",
-    "MVP",
-    "Spike",
-    "Epic",
-    "Story",
-    "Task",
-    "FEC",
-    "CRC",
-    "Net goodput",
-    "Gate"
+  "gates": [
+    {"id": "G0", "title": "First MVP hypothesis", "status": "APPROVED", "decision": "Computer → Android · screen-to-camera · one-way offline file transfer · >=100 KB/s validation target."},
+    {"id": "G1", "title": "Initial technical path", "status": "APPROVED", "decision": "Browser/Android first; Fountain recovery; evidence-driven carrier escalation."},
+    {"id": "G2", "title": "Prototype carrier decision", "status": "NOT READY", "decision": "Waiting for OptiGrid calibration + verified 1 MiB OptiGrid/Fountain evidence."}
+  ],
+  "timelineStart": "2026-09-05",
+  "timelineEnd": "2026-10-31",
+  "timeline": [
+    {"id": "E0", "name": "Product Discovery", "start": "2026-09-05", "end": "2026-09-12", "progress": 92, "status": "IN_PROGRESS", "level": "EPIC"},
+    {"id": "TF-001", "name": "Benchmark definition", "start": "2026-09-05", "end": "2026-09-05", "progress": 100, "status": "DONE", "level": "TASK"},
+    {"id": "TF-002", "name": "Single QR + Fountain", "start": "2026-09-05", "end": "2026-09-05", "progress": 100, "status": "DONE", "level": "TASK"},
+    {"id": "TF-003", "name": "4QR scaling experiment", "start": "2026-09-05", "end": "2026-09-06", "progress": 100, "status": "DONE_PIVOT", "level": "TASK"},
+    {"id": "TF-004", "name": "OptiGrid custom carrier", "start": "2026-09-06", "end": "2026-09-14", "progress": 35, "status": "IN_PROGRESS", "level": "TASK"},
+    {"id": "E2", "name": "Prototype", "start": "2026-09-21", "end": "2026-10-08", "progress": 0, "status": "BLOCKED_BY_G2", "level": "EPIC"},
+    {"id": "E3", "name": "MVP & Productization", "start": "2026-10-09", "end": "2026-10-31", "progress": 0, "status": "PLANNED", "level": "EPIC"}
+  ],
+  "docs": [
+    {"title": "TF-004 OptiGrid", "note": "Active custom-carrier experiment and decision gates.", "url": "https://github.com/jisuxingchen/optilink/issues/16"},
+    {"title": "PR #17 OptiGrid", "note": "Current implementation under CI; Draft, not merged.", "url": "https://github.com/jisuxingchen/optilink/pull/17"},
+    {"title": "TF-003 4QR evidence", "note": "Why standard multi-QR was stopped as the primary performance route.", "url": "https://github.com/jisuxingchen/optilink/issues/10"},
+    {"title": "TF-002B Fountain evidence", "note": "Verified rateless recovery baseline retained above OptiGrid.", "url": "https://github.com/jisuxingchen/optilink/issues/13"},
+    {"title": "Benchmark Spec", "note": "Correctness, SHA-256 and Net Goodput rules remain unchanged.", "url": "https://github.com/jisuxingchen/optilink/blob/spike/tf-002b-fountain-transport/docs/BENCHMARK_SPEC.md"}
   ]
 }
