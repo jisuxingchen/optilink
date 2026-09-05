@@ -76,6 +76,8 @@ jobs:
           curl --fail --silent 'http://127.0.0.1:5173/?role=receiver' | grep -q 'Receiver / Camera'
           curl --fail --silent 'http://127.0.0.1:5173/fountain.html?role=sender' | grep -q 'Fountain / rateless single-QR benchmark'
           curl --fail --silent 'http://127.0.0.1:5173/fountain.html?role=receiver' | grep -q 'Peeling decoder'
+          curl --fail --silent 'http://127.0.0.1:5173/multiqr.html?role=sender' | grep -q '4QR + Fountain spatial parallelism benchmark'
+          curl --fail --silent 'http://127.0.0.1:5173/multiqr.html?role=receiver' | grep -q 'known-grid crop decoder'
       - name: Smoke-test lab token protection
         run: |
           PORT=5180 OPTILINK_LAB_TOKEN=ci-secret node lab-server.mjs > /tmp/optilink-lab-token.log 2>&1 &
@@ -91,6 +93,7 @@ jobs:
           test "$(curl --silent --output /tmp/no-token.txt --write-out '%{http_code}' 'http://127.0.0.1:5180/?role=sender')" = "401"
           curl --fail --silent --cookie-jar /tmp/lab-cookie.txt 'http://127.0.0.1:5180/?role=sender&token=ci-secret' | grep -q 'Single-code optical baseline'
           curl --fail --silent --cookie /tmp/lab-cookie.txt 'http://127.0.0.1:5180/fountain.html?role=sender' | grep -q 'Fountain / rateless single-QR benchmark'
+          curl --fail --silent --cookie /tmp/lab-cookie.txt 'http://127.0.0.1:5180/multiqr.html?role=sender' | grep -q '4QR + Fountain spatial parallelism benchmark'
           curl --fail --silent --cookie /tmp/lab-cookie.txt 'http://127.0.0.1:5180/api/lab/latest' | grep -q 'NO_RUN'
       - name: Typecheck and build browser spike
         run: npm run build
