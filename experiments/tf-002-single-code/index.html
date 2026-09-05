@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OptiLink TF-002 Single-Code Spike</title>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div>
+        <p class="eyebrow">OptiLink · TF-002</p>
+        <h1>Single-code optical baseline</h1>
+        <p class="lede">实验性 Browser → QR → Android Browser 基线。首轮按 24 Hz 目标视觉更新率，码尺寸和负载均可调。</p>
+      </div>
+      <div class="badge">G1 APPROVED · EXPERIMENT</div>
+    </header>
+
+    <section class="notice">
+      <strong>Benchmark rule:</strong> Sender 的理论速率不是成绩。只有接收端完成重组、SHA-256 一致后的 end-to-end net goodput 才算有效结果。
+    </section>
+
+    <div class="grid">
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <span class="step">A</span>
+            <h2>Sender / Display</h2>
+          </div>
+          <span>Computer browser</span>
+        </div>
+
+        <div class="form-grid">
+          <label>
+            <span>Choose file</span>
+            <input id="fileInput" type="file" />
+          </label>
+          <label>
+            <span>Generated payload</span>
+            <div class="inline">
+              <select id="payloadSize">
+                <option value="1048576">1 MiB quick test</option>
+                <option value="10485760">10 MiB G0 benchmark</option>
+              </select>
+              <button id="generateButton" type="button">Generate</button>
+            </div>
+          </label>
+          <label>
+            <span>Payload / QR frame (bytes)</span>
+            <input id="chunkSize" type="number" min="64" max="2100" step="32" value="600" />
+          </label>
+          <label>
+            <span>Target visual update rate (Hz)</span>
+            <input id="targetHz" type="number" min="1" max="120" step="1" value="24" />
+          </label>
+          <label>
+            <span>QR render size (px)</span>
+            <input id="qrSize" type="number" min="160" max="1600" step="16" value="640" />
+          </label>
+          <label>
+            <span>QR ECC</span>
+            <select id="ecc">
+              <option value="L">L · maximum payload</option>
+              <option value="M" selected>M · baseline</option>
+              <option value="Q">Q</option>
+              <option value="H">H · maximum redundancy</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="actions">
+          <button id="startSender" class="primary" type="button">Start optical stream</button>
+          <button id="stopSender" type="button" disabled>Stop</button>
+        </div>
+
+        <div class="qr-stage">
+          <canvas id="qrCanvas" width="640" height="640"></canvas>
+        </div>
+        <pre id="senderStatus" class="status"></pre>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <span class="step">B</span>
+            <h2>Receiver / Camera</h2>
+          </div>
+          <span>Android browser · moto razr 40 ultra baseline</span>
+        </div>
+
+        <div class="actions">
+          <button id="startCamera" class="primary" type="button">Start camera</button>
+          <button id="stopCamera" type="button">Stop camera</button>
+          <button id="resetReceiver" type="button">Reset session</button>
+        </div>
+
+        <div class="camera-stage">
+          <video id="camera" muted playsinline></video>
+          <div class="reticle"></div>
+        </div>
+
+        <pre id="receiverStatus" class="status"></pre>
+        <button id="downloadReceived" type="button" disabled>Download verified file</button>
+      </section>
+    </div>
+
+    <section class="method">
+      <h2>首轮物理测试顺序</h2>
+      <ol>
+        <li>先用 1 MiB、24 Hz、600 B/frame、640 px QR，在固定手机位置验证连续解码。</li>
+        <li>逐步增加 payload/frame 和 QR 尺寸，记录实际 rendered Hz 与接收端 unique-symbol yield。</li>
+        <li>稳定后切到 10 MiB，并执行 5 次完整 SHA-256 重组。</li>
+        <li>如果单码明显受限，不修改 ≥100 KB/s 目标，进入 TF-003 多码实验。</li>
+      </ol>
+    </section>
+  </main>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
