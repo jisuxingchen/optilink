@@ -31,6 +31,7 @@ const startSenderButton = $<HTMLButtonElement>('startSender');
 const stopSenderButton = $<HTMLButtonElement>('stopSender');
 const senderStatus = $<HTMLPreElement>('senderStatus');
 const canvas = $<HTMLCanvasElement>('qrCanvas');
+const senderPanel = $<HTMLElement>('senderPanel');
 
 const video = $<HTMLVideoElement>('camera');
 const startCameraButton = $<HTMLButtonElement>('startCamera');
@@ -38,6 +39,12 @@ const stopCameraButton = $<HTMLButtonElement>('stopCamera');
 const resetReceiverButton = $<HTMLButtonElement>('resetReceiver');
 const receiverStatus = $<HTMLPreElement>('receiverStatus');
 const downloadButton = $<HTMLButtonElement>('downloadReceived');
+const receiverPanel = $<HTMLElement>('receiverPanel');
+
+const labStartButton = $<HTMLButtonElement>('labStart');
+const labStopButton = $<HTMLButtonElement>('labStop');
+const labRoleText = $<HTMLElement>('labRoleText');
+const labStatus = $<HTMLPreElement>('labStatus');
 
 let sourceBytes: Uint8Array | null = null;
 let sourceName = '';
@@ -57,6 +64,36 @@ let receiverDuplicates = 0;
 let receiverInvalid = 0;
 let receiverLastBlob: Blob | null = null;
 let receiverLastName = 'optilink-received.bin';
+let receiverComplete = false;
+let receiverGoodput = 0;
+let receiverHashOk = false;
+
+const roleParam = new URLSearchParams(location.search).get('role');
+const role = roleParam === 'sender' || roleParam === 'receiver' ? roleParam : 'both';
+let labSocket: WebSocket | null = null;
+let latestTelemetry: Telemetry = emptyTelemetry();
+let autoSweepRunning = false;
+let autoSweepAbort = false;
+
+type Telemetry = {
+  sessionId: string;
+  unique: number;
+  total: number;
+  decoded: number;
+  duplicates: number;
+  invalid: number;
+  complete: boolean;
+  hashOk: boolean;
+  goodput: number;
+  timestamp: number;
+};
+
+type SweepConfig = {chunkSize: number; targetHz: number; qrSize: number; ecc: 'L' | 'M' | 'Q' | 'H'};
+type SweepResult = {config: SweepConfig; metrics: {unique: number; decoded: number; duplicates: number; invalid: number; uniquePerSecond: number; decodedPerSecond: number; duplicateRatio: number; durationSeconds: number}};
+
+function emptyTelemetry(): Telemetry {
+  return {sessionId: '', unique: 0, total: 0, decoded: 0, duplicates: 0, invalid: 0, complete: false, hashOk: false, goodput: 0, timestamp: performance.now()};
+}
 
 function numberValue(input: HTMLInputElement, min: number, max: number): number {
   const value = Number(input.value);
@@ -79,6 +116,26 @@ function setSenderStatus(lines: string[]): void {
   senderStatus.textContent = lines.join('\n');
 }
 
+function telemetrySnapshot(): Telemetry {
+  return {
+    sessionId: receivedSessionId,
+    unique: receivedChunks.size,
+    total: receivedManifest?.totalChunks ?? 0,
+    decoded: receiverDecoded,
+    duplicates: receiverDuplicates,
+    invalid: receiverInvalid,
+    complete: receiverComplete,
+    hashOk: receiverHashOk,
+    goodput: receiverGoodput,
+    timestamp: performance.now(),
+  };
+}
+
+function publishTelemetry(): void {
+  latestTelemetry = telemetrySnapshot();
+  sendLab({type: 'telemetry', telemetry: latestTelemetry});
+}
+
 function setReceiverStatus(extra?: string): void {
   const total = receivedManifest?.totalChunks ?? 0;
   const pct = total ? ((receivedChunks.size / total) * 100).toFixed(1) : '0.0';
@@ -95,6 +152,7 @@ function setReceiverStatus(extra?: string): void {
   }
   if (extra) lines.push(extra);
   receiverStatus.textContent = lines.join('\n');
+  publishTelemetry();
 }
 
 function resetReceiverState(): void {
@@ -105,13 +163,16 @@ function resetReceiverState(): void {
   receiverDecoded = 0;
   receiverDuplicates = 0;
   receiverInvalid = 0;
+  receiverComplete = false;
+  receiverGoodput = 0;
+  receiverHashOk = false;
   receiverLastBlob = null;
   downloadButton.disabled = true;
   setReceiverStatus('waiting for optical frames');
 }
 
 async function finalizeReceiver(): Promise<void> {
-  if (!receivedManifest || receivedChunks.size !== receivedManifest.totalChunks) return;
+  if (!receivedManifest || receivedChunks.size !== receivedManifest.totalChunks || receiverComplete) return;
   const reconstructed = assembleChunks(receivedChunks, receivedManifest.totalChunks, receivedManifest.totalBytes);
   const hashStarted = performance.now();
   const actualHash = await sha256Hex(reconstructed);
@@ -121,6 +182,9 @@ async function finalizeReceiver(): Promise<void> {
   const hashMs = finishedAt - hashStarted;
   const ok = actualHash === receivedManifest.sha256;
 
+  receiverComplete = true;
+  receiverGoodput = goodput;
+  receiverHashOk = ok;
   const blobBytes = new Uint8Array(reconstructed.length);
   blobBytes.set(reconstructed);
   receiverLastBlob = new Blob([blobBytes.buffer], {type: 'application/octet-stream'});
@@ -143,28 +207,21 @@ async function handleDecodedText(text: string): Promise<void> {
     setReceiverStatus();
     return;
   }
-
   if (receivedSessionId && frame.sessionId !== receivedSessionId) {
     receiverInvalid += 1;
     setReceiverStatus(`ignored foreign session ${frame.sessionId}`);
     return;
   }
-
   if (!receivedSessionId) receivedSessionId = frame.sessionId;
-
   if (frame.kind === 'manifest') {
     receivedManifest = frame;
     setReceiverStatus('manifest received');
     await finalizeReceiver();
     return;
   }
-
   if (!receiverFirstUsefulAt) receiverFirstUsefulAt = performance.now();
-  if (receivedChunks.has(frame.index)) {
-    receiverDuplicates += 1;
-  } else {
-    receivedChunks.set(frame.index, frame.payload);
-  }
+  if (receivedChunks.has(frame.index)) receiverDuplicates += 1;
+  else receivedChunks.set(frame.index, frame.payload);
   setReceiverStatus();
   await finalizeReceiver();
 }
@@ -175,9 +232,7 @@ async function startCamera(): Promise<void> {
   cameraControls = await reader.decodeFromConstraints(
     {audio: false, video: {facingMode: {ideal: 'environment'}}},
     video,
-    (result) => {
-      if (result) void handleDecodedText(result.getText());
-    },
+    result => { if (result) void handleDecodedText(result.getText()); },
   );
   setReceiverStatus('camera running');
 }
@@ -199,15 +254,7 @@ async function startSender(): Promise<void> {
   const chunks = chunkBytes(bytes, chunkSize);
   const sha256 = await sha256Hex(bytes);
   const sessionId = createSessionId();
-  const manifest: ManifestFrame = {
-    kind: 'manifest',
-    sessionId,
-    totalChunks: chunks.length,
-    totalBytes: bytes.length,
-    chunkSize,
-    sha256,
-    fileName: name,
-  };
+  const manifest: ManifestFrame = {kind: 'manifest', sessionId, totalChunks: chunks.length, totalBytes: bytes.length, chunkSize, sha256, fileName: name};
   const manifestText = encodeManifest(manifest);
   const manifestEvery = Math.max(8, Math.round(targetHz));
   let nextChunk = 0;
@@ -225,24 +272,12 @@ async function startSender(): Promise<void> {
     const shouldShowManifest = senderRenderedFrames % (manifestEvery + 1) === 0;
     let text = manifestText;
     if (!shouldShowManifest) {
-      text = encodeDataFrame({
-        kind: 'data',
-        sessionId,
-        index: nextChunk,
-        totalChunks: chunks.length,
-        payload: chunks[nextChunk],
-      });
+      text = encodeDataFrame({kind: 'data', sessionId, index: nextChunk, totalChunks: chunks.length, payload: chunks[nextChunk]});
       nextChunk = (nextChunk + 1) % chunks.length;
       senderDataFrames += 1;
     }
-
     try {
-      await QRCode.toCanvas(canvas, text, {
-        width: qrSize,
-        margin: 2,
-        errorCorrectionLevel: ecc,
-        color: {dark: '#000000', light: '#ffffff'},
-      });
+      await QRCode.toCanvas(canvas, text, {width: qrSize, margin: 2, errorCorrectionLevel: ecc, color: {dark: '#000000', light: '#ffffff'}});
     } catch (error) {
       senderRunning = false;
       startSenderButton.disabled = false;
@@ -250,7 +285,6 @@ async function startSender(): Promise<void> {
       setSenderStatus([`render error: ${String(error)}`, 'Try a smaller chunk size or lower QR ECC.']);
       return;
     }
-
     senderRenderedFrames += 1;
     const elapsed = Math.max(0.001, (performance.now() - senderStartedAt) / 1000);
     const actualVisualHz = senderRenderedFrames / elapsed;
@@ -265,14 +299,11 @@ async function startSender(): Promise<void> {
       `QR render size: ${qrSize}px · ECC ${ecc}`,
       `displayed frames: ${senderRenderedFrames} · data frames: ${senderDataFrames}`,
       `raw payload ceiling at target rate: ${formatRate(theoreticalUseful)}`,
-      `note: receiver goodput is authoritative; this sender value excludes optical/decode loss.`,
+      'note: receiver goodput is authoritative; this sender value excludes optical/decode loss.',
     ]);
-
     nextDeadline += 1000 / targetHz;
-    const delay = Math.max(0, nextDeadline - performance.now());
-    senderTimer = window.setTimeout(() => void renderNext(), delay);
+    senderTimer = window.setTimeout(() => void renderNext(), Math.max(0, nextDeadline - performance.now()));
   };
-
   await renderNext();
 }
 
@@ -282,28 +313,25 @@ function stopSender(): void {
   senderTimer = undefined;
   startSenderButton.disabled = false;
   stopSenderButton.disabled = true;
-  senderStatus.textContent += '\nSTOPPED';
+  if (!senderStatus.textContent?.endsWith('STOPPED')) senderStatus.textContent += '\nSTOPPED';
 }
 
-generateButton.addEventListener('click', () => {
+function generateSelectedPayload(): void {
   const size = Number(payloadSize.value);
   sourceBytes = deterministicBytes(size, 0x4f505449);
-  sourceName = `optilink-benchmark-${Math.round(size / 1048576)}MiB.bin`;
+  const label = size < 1048576 ? `${Math.round(size / 1024)}KiB` : `${Math.round(size / 1048576)}MiB`;
+  sourceName = `optilink-benchmark-${label}.bin`;
   fileInput.value = '';
-  setSenderStatus([
-    `generated deterministic payload: ${sourceName}`,
-    `${sourceBytes.length.toLocaleString()} bytes`,
-    'seed: 0x4f505449',
-  ]);
-});
+  setSenderStatus([`generated deterministic payload: ${sourceName}`, `${sourceBytes.length.toLocaleString()} bytes`, 'seed: 0x4f505449']);
+}
 
+generateButton.addEventListener('click', generateSelectedPayload);
 fileInput.addEventListener('change', () => {
   sourceBytes = null;
   sourceName = '';
   const file = fileInput.files?.[0];
-  setSenderStatus(file ? [`selected: ${file.name}`, `${file.size.toLocaleString()} bytes`] : ['no file selected']);
+  setSenderStatus(file ? [`selected: ${file.name}`, `${file.size.toLocaleString()} bytes`, 'manual file overrides generated payload'] : ['no file selected']);
 });
-
 startSenderButton.addEventListener('click', () => void startSender().catch(error => setSenderStatus([`sender error: ${String(error)}`])));
 stopSenderButton.addEventListener('click', stopSender);
 startCameraButton.addEventListener('click', () => void startCamera().catch(error => setReceiverStatus(`camera error: ${String(error)}`)));
@@ -319,5 +347,174 @@ downloadButton.addEventListener('click', () => {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 
+function sendLab(message: unknown): void {
+  if (labSocket?.readyState === WebSocket.OPEN) labSocket.send(JSON.stringify(message));
+}
+
+function logLab(message: string): void {
+  const now = new Date().toLocaleTimeString();
+  labStatus.textContent = `[${now}] ${message}\n${labStatus.textContent || ''}`.slice(0, 8000);
+}
+
+function applyConfig(config: SweepConfig): void {
+  chunkSizeInput.value = String(config.chunkSize);
+  targetHzInput.value = String(config.targetHz);
+  qrSizeInput.value = String(config.qrSize);
+  eccInput.value = config.ecc;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => window.setTimeout(resolve, ms));
+}
+
+async function measureConfig(config: SweepConfig, seconds = 6): Promise<SweepResult> {
+  applyConfig(config);
+  payloadSize.value = '65536';
+  generateSelectedPayload();
+  latestTelemetry = emptyTelemetry();
+  sendLab({type: 'command', action: 'receiver-reset'});
+  await sleep(700);
+  await startSender();
+  const started = performance.now();
+  while (!autoSweepAbort && performance.now() - started < seconds * 1000) await sleep(250);
+  stopSender();
+  const duration = Math.max(0.001, (performance.now() - started) / 1000);
+  const t = latestTelemetry;
+  const decoded = t.decoded;
+  const unique = t.unique;
+  const duplicates = t.duplicates;
+  const result: SweepResult = {
+    config,
+    metrics: {
+      unique,
+      decoded,
+      duplicates,
+      invalid: t.invalid,
+      uniquePerSecond: unique / duration,
+      decodedPerSecond: decoded / duration,
+      duplicateRatio: decoded ? duplicates / decoded : 0,
+      durationSeconds: duration,
+    },
+  };
+  logLab(`${config.chunkSize} B · ${config.qrSize}px · ${config.targetHz}Hz · ${config.ecc}: unique ${result.metrics.uniquePerSecond.toFixed(2)}/s, decoded ${result.metrics.decodedPerSecond.toFixed(2)}/s, dup ${(result.metrics.duplicateRatio * 100).toFixed(0)}%`);
+  return result;
+}
+
+async function runAutoSweep(): Promise<void> {
+  if (autoSweepRunning) return;
+  autoSweepRunning = true;
+  autoSweepAbort = false;
+  labStopButton.disabled = false;
+  labStartButton.disabled = true;
+  const results: SweepResult[] = [];
+  logLab('Auto sweep started. Keep phone fixed; no more parameter changes are needed.');
+  try {
+    const densityConfigs: SweepConfig[] = [
+      {chunkSize: 300, targetHz: 8, qrSize: 560, ecc: 'L'},
+      {chunkSize: 600, targetHz: 8, qrSize: 640, ecc: 'L'},
+      {chunkSize: 900, targetHz: 8, qrSize: 720, ecc: 'L'},
+      {chunkSize: 1200, targetHz: 8, qrSize: 800, ecc: 'L'},
+    ];
+    for (const config of densityConfigs) {
+      if (autoSweepAbort) break;
+      results.push(await measureConfig(config));
+    }
+    if (!results.length) return;
+    const densityBest = [...results].sort((a, b) => b.metrics.uniquePerSecond - a.metrics.uniquePerSecond)[0];
+    const hzValues = [6, 12, 18, 24];
+    for (const targetHz of hzValues) {
+      if (autoSweepAbort) break;
+      results.push(await measureConfig({...densityBest.config, targetHz}));
+    }
+    const best = [...results].sort((a, b) => b.metrics.uniquePerSecond - a.metrics.uniquePerSecond)[0];
+    const run = {
+      schema: 'optilink.tf002.lab.v1',
+      status: autoSweepAbort ? 'ABORTED' : 'CALIBRATION_COMPLETE',
+      startedBy: 'receiver-one-click',
+      finishedAt: new Date().toISOString(),
+      receiver: {device: 'moto razr 40 ultra', browser: navigator.userAgent},
+      controlPlane: 'WebSocket telemetry only; payload bytes remain optical',
+      results,
+      best,
+    };
+    sendLab({type: 'lab-result', run});
+    sendLab({type: 'command', action: 'lab-finished', best});
+    logLab(`Best calibration candidate: ${best.config.chunkSize} B/frame, ${best.config.qrSize}px, ${best.config.targetHz} Hz, ECC ${best.config.ecc}.`);
+  } catch (error) {
+    logLab(`Auto sweep failed: ${String(error)}`);
+  } finally {
+    stopSender();
+    autoSweepRunning = false;
+    labStartButton.disabled = false;
+    labStopButton.disabled = true;
+  }
+}
+
+function connectLab(): void {
+  const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  labSocket = new WebSocket(`${wsProtocol}//${location.host}/lab`);
+  labSocket.addEventListener('open', () => {
+    sendLab({type: 'hello', role});
+    logLab(`Coordinator connected as ${role}.`);
+  });
+  labSocket.addEventListener('close', () => {
+    logLab('Coordinator disconnected. Reconnecting…');
+    window.setTimeout(connectLab, 1500);
+  });
+  labSocket.addEventListener('message', event => {
+    let message: any;
+    try { message = JSON.parse(String(event.data)); } catch { return; }
+    if (message.type === 'telemetry' && role === 'sender') latestTelemetry = message.telemetry as Telemetry;
+    if (message.type === 'state' && message.event === 'receiver-ready' && role === 'sender') void runAutoSweep();
+    if (message.type === 'command' && message.action === 'receiver-reset' && role === 'receiver') resetReceiverState();
+    if (message.type === 'command' && message.action === 'lab-stop') {
+      autoSweepAbort = true;
+      if (role === 'sender') stopSender();
+    }
+    if (message.type === 'command' && message.action === 'lab-finished' && role === 'receiver') logLab('Sender finished calibration. You can press Stop / finish.');
+    if (message.type === 'server' && message.event === 'result-saved') logLab(`Result saved by coordinator${message.publish?.published ? ' and posted to GitHub issue #9' : ''}.`);
+  });
+}
+
+async function startReceiverAutoLab(): Promise<void> {
+  await startCamera();
+  resetReceiverState();
+  labStartButton.disabled = true;
+  labStopButton.disabled = false;
+  sendLab({type: 'state', event: 'receiver-ready'});
+  logLab('Camera started. Sender is now allowed to run the automatic sweep. Keep the phone fixed.');
+}
+
+function stopAutoLab(): void {
+  autoSweepAbort = true;
+  sendLab({type: 'command', action: 'lab-stop'});
+  if (role === 'receiver') stopCamera();
+  if (role === 'sender') stopSender();
+  labStartButton.disabled = false;
+  labStopButton.disabled = true;
+  logLab('Auto Lab stopped.');
+}
+
+labStartButton.addEventListener('click', () => {
+  if (role === 'receiver') void startReceiverAutoLab().catch(error => logLab(`camera error: ${String(error)}`));
+  else if (role === 'sender') void runAutoSweep();
+  else logLab('Open with ?role=sender on the computer and ?role=receiver on the phone for one-click Auto Lab.');
+});
+labStopButton.addEventListener('click', stopAutoLab);
+
+if (role === 'receiver') {
+  senderPanel.hidden = true;
+  labRoleText.textContent = '手机模式：固定手机后只需要 Start auto test；结束时按 Stop / finish。';
+  document.body.dataset.role = 'receiver';
+} else if (role === 'sender') {
+  receiverPanel.hidden = true;
+  labRoleText.textContent = '电脑模式：保持此页面打开即可。手机点击 Start 后，这里会自动调参数并记录结果。';
+  labStartButton.textContent = 'Run locally';
+  document.body.dataset.role = 'sender';
+} else {
+  labRoleText.textContent = '手动双栏模式。低操作量测试请使用 ?role=sender / ?role=receiver。';
+}
+
 resetReceiverState();
 setSenderStatus(['TF-002 ready', 'Generate a benchmark payload or select a file.']);
+connectLab();
