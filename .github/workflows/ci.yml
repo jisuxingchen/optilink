@@ -56,6 +56,8 @@ jobs:
         run: npm install --no-audit --no-fund
       - name: Protocol tests
         run: npm test
+      - name: Validate lab coordinator syntax
+        run: node --check lab-server.mjs
       - name: Typecheck and build browser spike
         run: npm run build
       - name: Upload TF-002 static build
