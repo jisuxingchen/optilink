@@ -1,5 +1,5 @@
 import {createServer} from 'node:http';
-import {writeFile, mkdir} from 'node:fs/promises';
+import {readFile, writeFile, mkdir} from 'node:fs/promises';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {WebSocketServer, WebSocket} from 'ws';
@@ -12,8 +12,34 @@ const clients = new Map();
 let latestRun = null;
 let vite;
 
+async function serveIndex(req, res) {
+  try {
+    const url = req.url || '/';
+    const source = await readFile('index.html', 'utf-8');
+    const html = await vite.transformIndexHtml(url, source);
+    res.statusCode = 200;
+    res.setHeader('content-type', 'text/html; charset=utf-8');
+    res.setHeader('cache-control', 'no-store');
+    res.end(html);
+  } catch (error) {
+    vite?.ssrFixStacktrace?.(error);
+    res.statusCode = 500;
+    res.setHeader('content-type', 'text/plain; charset=utf-8');
+    res.end(`OptiLink lab HTML error\n${error?.stack || String(error)}`);
+  }
+}
+
 const server = createServer((req, res) => {
-  if (req.url === '/api/lab/latest') {
+  const pathname = new URL(req.url || '/', 'http://localhost').pathname;
+
+  if (pathname === '/api/lab/health') {
+    res.setHeader('content-type', 'application/json; charset=utf-8');
+    res.setHeader('cache-control', 'no-store');
+    res.end(JSON.stringify({status: 'OK', service: 'optilink-tf-002-lab', port}, null, 2));
+    return;
+  }
+
+  if (pathname === '/api/lab/latest') {
     res.setHeader('content-type', 'application/json; charset=utf-8');
     res.setHeader('cache-control', 'no-store');
     res.end(JSON.stringify(latestRun ?? {status: 'NO_RUN'}, null, 2));
@@ -26,23 +52,22 @@ const server = createServer((req, res) => {
     return;
   }
 
-  vite.middlewares(req, res, () => {
-    res.statusCode = 404;
-    res.end('Not found');
-  });
+  // Let Vite handle module requests and static assets first. In middleware mode,
+  // HTML fallback is not reliable enough for this custom HTTP server, so when
+  // Vite calls next() we explicitly transform and serve index.html ourselves.
+  vite.middlewares(req, res, () => void serveIndex(req, res));
 });
 
 // Codespaces exposes the lab through https://<codespace>-5173.app.github.dev.
-// In middleware mode we do not need Vite HMR for this physical-test harness.
-// Disabling it avoids a second random forwarded port, while allowedHosts keeps
-// Vite's host validation explicit instead of opening it to arbitrary hosts.
+// The lab uses one custom HTTP/WebSocket server, so Vite HMR is intentionally
+// disabled. This prevents the extra random forwarded HMR port seen in Codespaces.
 vite = await createViteServer({
   server: {
     middlewareMode: true,
     hmr: false,
     allowedHosts: ['.app.github.dev', 'localhost', '127.0.0.1'],
   },
-  appType: 'spa',
+  appType: 'custom',
 });
 
 const wss = new WebSocketServer({server, path: '/lab'});
@@ -124,6 +149,7 @@ wss.on('connection', ws => {
 
 server.listen(port, host, () => {
   console.log(`OptiLink TF-002 lab coordinator listening on http://${host}:${port}`);
+  console.log('Health URL:   /api/lab/health');
   console.log('Receiver URL: ?role=receiver');
   console.log('Sender URL:   ?role=sender');
   console.log('Latest result endpoint: /api/lab/latest');
