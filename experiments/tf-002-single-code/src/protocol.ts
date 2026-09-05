@@ -16,10 +16,31 @@ export type DataFrame = {
   payload: Uint8Array;
 };
 
-export type ParsedFrame = ManifestFrame | DataFrame;
+export type FountainManifestFrame = {
+  kind: 'fountain-manifest';
+  sessionId: string;
+  sourceBlocks: number;
+  totalBytes: number;
+  blockSize: number;
+  sha256: string;
+  fileName: string;
+  fountainSeed: number;
+};
+
+export type FountainDataFrame = {
+  kind: 'fountain';
+  sessionId: string;
+  symbolId: number;
+  sourceBlocks: number;
+  payload: Uint8Array;
+};
+
+export type ParsedFrame = ManifestFrame | DataFrame | FountainManifestFrame | FountainDataFrame;
 
 const DATA_PREFIX = 'OL1D';
 const MANIFEST_PREFIX = 'OL1M';
+const FOUNTAIN_DATA_PREFIX = 'OL2F';
+const FOUNTAIN_MANIFEST_PREFIX = 'OL2M';
 
 const crcTable = (() => {
   const table = new Uint32Array(256);
@@ -35,18 +56,14 @@ const crcTable = (() => {
 
 export function crc32(bytes: Uint8Array): number {
   let crc = 0xffffffff;
-  for (const value of bytes) {
-    crc = crcTable[(crc ^ value) & 0xff] ^ (crc >>> 8);
-  }
+  for (const value of bytes) crc = crcTable[(crc ^ value) & 0xff] ^ (crc >>> 8);
   return (crc ^ 0xffffffff) >>> 0;
 }
 
 function bytesToBase64Url(bytes: Uint8Array): string {
   let binary = '';
   const step = 0x8000;
-  for (let i = 0; i < bytes.length; i += step) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + step));
-  }
+  for (let i = 0; i < bytes.length; i += step) binary += String.fromCharCode(...bytes.subarray(i, i + step));
   return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '');
 }
 
@@ -60,28 +77,30 @@ function base64UrlToBytes(value: string): Uint8Array {
 }
 
 export function encodeManifest(frame: ManifestFrame): string {
-  const fileName = encodeURIComponent(frame.fileName);
-  return [
-    MANIFEST_PREFIX,
-    frame.sessionId,
-    frame.totalChunks,
-    frame.totalBytes,
-    frame.chunkSize,
-    frame.sha256,
-    fileName,
-  ].join('|');
+  return [MANIFEST_PREFIX, frame.sessionId, frame.totalChunks, frame.totalBytes, frame.chunkSize, frame.sha256, encodeURIComponent(frame.fileName)].join('|');
 }
 
 export function encodeDataFrame(frame: DataFrame): string {
   const checksum = crc32(frame.payload).toString(16).padStart(8, '0');
+  return [DATA_PREFIX, frame.sessionId, frame.index, frame.totalChunks, checksum, bytesToBase64Url(frame.payload)].join('|');
+}
+
+export function encodeFountainManifest(frame: FountainManifestFrame): string {
   return [
-    DATA_PREFIX,
+    FOUNTAIN_MANIFEST_PREFIX,
     frame.sessionId,
-    frame.index,
-    frame.totalChunks,
-    checksum,
-    bytesToBase64Url(frame.payload),
+    frame.sourceBlocks,
+    frame.totalBytes,
+    frame.blockSize,
+    frame.sha256,
+    frame.fountainSeed.toString(16).padStart(8, '0'),
+    encodeURIComponent(frame.fileName),
   ].join('|');
+}
+
+export function encodeFountainDataFrame(frame: FountainDataFrame): string {
+  const checksum = crc32(frame.payload).toString(16).padStart(8, '0');
+  return [FOUNTAIN_DATA_PREFIX, frame.sessionId, frame.symbolId, frame.sourceBlocks, checksum, bytesToBase64Url(frame.payload)].join('|');
 }
 
 export function parseFrame(text: string): ParsedFrame | null {
@@ -93,15 +112,7 @@ export function parseFrame(text: string): ParsedFrame | null {
     if (![totalChunks, totalBytes, chunkSize].every(Number.isSafeInteger)) return null;
     if (totalChunks <= 0 || totalBytes < 0 || chunkSize <= 0) return null;
     if (!/^[a-f0-9]{64}$/iu.test(parts[5])) return null;
-    return {
-      kind: 'manifest',
-      sessionId: parts[1],
-      totalChunks,
-      totalBytes,
-      chunkSize,
-      sha256: parts[5].toLowerCase(),
-      fileName: decodeURIComponent(parts[6]),
-    };
+    return {kind: 'manifest', sessionId: parts[1], totalChunks, totalBytes, chunkSize, sha256: parts[5].toLowerCase(), fileName: decodeURIComponent(parts[6])};
   }
 
   if (parts[0] === DATA_PREFIX && parts.length === 6) {
@@ -115,15 +126,43 @@ export function parseFrame(text: string): ParsedFrame | null {
     return {kind: 'data', sessionId: parts[1], index, totalChunks, payload};
   }
 
+  if (parts[0] === FOUNTAIN_MANIFEST_PREFIX && parts.length === 8) {
+    const sourceBlocks = Number(parts[2]);
+    const totalBytes = Number(parts[3]);
+    const blockSize = Number(parts[4]);
+    if (![sourceBlocks, totalBytes, blockSize].every(Number.isSafeInteger)) return null;
+    if (sourceBlocks <= 0 || totalBytes < 0 || blockSize <= 0) return null;
+    if (!/^[a-f0-9]{64}$/iu.test(parts[5]) || !/^[a-f0-9]{8}$/iu.test(parts[6])) return null;
+    return {
+      kind: 'fountain-manifest',
+      sessionId: parts[1],
+      sourceBlocks,
+      totalBytes,
+      blockSize,
+      sha256: parts[5].toLowerCase(),
+      fountainSeed: Number.parseInt(parts[6], 16) >>> 0,
+      fileName: decodeURIComponent(parts[7]),
+    };
+  }
+
+  if (parts[0] === FOUNTAIN_DATA_PREFIX && parts.length === 6) {
+    const symbolId = Number(parts[2]);
+    const sourceBlocks = Number(parts[3]);
+    if (!Number.isSafeInteger(symbolId) || !Number.isSafeInteger(sourceBlocks)) return null;
+    if (symbolId < 0 || sourceBlocks <= 0) return null;
+    const payload = base64UrlToBytes(parts[5]);
+    const expected = Number.parseInt(parts[4], 16) >>> 0;
+    if (!/^[a-f0-9]{8}$/iu.test(parts[4]) || crc32(payload) !== expected) return null;
+    return {kind: 'fountain', sessionId: parts[1], symbolId, sourceBlocks, payload};
+  }
+
   return null;
 }
 
 export function chunkBytes(bytes: Uint8Array, chunkSize: number): Uint8Array[] {
   if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0) throw new Error('chunkSize must be a positive integer');
   const chunks: Uint8Array[] = [];
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    chunks.push(bytes.slice(offset, Math.min(bytes.length, offset + chunkSize)));
-  }
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) chunks.push(bytes.slice(offset, Math.min(bytes.length, offset + chunkSize)));
   return chunks.length ? chunks : [new Uint8Array()];
 }
 
