@@ -9,7 +9,8 @@ import {pipeline} from 'node:stream/promises';
 import {Readable} from 'node:stream';
 
 const token = process.env.OPTILINK_LAB_TOKEN || randomBytes(18).toString('hex');
-const page = process.env.OPTILINK_LAB_PAGE === 'fountain' ? 'fountain' : 'baseline';
+const requestedPage = process.env.OPTILINK_LAB_PAGE || 'baseline';
+const page = requestedPage === 'multiqr' ? 'multiqr' : requestedPage === 'fountain' ? 'fountain' : 'baseline';
 const instanceId = randomBytes(8).toString('hex');
 const cacheDir = join(homedir(), '.cache', 'optilink');
 const binary = join(cacheDir, 'cloudflared');
@@ -61,7 +62,7 @@ async function choosePort() {
     return explicit;
   }
 
-  const start = page === 'fountain' ? 8081 : 8080;
+  const start = page === 'multiqr' ? 8082 : page === 'fountain' ? 8081 : 8080;
   for (let port = start; port < start + 20; port += 1) {
     if (await portAvailable(port)) return port;
   }
@@ -91,9 +92,21 @@ function waitForLocalHealth() {
   });
 }
 
+function pageRoute() {
+  if (page === 'multiqr') return '/multiqr.html';
+  if (page === 'fountain') return '/fountain.html';
+  return '/';
+}
+
+function pageMarker() {
+  if (page === 'multiqr') return '4QR + Fountain spatial parallelism benchmark';
+  if (page === 'fountain') return 'Fountain / rateless single-QR benchmark';
+  return 'Single-code optical baseline';
+}
+
 async function verifyLocalPageMode() {
-  const route = page === 'fountain' ? '/fountain.html' : '/';
-  const expected = page === 'fountain' ? 'Fountain / rateless single-QR benchmark' : 'Single-code optical baseline';
+  const route = pageRoute();
+  const expected = pageMarker();
   const url = new URL(`http://127.0.0.1:${port}${route}`);
   url.searchParams.set('role', 'sender');
   url.searchParams.set('token', token);
@@ -140,16 +153,19 @@ function inspectTunnelOutput(text) {
   const match = text.match(urlPattern)?.[0];
   if (!match) return;
   printed = true;
-  const basePath = page === 'fountain' ? '/fountain.html' : '/';
+  const basePath = pageRoute();
   const sender = `${match}${basePath}?role=sender&token=${token}&run=${instanceId}`;
   const receiver = `${match}${basePath}?role=receiver&token=${token}&run=${instanceId}`;
   console.log('\n============================================================');
-  console.log(page === 'fountain' ? 'OptiLink Fountain Auto Lab is ready' : 'OptiLink Auto Lab is ready');
+  if (page === 'multiqr') console.log('OptiLink 4QR Auto Lab is ready');
+  else if (page === 'fountain') console.log('OptiLink Fountain Auto Lab is ready');
+  else console.log('OptiLink Auto Lab is ready');
   console.log(`Mode     : ${page} · instance ${instanceId} · local port ${port}`);
   console.log(`Sender   : ${sender}`);
   console.log(`Receiver : ${receiver}`);
   console.log(`Health   : ${match}/api/lab/health`);
   console.log('IMPORTANT: use ONLY the two fresh URLs above; earlier lab URLs have been stopped.');
+  if (page === 'multiqr') console.log('4QR alignment: center the computer 2×2 QR square inside the phone square reticle, then press Start once.');
   console.log('Keep this terminal running during the physical test.');
   console.log('The URL is temporary; lab control is protected by a random token.');
   console.log('============================================================\n');
