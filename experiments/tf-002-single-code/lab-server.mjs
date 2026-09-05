@@ -41,10 +41,15 @@ function maybeSetAuthCookie(req, res) {
   res.setHeader('set-cookie', `optilink_lab_token=${encodeURIComponent(labToken)}; Path=/; HttpOnly; Secure; SameSite=Strict`);
 }
 
-async function serveIndex(req, res) {
+function htmlEntryForPath(pathname) {
+  return pathname === '/fountain.html' ? 'fountain.html' : 'index.html';
+}
+
+async function serveHtml(req, res, pathname) {
   try {
     const url = req.url || '/';
-    const source = await readFile('index.html', 'utf-8');
+    const entry = htmlEntryForPath(pathname);
+    const source = await readFile(entry, 'utf-8');
     const html = await vite.transformIndexHtml(url, source);
     res.statusCode = 200;
     res.setHeader('content-type', 'text/html; charset=utf-8');
@@ -92,7 +97,7 @@ const server = createServer((req, res) => {
     res.end('OptiLink lab is starting');
     return;
   }
-  vite.middlewares(req, res, () => void serveIndex(req, res));
+  vite.middlewares(req, res, () => void serveHtml(req, res, pathname));
 });
 
 vite = await createViteServer({server: {middlewareMode: true, hmr: false, allowedHosts: ['.app.github.dev', '.trycloudflare.com', 'localhost', '127.0.0.1']}, appType: 'custom'});
