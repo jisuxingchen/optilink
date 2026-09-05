@@ -72,6 +72,8 @@ Elapsed time ends when the receiver:
 
 This intentionally includes receiver-side completion work. A separate optical-acquisition metric may be reported, but it must not replace end-to-end net goodput.
 
+For the network-assisted Auto Lab only, a sender-observed timing may be recorded from optical-stream start until verified receiver-completion telemetry reaches the sender. This measurement is conservative because it includes the control-plane completion latency and **does not replace** the later official offline benchmark.
+
 ## 6. Minimum repeated-run method
 
 For each benchmark configuration:
@@ -148,6 +150,13 @@ Approved at G1:
 - normal indoor lighting with no direct glare
 - sender uses a dedicated large display window / fullscreen when practical
 - fixed/steady receiver baseline before handheld robustness testing
+
+Current physical sender condition for performance-oriented TF-002 runs, owner-confirmed on 2026-09-05:
+
+- **physical display refresh rate: 60 Hz**
+- **OptiLink visual-code update target: 24 Hz**
+- these are separate quantities and must both be recorded in every result
+- earlier manual and Auto Lab rounds before this physical-refresh condition was frozen are classified as **functional / engineering evidence**, not the starting performance dataset
 
 The following are deliberate experiment variables and must be exposed by the harness rather than hidden constants:
 
