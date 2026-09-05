@@ -62,6 +62,8 @@ let receiverFirstUsefulAt = 0;
 let receiverDecoded = 0;
 let receiverDuplicates = 0;
 let receiverInvalid = 0;
+let receiverIgnoredBeforeManifest = 0;
+let receiverIgnoreUntil = 0;
 let receiverLastBlob: Blob | null = null;
 let receiverLastName = 'optilink-received.bin';
 let receiverComplete = false;
@@ -72,8 +74,10 @@ const roleParam = new URLSearchParams(location.search).get('role');
 const role = roleParam === 'sender' || roleParam === 'receiver' ? roleParam : 'both';
 let labSocket: WebSocket | null = null;
 let latestTelemetry: Telemetry = emptyTelemetry();
+let receiverMetadata: ReceiverMetadata | null = null;
 let autoSweepRunning = false;
 let autoSweepAbort = false;
+const pendingReceiverResets = new Map<string, {resolve: () => void; reject: (error: Error) => void; timer: number}>();
 
 type Telemetry = {
   sessionId: string;
@@ -82,17 +86,44 @@ type Telemetry = {
   decoded: number;
   duplicates: number;
   invalid: number;
+  ignoredBeforeManifest: number;
   complete: boolean;
   hashOk: boolean;
   goodput: number;
   timestamp: number;
 };
 
+type ReceiverMetadata = {
+  configuredDevice: string;
+  userAgent: string;
+  platform: string;
+  language: string;
+  screen: {width: number; height: number; devicePixelRatio: number};
+  capturedAt: string;
+  source: 'receiver-page';
+};
+
 type SweepConfig = {chunkSize: number; targetHz: number; qrSize: number; ecc: 'L' | 'M' | 'Q' | 'H'};
-type SweepResult = {config: SweepConfig; metrics: {unique: number; decoded: number; duplicates: number; invalid: number; uniquePerSecond: number; decodedPerSecond: number; duplicateRatio: number; durationSeconds: number}};
+type SweepResult = {config: SweepConfig; metrics: {unique: number; decoded: number; duplicates: number; invalid: number; ignoredBeforeManifest: number; uniquePerSecond: number; decodedPerSecond: number; duplicateRatio: number; durationSeconds: number}};
 
 function emptyTelemetry(): Telemetry {
-  return {sessionId: '', unique: 0, total: 0, decoded: 0, duplicates: 0, invalid: 0, complete: false, hashOk: false, goodput: 0, timestamp: performance.now()};
+  return {sessionId: '', unique: 0, total: 0, decoded: 0, duplicates: 0, invalid: 0, ignoredBeforeManifest: 0, complete: false, hashOk: false, goodput: 0, timestamp: performance.now()};
+}
+
+function captureReceiverMetadata(): ReceiverMetadata {
+  return {
+    configuredDevice: 'moto razr 40 ultra',
+    userAgent: navigator.userAgent,
+    platform: navigator.platform || 'unknown',
+    language: navigator.language || 'unknown',
+    screen: {
+      width: window.screen.width,
+      height: window.screen.height,
+      devicePixelRatio: window.devicePixelRatio,
+    },
+    capturedAt: new Date().toISOString(),
+    source: 'receiver-page',
+  };
 }
 
 function numberValue(input: HTMLInputElement, min: number, max: number): number {
@@ -124,6 +155,7 @@ function telemetrySnapshot(): Telemetry {
     decoded: receiverDecoded,
     duplicates: receiverDuplicates,
     invalid: receiverInvalid,
+    ignoredBeforeManifest: receiverIgnoredBeforeManifest,
     complete: receiverComplete,
     hashOk: receiverHashOk,
     goodput: receiverGoodput,
@@ -145,6 +177,7 @@ function setReceiverStatus(extra?: string): void {
     `decoded QR results: ${receiverDecoded}`,
     `duplicates: ${receiverDuplicates}`,
     `invalid/foreign: ${receiverInvalid}`,
+    `ignored before manifest: ${receiverIgnoredBeforeManifest}`,
   ];
   if (receivedManifest) {
     lines.push(`file: ${receivedManifest.fileName}`);
@@ -155,7 +188,7 @@ function setReceiverStatus(extra?: string): void {
   publishTelemetry();
 }
 
-function resetReceiverState(): void {
+function resetReceiverState(ignoreForMs = 0): void {
   receivedManifest = null;
   receivedSessionId = '';
   receivedChunks = new Map();
@@ -163,12 +196,14 @@ function resetReceiverState(): void {
   receiverDecoded = 0;
   receiverDuplicates = 0;
   receiverInvalid = 0;
+  receiverIgnoredBeforeManifest = 0;
+  receiverIgnoreUntil = performance.now() + ignoreForMs;
   receiverComplete = false;
   receiverGoodput = 0;
   receiverHashOk = false;
   receiverLastBlob = null;
   downloadButton.disabled = true;
-  setReceiverStatus('waiting for optical frames');
+  setReceiverStatus(ignoreForMs ? `reset complete; flushing camera for ${ignoreForMs} ms` : 'waiting for optical frames');
 }
 
 async function finalizeReceiver(): Promise<void> {
@@ -200,6 +235,8 @@ async function finalizeReceiver(): Promise<void> {
 }
 
 async function handleDecodedText(text: string): Promise<void> {
+  if (performance.now() < receiverIgnoreUntil) return;
+
   receiverDecoded += 1;
   const frame = parseFrame(text);
   if (!frame) {
@@ -207,18 +244,36 @@ async function handleDecodedText(text: string): Promise<void> {
     setReceiverStatus();
     return;
   }
-  if (receivedSessionId && frame.sessionId !== receivedSessionId) {
+
+  // A new measurement session is anchored only by its manifest. Data frames
+  // observed before a manifest may be queued/stale camera results from the
+  // preceding sweep and must not poison the next session id.
+  if (!receivedSessionId) {
+    if (frame.kind !== 'manifest') {
+      receiverIgnoredBeforeManifest += 1;
+      setReceiverStatus('waiting for manifest anchor');
+      return;
+    }
+    receivedSessionId = frame.sessionId;
+    receivedManifest = frame;
+    setReceiverStatus('manifest received; session anchored');
+    await finalizeReceiver();
+    return;
+  }
+
+  if (frame.sessionId !== receivedSessionId) {
     receiverInvalid += 1;
     setReceiverStatus(`ignored foreign session ${frame.sessionId}`);
     return;
   }
-  if (!receivedSessionId) receivedSessionId = frame.sessionId;
+
   if (frame.kind === 'manifest') {
     receivedManifest = frame;
     setReceiverStatus('manifest received');
     await finalizeReceiver();
     return;
   }
+
   if (!receiverFirstUsefulAt) receiverFirstUsefulAt = performance.now();
   if (receivedChunks.has(frame.index)) receiverDuplicates += 1;
   else receivedChunks.set(frame.index, frame.payload);
@@ -316,6 +371,20 @@ function stopSender(): void {
   if (!senderStatus.textContent?.endsWith('STOPPED')) senderStatus.textContent += '\nSTOPPED';
 }
 
+function clearSenderCanvas(): void {
+  const context = canvas.getContext('2d');
+  if (!context) return;
+  context.save();
+  context.fillStyle = '#ffffff';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.restore();
+}
+
+function blankSenderDisplay(): void {
+  stopSender();
+  clearSenderCanvas();
+}
+
 function generateSelectedPayload(): void {
   const size = Number(payloadSize.value);
   sourceBytes = deterministicBytes(size, 0x4f505449);
@@ -336,7 +405,7 @@ startSenderButton.addEventListener('click', () => void startSender().catch(error
 stopSenderButton.addEventListener('click', stopSender);
 startCameraButton.addEventListener('click', () => void startCamera().catch(error => setReceiverStatus(`camera error: ${String(error)}`)));
 stopCameraButton.addEventListener('click', stopCamera);
-resetReceiverButton.addEventListener('click', resetReceiverState);
+resetReceiverButton.addEventListener('click', () => resetReceiverState());
 downloadButton.addEventListener('click', () => {
   if (!receiverLastBlob) return;
   const url = URL.createObjectURL(receiverLastBlob);
@@ -367,18 +436,51 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => window.setTimeout(resolve, ms));
 }
 
+function waitForReceiverReset(resetId: string, timeoutMs = 3000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      pendingReceiverResets.delete(resetId);
+      reject(new Error(`receiver reset acknowledgement timed out: ${resetId}`));
+    }, timeoutMs);
+    pendingReceiverResets.set(resetId, {resolve, reject, timer});
+  });
+}
+
+function acknowledgeReceiverReset(resetId: string): void {
+  const pending = pendingReceiverResets.get(resetId);
+  if (!pending) return;
+  window.clearTimeout(pending.timer);
+  pendingReceiverResets.delete(resetId);
+  pending.resolve();
+}
+
 async function measureConfig(config: SweepConfig, seconds = 6): Promise<SweepResult> {
   applyConfig(config);
   payloadSize.value = '65536';
   generateSelectedPayload();
+
+  // Quiesce the optical channel before resetting the receiver. The previous
+  // implementation left the last QR visible, allowing stale frames to bind the
+  // next sweep to the wrong session. We now blank first, wait for camera drain,
+  // request an explicit reset and wait for receiver acknowledgement.
+  blankSenderDisplay();
+  await sleep(450);
   latestTelemetry = emptyTelemetry();
-  sendLab({type: 'command', action: 'receiver-reset'});
-  await sleep(700);
+  const resetId = `reset-${createSessionId()}`;
+  const resetAck = waitForReceiverReset(resetId);
+  sendLab({type: 'command', action: 'receiver-reset', resetId});
+  await resetAck;
+  latestTelemetry = emptyTelemetry();
+  await sleep(400);
+
   await startSender();
   const started = performance.now();
   while (!autoSweepAbort && performance.now() - started < seconds * 1000) await sleep(250);
-  stopSender();
-  const duration = Math.max(0.001, (performance.now() - started) / 1000);
+  const finished = performance.now();
+  blankSenderDisplay();
+  await sleep(250);
+
+  const duration = Math.max(0.001, (finished - started) / 1000);
   const t = latestTelemetry;
   const decoded = t.decoded;
   const unique = t.unique;
@@ -390,13 +492,14 @@ async function measureConfig(config: SweepConfig, seconds = 6): Promise<SweepRes
       decoded,
       duplicates,
       invalid: t.invalid,
+      ignoredBeforeManifest: t.ignoredBeforeManifest,
       uniquePerSecond: unique / duration,
       decodedPerSecond: decoded / duration,
       duplicateRatio: decoded ? duplicates / decoded : 0,
       durationSeconds: duration,
     },
   };
-  logLab(`${config.chunkSize} B · ${config.qrSize}px · ${config.targetHz}Hz · ${config.ecc}: unique ${result.metrics.uniquePerSecond.toFixed(2)}/s, decoded ${result.metrics.decodedPerSecond.toFixed(2)}/s, dup ${(result.metrics.duplicateRatio * 100).toFixed(0)}%`);
+  logLab(`${config.chunkSize} B · ${config.qrSize}px · ${config.targetHz}Hz · ${config.ecc}: unique ${result.metrics.uniquePerSecond.toFixed(2)}/s, decoded ${result.metrics.decodedPerSecond.toFixed(2)}/s, invalid ${result.metrics.invalid}, pre-manifest ${result.metrics.ignoredBeforeManifest}, dup ${(result.metrics.duplicateRatio * 100).toFixed(0)}%`);
   return result;
 }
 
@@ -428,11 +531,22 @@ async function runAutoSweep(): Promise<void> {
     }
     const best = [...results].sort((a, b) => b.metrics.uniquePerSecond - a.metrics.uniquePerSecond)[0];
     const run = {
-      schema: 'optilink.tf002.lab.v1',
+      schema: 'optilink.tf002.lab.v2',
       status: autoSweepAbort ? 'ABORTED' : 'CALIBRATION_COMPLETE',
       startedBy: 'receiver-one-click',
       finishedAt: new Date().toISOString(),
-      receiver: {device: 'moto razr 40 ultra', browser: navigator.userAgent},
+      receiver: receiverMetadata ?? {
+        configuredDevice: 'moto razr 40 ultra',
+        userAgent: 'receiver metadata unavailable',
+        source: 'receiver-page-unavailable',
+      },
+      measurementSynchronization: {
+        senderBlankBeforeResetMs: 450,
+        receiverResetAck: true,
+        receiverFlushWindowMs: 350,
+        senderPostAckWaitMs: 400,
+        sessionAnchor: 'manifest-first',
+      },
       controlPlane: 'WebSocket telemetry only; payload bytes remain optical',
       results,
       best,
@@ -443,7 +557,7 @@ async function runAutoSweep(): Promise<void> {
   } catch (error) {
     logLab(`Auto sweep failed: ${String(error)}`);
   } finally {
-    stopSender();
+    blankSenderDisplay();
     autoSweepRunning = false;
     labStartButton.disabled = false;
     labStopButton.disabled = true;
@@ -465,11 +579,24 @@ function connectLab(): void {
     let message: any;
     try { message = JSON.parse(String(event.data)); } catch { return; }
     if (message.type === 'telemetry' && role === 'sender') latestTelemetry = message.telemetry as Telemetry;
-    if (message.type === 'state' && message.event === 'receiver-ready' && role === 'sender') void runAutoSweep();
-    if (message.type === 'command' && message.action === 'receiver-reset' && role === 'receiver') resetReceiverState();
+    if (message.type === 'state' && message.event === 'receiver-ready' && role === 'sender') {
+      if (message.receiver) receiverMetadata = message.receiver as ReceiverMetadata;
+      void runAutoSweep();
+    }
+    if (message.type === 'state' && message.event === 'receiver-reset-complete' && role === 'sender') {
+      if (message.receiver) receiverMetadata = message.receiver as ReceiverMetadata;
+      acknowledgeReceiverReset(String(message.resetId || ''));
+    }
+    if (message.type === 'command' && message.action === 'receiver-reset' && role === 'receiver') {
+      const resetId = String(message.resetId || '');
+      resetReceiverState(350);
+      const metadata = captureReceiverMetadata();
+      receiverMetadata = metadata;
+      sendLab({type: 'state', event: 'receiver-reset-complete', resetId, receiver: metadata});
+    }
     if (message.type === 'command' && message.action === 'lab-stop') {
       autoSweepAbort = true;
-      if (role === 'sender') stopSender();
+      if (role === 'sender') blankSenderDisplay();
     }
     if (message.type === 'command' && message.action === 'lab-finished' && role === 'receiver') logLab('Sender finished calibration. You can press Stop / finish.');
     if (message.type === 'server' && message.event === 'result-saved') logLab(`Result saved by coordinator${message.publish?.published ? ' and posted to GitHub issue #9' : ''}.`);
@@ -481,15 +608,17 @@ async function startReceiverAutoLab(): Promise<void> {
   resetReceiverState();
   labStartButton.disabled = true;
   labStopButton.disabled = false;
-  sendLab({type: 'state', event: 'receiver-ready'});
-  logLab('Camera started. Sender is now allowed to run the automatic sweep. Keep the phone fixed.');
+  const metadata = captureReceiverMetadata();
+  receiverMetadata = metadata;
+  sendLab({type: 'state', event: 'receiver-ready', receiver: metadata});
+  logLab('Camera started. Receiver metadata sent. Sender is now allowed to run the automatic sweep. Keep the phone fixed.');
 }
 
 function stopAutoLab(): void {
   autoSweepAbort = true;
   sendLab({type: 'command', action: 'lab-stop'});
   if (role === 'receiver') stopCamera();
-  if (role === 'sender') stopSender();
+  if (role === 'sender') blankSenderDisplay();
   labStartButton.disabled = false;
   labStopButton.disabled = true;
   logLab('Auto Lab stopped.');
