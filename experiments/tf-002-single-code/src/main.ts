@@ -45,6 +45,13 @@ const labStartButton = $<HTMLButtonElement>('labStart');
 const labStopButton = $<HTMLButtonElement>('labStop');
 const labRoleText = $<HTMLElement>('labRoleText');
 const labStatus = $<HTMLPreElement>('labStatus');
+const labModeInput = $<HTMLSelectElement>('labMode');
+const physicalDisplayHzInput = $<HTMLInputElement>('physicalDisplayHz');
+
+const PERFORMANCE_DISPLAY_HZ = 60;
+const STABILITY_BYTES = 1048576;
+const STABILITY_TIMEOUT_MS = 8 * 60 * 1000;
+const STABILITY_CONFIG: SweepConfig = {chunkSize: 300, targetHz: 24, qrSize: 560, ecc: 'L'};
 
 let sourceBytes: Uint8Array | null = null;
 let sourceName = '';
@@ -75,9 +82,12 @@ const role = roleParam === 'sender' || roleParam === 'receiver' ? roleParam : 'b
 let labSocket: WebSocket | null = null;
 let latestTelemetry: Telemetry = emptyTelemetry();
 let receiverMetadata: ReceiverMetadata | null = null;
-let autoSweepRunning = false;
-let autoSweepAbort = false;
+let autoLabRunning = false;
+let autoLabAbort = false;
 const pendingReceiverResets = new Map<string, {resolve: () => void; reject: (error: Error) => void; timer: number}>();
+
+type AutoLabMode = 'benchmark-1mib' | 'calibration';
+type Ecc = 'L' | 'M' | 'Q' | 'H';
 
 type Telemetry = {
   sessionId: string;
@@ -103,8 +113,17 @@ type ReceiverMetadata = {
   source: 'receiver-page';
 };
 
-type SweepConfig = {chunkSize: number; targetHz: number; qrSize: number; ecc: 'L' | 'M' | 'Q' | 'H'};
+type SenderMetadata = {
+  userAgent: string;
+  screen: {width: number; height: number; devicePixelRatio: number};
+  physicalDisplayRefreshHz: number;
+  physicalDisplayRefreshSource: 'owner-configured';
+  capturedAt: string;
+};
+
+type SweepConfig = {chunkSize: number; targetHz: number; qrSize: number; ecc: Ecc};
 type SweepResult = {config: SweepConfig; metrics: {unique: number; decoded: number; duplicates: number; invalid: number; ignoredBeforeManifest: number; uniquePerSecond: number; decodedPerSecond: number; duplicateRatio: number; durationSeconds: number}};
+type SenderSessionInfo = {sessionId: string; bytes: number; sha256: string; fileName: string; chunkCount: number; config: SweepConfig};
 
 function emptyTelemetry(): Telemetry {
   return {sessionId: '', unique: 0, total: 0, decoded: 0, duplicates: 0, invalid: 0, ignoredBeforeManifest: 0, complete: false, hashOk: false, goodput: 0, timestamp: performance.now()};
@@ -124,6 +143,24 @@ function captureReceiverMetadata(): ReceiverMetadata {
     capturedAt: new Date().toISOString(),
     source: 'receiver-page',
   };
+}
+
+function captureSenderMetadata(): SenderMetadata {
+  return {
+    userAgent: navigator.userAgent,
+    screen: {
+      width: window.screen.width,
+      height: window.screen.height,
+      devicePixelRatio: window.devicePixelRatio,
+    },
+    physicalDisplayRefreshHz: numberValue(physicalDisplayHzInput, 1, 360),
+    physicalDisplayRefreshSource: 'owner-configured',
+    capturedAt: new Date().toISOString(),
+  };
+}
+
+function selectedAutoLabMode(): AutoLabMode {
+  return labModeInput.value === 'calibration' ? 'calibration' : 'benchmark-1mib';
 }
 
 function numberValue(input: HTMLInputElement, min: number, max: number): number {
@@ -228,8 +265,8 @@ async function finalizeReceiver(): Promise<void> {
   setReceiverStatus([
     `COMPLETE: ${ok ? 'PASS' : 'HASH_MISMATCH'}`,
     `actual SHA-256: ${actualHash}`,
-    `elapsed: ${elapsed.toFixed(3)} s`,
-    `net goodput: ${formatRate(goodput)}`,
+    `receiver elapsed from first useful frame: ${elapsed.toFixed(3)} s`,
+    `receiver-reported goodput: ${formatRate(goodput)}`,
     `hash verification: ${hashMs.toFixed(1)} ms`,
   ].join('\n'));
 }
@@ -245,9 +282,6 @@ async function handleDecodedText(text: string): Promise<void> {
     return;
   }
 
-  // A new measurement session is anchored only by its manifest. Data frames
-  // observed before a manifest may be queued/stale camera results from the
-  // preceding sweep and must not poison the next session id.
   if (!receivedSessionId) {
     if (frame.kind !== 'manifest') {
       receiverIgnoredBeforeManifest += 1;
@@ -292,20 +326,20 @@ async function startCamera(): Promise<void> {
   setReceiverStatus('camera running');
 }
 
-function stopCamera(): void {
+function stopCamera(updateStatus = true): void {
   cameraControls?.stop();
   cameraControls = undefined;
   video.srcObject = null;
-  setReceiverStatus('camera stopped');
+  if (updateStatus) setReceiverStatus('camera stopped');
 }
 
-async function startSender(): Promise<void> {
-  if (senderRunning) return;
+async function startSender(): Promise<SenderSessionInfo | null> {
+  if (senderRunning) return null;
   const {bytes, name} = await selectedBytes();
   const chunkSize = Math.round(numberValue(chunkSizeInput, 64, 2100));
   const targetHz = numberValue(targetHzInput, 1, 120);
   const qrSize = Math.round(numberValue(qrSizeInput, 160, 1600));
-  const ecc = eccInput.value as 'L' | 'M' | 'Q' | 'H';
+  const ecc = eccInput.value as Ecc;
   const chunks = chunkBytes(bytes, chunkSize);
   const sha256 = await sha256Hex(bytes);
   const sessionId = createSessionId();
@@ -349,17 +383,19 @@ async function startSender(): Promise<void> {
       `file: ${name} · ${bytes.length.toLocaleString()} bytes`,
       `SHA-256: ${sha256}`,
       `chunks: ${chunks.length} · payload/chunk: ${chunkSize} bytes`,
+      `physical display refresh: ${numberValue(physicalDisplayHzInput, 1, 360)} Hz (owner-configured)`,
       `target visual rate: ${targetHz.toFixed(2)} Hz`,
       `actual rendered rate: ${actualVisualHz.toFixed(2)} Hz`,
       `QR render size: ${qrSize}px · ECC ${ecc}`,
       `displayed frames: ${senderRenderedFrames} · data frames: ${senderDataFrames}`,
       `raw payload ceiling at target rate: ${formatRate(theoreticalUseful)}`,
-      'note: receiver goodput is authoritative; this sender value excludes optical/decode loss.',
+      'note: receiver/verified end-to-end metrics are authoritative; raw ceiling is diagnostic only.',
     ]);
     nextDeadline += 1000 / targetHz;
     senderTimer = window.setTimeout(() => void renderNext(), Math.max(0, nextDeadline - performance.now()));
   };
   await renderNext();
+  return {sessionId, bytes: bytes.length, sha256, fileName: name, chunkCount: chunks.length, config: {chunkSize, targetHz, qrSize, ecc}};
 }
 
 function stopSender(): void {
@@ -399,12 +435,12 @@ fileInput.addEventListener('change', () => {
   sourceBytes = null;
   sourceName = '';
   const file = fileInput.files?.[0];
-  setSenderStatus(file ? [`selected: ${file.name}`, `${file.size.toLocaleString()} bytes`, 'manual file overrides generated payload'] : ['no file selected']);
+  setSenderStatus(file ? [`selected: ${file.name}`, `${file.size.toLocaleString()} bytes`, 'manual file mode; not benchmark evidence unless explicitly classified'] : ['no file selected']);
 });
 startSenderButton.addEventListener('click', () => void startSender().catch(error => setSenderStatus([`sender error: ${String(error)}`])));
 stopSenderButton.addEventListener('click', stopSender);
 startCameraButton.addEventListener('click', () => void startCamera().catch(error => setReceiverStatus(`camera error: ${String(error)}`)));
-stopCameraButton.addEventListener('click', stopCamera);
+stopCameraButton.addEventListener('click', () => stopCamera());
 resetReceiverButton.addEventListener('click', () => resetReceiverState());
 downloadButton.addEventListener('click', () => {
   if (!receiverLastBlob) return;
@@ -422,7 +458,7 @@ function sendLab(message: unknown): void {
 
 function logLab(message: string): void {
   const now = new Date().toLocaleTimeString();
-  labStatus.textContent = `[${now}] ${message}\n${labStatus.textContent || ''}`.slice(0, 8000);
+  labStatus.textContent = `[${now}] ${message}\n${labStatus.textContent || ''}`.slice(0, 12000);
 }
 
 function applyConfig(config: SweepConfig): void {
@@ -454,15 +490,7 @@ function acknowledgeReceiverReset(resetId: string): void {
   pending.resolve();
 }
 
-async function measureConfig(config: SweepConfig, seconds = 6): Promise<SweepResult> {
-  applyConfig(config);
-  payloadSize.value = '65536';
-  generateSelectedPayload();
-
-  // Quiesce the optical channel before resetting the receiver. The previous
-  // implementation left the last QR visible, allowing stale frames to bind the
-  // next sweep to the wrong session. We now blank first, wait for camera drain,
-  // request an explicit reset and wait for receiver acknowledgement.
+async function prepareReceiverForMeasurement(): Promise<void> {
   blankSenderDisplay();
   await sleep(450);
   latestTelemetry = emptyTelemetry();
@@ -472,30 +500,34 @@ async function measureConfig(config: SweepConfig, seconds = 6): Promise<SweepRes
   await resetAck;
   latestTelemetry = emptyTelemetry();
   await sleep(400);
+}
+
+async function measureConfig(config: SweepConfig, seconds = 6): Promise<SweepResult> {
+  applyConfig(config);
+  payloadSize.value = '65536';
+  generateSelectedPayload();
+  await prepareReceiverForMeasurement();
 
   await startSender();
   const started = performance.now();
-  while (!autoSweepAbort && performance.now() - started < seconds * 1000) await sleep(250);
+  while (!autoLabAbort && performance.now() - started < seconds * 1000) await sleep(250);
   const finished = performance.now();
   blankSenderDisplay();
   await sleep(250);
 
   const duration = Math.max(0.001, (finished - started) / 1000);
   const t = latestTelemetry;
-  const decoded = t.decoded;
-  const unique = t.unique;
-  const duplicates = t.duplicates;
   const result: SweepResult = {
     config,
     metrics: {
-      unique,
-      decoded,
-      duplicates,
+      unique: t.unique,
+      decoded: t.decoded,
+      duplicates: t.duplicates,
       invalid: t.invalid,
       ignoredBeforeManifest: t.ignoredBeforeManifest,
-      uniquePerSecond: unique / duration,
-      decodedPerSecond: decoded / duration,
-      duplicateRatio: decoded ? duplicates / decoded : 0,
+      uniquePerSecond: t.unique / duration,
+      decodedPerSecond: t.decoded / duration,
+      duplicateRatio: t.decoded ? t.duplicates / t.decoded : 0,
       durationSeconds: duration,
     },
   };
@@ -504,13 +536,13 @@ async function measureConfig(config: SweepConfig, seconds = 6): Promise<SweepRes
 }
 
 async function runAutoSweep(): Promise<void> {
-  if (autoSweepRunning) return;
-  autoSweepRunning = true;
-  autoSweepAbort = false;
+  if (autoLabRunning) return;
+  autoLabRunning = true;
+  autoLabAbort = false;
   labStopButton.disabled = false;
   labStartButton.disabled = true;
   const results: SweepResult[] = [];
-  logLab('Auto sweep started. Keep phone fixed; no more parameter changes are needed.');
+  logLab('Engineering calibration started. These results are tuning evidence, not the post-60Hz performance baseline.');
   try {
     const densityConfigs: SweepConfig[] = [
       {chunkSize: 300, targetHz: 8, qrSize: 560, ecc: 'L'},
@@ -519,27 +551,25 @@ async function runAutoSweep(): Promise<void> {
       {chunkSize: 1200, targetHz: 8, qrSize: 800, ecc: 'L'},
     ];
     for (const config of densityConfigs) {
-      if (autoSweepAbort) break;
+      if (autoLabAbort) break;
       results.push(await measureConfig(config));
     }
     if (!results.length) return;
     const densityBest = [...results].sort((a, b) => b.metrics.uniquePerSecond - a.metrics.uniquePerSecond)[0];
-    const hzValues = [6, 12, 18, 24];
-    for (const targetHz of hzValues) {
-      if (autoSweepAbort) break;
+    for (const targetHz of [6, 12, 18, 24]) {
+      if (autoLabAbort) break;
       results.push(await measureConfig({...densityBest.config, targetHz}));
     }
-    const best = [...results].sort((a, b) => b.metrics.uniquePerSecond - a.metrics.uniquePerSecond)[0];
+    const best = [...results].sort((a, b) => (b.config.chunkSize * b.metrics.uniquePerSecond) - (a.config.chunkSize * a.metrics.uniquePerSecond))[0];
     const run = {
-      schema: 'optilink.tf002.lab.v2',
-      status: autoSweepAbort ? 'ABORTED' : 'CALIBRATION_COMPLETE',
+      schema: 'optilink.tf002.lab.v3',
+      kind: 'calibration',
+      evidenceClass: 'engineering-calibration',
+      status: autoLabAbort ? 'ABORTED' : 'CALIBRATION_COMPLETE',
       startedBy: 'receiver-one-click',
       finishedAt: new Date().toISOString(),
-      receiver: receiverMetadata ?? {
-        configuredDevice: 'moto razr 40 ultra',
-        userAgent: 'receiver metadata unavailable',
-        source: 'receiver-page-unavailable',
-      },
+      sender: captureSenderMetadata(),
+      receiver: receiverMetadata,
       measurementSynchronization: {
         senderBlankBeforeResetMs: 450,
         receiverResetAck: true,
@@ -552,16 +582,127 @@ async function runAutoSweep(): Promise<void> {
       best,
     };
     sendLab({type: 'lab-result', run});
-    sendLab({type: 'command', action: 'lab-finished', best});
-    logLab(`Best calibration candidate: ${best.config.chunkSize} B/frame, ${best.config.qrSize}px, ${best.config.targetHz} Hz, ECC ${best.config.ecc}.`);
+    sendLab({type: 'command', action: 'lab-finished', mode: 'calibration', status: run.status, best});
+    logLab(`Calibration finished. Best useful-byte candidate: ${best.config.chunkSize} B/frame, ${best.config.qrSize}px, ${best.config.targetHz} Hz, ECC ${best.config.ecc}.`);
   } catch (error) {
-    logLab(`Auto sweep failed: ${String(error)}`);
+    logLab(`Calibration failed: ${String(error)}`);
   } finally {
     blankSenderDisplay();
-    autoSweepRunning = false;
+    autoLabRunning = false;
     labStartButton.disabled = false;
     labStopButton.disabled = true;
   }
+}
+
+async function runOneMiBStabilityBenchmark(): Promise<void> {
+  if (autoLabRunning) return;
+  autoLabRunning = true;
+  autoLabAbort = false;
+  labStopButton.disabled = false;
+  labStartButton.disabled = true;
+
+  applyConfig(STABILITY_CONFIG);
+  payloadSize.value = String(STABILITY_BYTES);
+  generateSelectedPayload();
+
+  try {
+    const sender = captureSenderMetadata();
+    if (sender.physicalDisplayRefreshHz !== PERFORMANCE_DISPLAY_HZ) {
+      logLab(`Warning: physical display refresh is recorded as ${sender.physicalDisplayRefreshHz} Hz; current performance baseline is ${PERFORMANCE_DISPLAY_HZ} Hz.`);
+    }
+    logLab('1 MiB performance stability benchmark started. No file upload or Generate click is required.');
+    logLab(`Environment: physical display ${sender.physicalDisplayRefreshHz} Hz; optical update ${STABILITY_CONFIG.targetHz} Hz; ${STABILITY_CONFIG.chunkSize} B/frame; ${STABILITY_CONFIG.qrSize}px; ECC ${STABILITY_CONFIG.ecc}.`);
+
+    await prepareReceiverForMeasurement();
+    const session = await startSender();
+    if (!session) throw new Error('sender did not start');
+    const measurementStartedAt = senderStartedAt;
+    let lastProgressLog = 0;
+
+    while (!autoLabAbort && !latestTelemetry.complete && performance.now() - measurementStartedAt < STABILITY_TIMEOUT_MS) {
+      await sleep(250);
+      const now = performance.now();
+      if (now - lastProgressLog > 10000) {
+        lastProgressLog = now;
+        const t = latestTelemetry;
+        const pct = t.total ? (100 * t.unique / t.total) : 0;
+        logLab(`1 MiB progress: ${t.unique}/${t.total || session.chunkCount} unique (${pct.toFixed(1)}%), decoded ${t.decoded}, dup ${t.duplicates}.`);
+      }
+    }
+
+    const measurementFinishedAt = performance.now();
+    const telemetry = {...latestTelemetry};
+    const elapsedSeconds = Math.max(0.001, (measurementFinishedAt - measurementStartedAt) / 1000);
+    const completionRatio = telemetry.total ? telemetry.unique / telemetry.total : telemetry.unique / session.chunkCount;
+    const status = autoLabAbort
+      ? 'ABORTED'
+      : telemetry.complete
+        ? (telemetry.hashOk ? 'PASS' : 'HASH_MISMATCH')
+        : 'TIMEOUT';
+    const labEndToEndGoodput = status === 'PASS' ? STABILITY_BYTES / elapsedSeconds : 0;
+
+    blankSenderDisplay();
+    const run = {
+      schema: 'optilink.tf002.stability.v1',
+      kind: 'benchmark-1mib',
+      evidenceClass: 'performance-baseline',
+      status,
+      startedBy: 'receiver-one-click',
+      finishedAt: new Date().toISOString(),
+      sender,
+      receiver: receiverMetadata,
+      displayBaseline: {
+        physicalRefreshHz: sender.physicalDisplayRefreshHz,
+        targetOpticalVisualUpdateHz: STABILITY_CONFIG.targetHz,
+        note: 'Physical display refresh and OptiLink visual-code update rate are separate quantities.',
+      },
+      payload: {
+        kind: 'deterministic-incompressible',
+        bytes: STABILITY_BYTES,
+        seed: '0x4f505449',
+        sha256: session.sha256,
+        fileName: session.fileName,
+      },
+      config: STABILITY_CONFIG,
+      timeoutSeconds: STABILITY_TIMEOUT_MS / 1000,
+      result: {
+        completionRatio,
+        uniqueChunks: telemetry.unique,
+        totalChunks: telemetry.total || session.chunkCount,
+        decoded: telemetry.decoded,
+        duplicates: telemetry.duplicates,
+        invalid: telemetry.invalid,
+        ignoredBeforeManifest: telemetry.ignoredBeforeManifest,
+        hashOk: telemetry.hashOk,
+        receiverReportedGoodputBytesPerSecond: telemetry.goodput,
+        senderObservedElapsedSeconds: elapsedSeconds,
+        labEndToEndGoodputBytesPerSecond: labEndToEndGoodput,
+      },
+      measurementNote: 'labEndToEndGoodput uses sender start through receipt of receiver completion telemetry and is conservative because control-plane completion latency is included. Official offline acceptance remains separate.',
+      controlPlane: 'WebSocket telemetry only; payload bytes remain optical',
+    };
+
+    sendLab({type: 'lab-result', run});
+    sendLab({type: 'command', action: 'lab-finished', mode: 'benchmark-1mib', status, result: run.result});
+
+    if (status === 'PASS') {
+      logLab(`1 MiB PASS · SHA-256 verified · sender-observed ${elapsedSeconds.toFixed(2)} s · lab end-to-end ${formatRate(labEndToEndGoodput)}.`);
+    } else {
+      logLab(`1 MiB ${status} · completion ${(completionRatio * 100).toFixed(2)}% · ${telemetry.unique}/${telemetry.total || session.chunkCount} unique chunks · result saved.`);
+    }
+  } catch (error) {
+    logLab(`1 MiB benchmark failed: ${String(error)}`);
+  } finally {
+    blankSenderDisplay();
+    autoLabRunning = false;
+    labStartButton.disabled = false;
+    labStopButton.disabled = true;
+  }
+}
+
+function runSelectedAutoLab(mode: AutoLabMode): void {
+  if (mode === 'calibration') void runAutoSweep();
+  else void runOneMiBStabilityBenchmark();
 }
 
 function connectLab(): void {
@@ -581,7 +722,9 @@ function connectLab(): void {
     if (message.type === 'telemetry' && role === 'sender') latestTelemetry = message.telemetry as Telemetry;
     if (message.type === 'state' && message.event === 'receiver-ready' && role === 'sender') {
       if (message.receiver) receiverMetadata = message.receiver as ReceiverMetadata;
-      void runAutoSweep();
+      const mode: AutoLabMode = message.mode === 'calibration' ? 'calibration' : 'benchmark-1mib';
+      labModeInput.value = mode;
+      runSelectedAutoLab(mode);
     }
     if (message.type === 'state' && message.event === 'receiver-reset-complete' && role === 'sender') {
       if (message.receiver) receiverMetadata = message.receiver as ReceiverMetadata;
@@ -595,10 +738,16 @@ function connectLab(): void {
       sendLab({type: 'state', event: 'receiver-reset-complete', resetId, receiver: metadata});
     }
     if (message.type === 'command' && message.action === 'lab-stop') {
-      autoSweepAbort = true;
+      autoLabAbort = true;
       if (role === 'sender') blankSenderDisplay();
     }
-    if (message.type === 'command' && message.action === 'lab-finished' && role === 'receiver') logLab('Sender finished calibration. You can press Stop / finish.');
+    if (message.type === 'command' && message.action === 'lab-finished' && role === 'receiver') {
+      stopCamera(false);
+      labStartButton.disabled = false;
+      labStopButton.disabled = true;
+      const label = message.mode === 'benchmark-1mib' ? '1 MiB benchmark' : 'calibration';
+      logLab(`${label} finished: ${message.status || 'done'}. Camera stopped automatically; no Finish click is required.`);
+    }
     if (message.type === 'server' && message.event === 'result-saved') logLab(`Result saved by coordinator${message.publish?.published ? ' and posted to GitHub issue #9' : ''}.`);
   });
 }
@@ -610,34 +759,39 @@ async function startReceiverAutoLab(): Promise<void> {
   labStopButton.disabled = false;
   const metadata = captureReceiverMetadata();
   receiverMetadata = metadata;
-  sendLab({type: 'state', event: 'receiver-ready', receiver: metadata});
-  logLab('Camera started. Receiver metadata sent. Sender is now allowed to run the automatic sweep. Keep the phone fixed.');
+  const mode = selectedAutoLabMode();
+  sendLab({type: 'state', event: 'receiver-ready', receiver: metadata, mode});
+  logLab(mode === 'benchmark-1mib'
+    ? 'Camera started. One-click 1 MiB benchmark authorized; keep the phone fixed until automatic finish.'
+    : 'Camera started. Engineering calibration authorized; keep the phone fixed until automatic finish.');
 }
 
 function stopAutoLab(): void {
-  autoSweepAbort = true;
+  autoLabAbort = true;
   sendLab({type: 'command', action: 'lab-stop'});
   if (role === 'receiver') stopCamera();
   if (role === 'sender') blankSenderDisplay();
   labStartButton.disabled = false;
   labStopButton.disabled = true;
-  logLab('Auto Lab stopped.');
+  logLab('Auto Lab stopped by user.');
 }
 
 labStartButton.addEventListener('click', () => {
   if (role === 'receiver') void startReceiverAutoLab().catch(error => logLab(`camera error: ${String(error)}`));
-  else if (role === 'sender') void runAutoSweep();
+  else if (role === 'sender') runSelectedAutoLab(selectedAutoLabMode());
   else logLab('Open with ?role=sender on the computer and ?role=receiver on the phone for one-click Auto Lab.');
 });
 labStopButton.addEventListener('click', stopAutoLab);
 
 if (role === 'receiver') {
   senderPanel.hidden = true;
-  labRoleText.textContent = '手机模式：固定手机后只需要 Start auto test；结束时按 Stop / finish。';
+  physicalDisplayHzInput.disabled = true;
+  labRoleText.textContent = '手机模式：默认 Benchmark 会自动生成并传输 1 MiB；固定手机后只需 Start，结束后摄像头自动停止。';
   document.body.dataset.role = 'receiver';
 } else if (role === 'sender') {
   receiverPanel.hidden = true;
-  labRoleText.textContent = '电脑模式：保持此页面打开即可。手机点击 Start 后，这里会自动调参数并记录结果。';
+  physicalDisplayHzInput.value = String(PERFORMANCE_DISPLAY_HZ);
+  labRoleText.textContent = '电脑模式：当前性能基准显示器物理刷新率记录为 60 Hz。手机 Start 后自动运行，无需点击 Generate。';
   labStartButton.textContent = 'Run locally';
   document.body.dataset.role = 'sender';
 } else {
@@ -645,5 +799,5 @@ if (role === 'receiver') {
 }
 
 resetReceiverState();
-setSenderStatus(['TF-002 ready', 'Generate a benchmark payload or select a file.']);
+setSenderStatus(['TF-002 ready', 'Auto Benchmark: phone Start generates 1 MiB automatically. Manual file/Generate controls are optional engineering tools.']);
 connectLab();
