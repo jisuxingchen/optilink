@@ -43,8 +43,9 @@ gridCanvas.width = RENDER_PIXELS;
 gridCanvas.height = RENDER_PIXELS;
 
 const sampleCanvas = document.createElement('canvas');
-const sampleContext = sampleCanvas.getContext('2d', {alpha: false, willReadFrequently: true});
-if (!sampleContext) throw new Error('Canvas 2D context unavailable');
+const sampleContextMaybe = sampleCanvas.getContext('2d', {alpha: false, willReadFrequently: true});
+if (!sampleContextMaybe) throw new Error('Canvas 2D context unavailable');
+const sampleContext: CanvasRenderingContext2D = sampleContextMaybe;
 
 type ReceiverMeta = ReturnType<typeof captureReceiverMetadata>;
 type CandidateConfig = {
