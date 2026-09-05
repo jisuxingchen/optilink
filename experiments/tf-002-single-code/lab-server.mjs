@@ -10,11 +10,7 @@ const port = Number(process.env.PORT || 5173);
 const host = '0.0.0.0';
 const clients = new Map();
 let latestRun = null;
-
-const vite = await createViteServer({
-  server: {middlewareMode: true},
-  appType: 'spa',
-});
+let vite;
 
 const server = createServer((req, res) => {
   if (req.url === '/api/lab/latest') {
@@ -23,10 +19,30 @@ const server = createServer((req, res) => {
     res.end(JSON.stringify(latestRun ?? {status: 'NO_RUN'}, null, 2));
     return;
   }
+
+  if (!vite) {
+    res.statusCode = 503;
+    res.end('OptiLink lab is starting');
+    return;
+  }
+
   vite.middlewares(req, res, () => {
     res.statusCode = 404;
     res.end('Not found');
   });
+});
+
+// Codespaces exposes the lab through https://<codespace>-5173.app.github.dev.
+// In middleware mode we do not need Vite HMR for this physical-test harness.
+// Disabling it avoids a second random forwarded port, while allowedHosts keeps
+// Vite's host validation explicit instead of opening it to arbitrary hosts.
+vite = await createViteServer({
+  server: {
+    middlewareMode: true,
+    hmr: false,
+    allowedHosts: ['.app.github.dev', 'localhost', '127.0.0.1'],
+  },
+  appType: 'spa',
 });
 
 const wss = new WebSocketServer({server, path: '/lab'});
