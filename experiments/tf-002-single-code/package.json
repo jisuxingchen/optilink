@@ -8,6 +8,7 @@
     "lab": "node lab-server.mjs",
     "lab:tunnel": "node lab-tunnel.mjs",
     "lab:tunnel:fountain": "OPTILINK_LAB_PAGE=fountain node lab-tunnel.mjs",
+    "lab:tunnel:4qr": "OPTILINK_LAB_PAGE=multiqr node lab-tunnel.mjs",
     "build": "tsc --noEmit && vite build",
     "test": "node --test src/protocol.test.ts"
   },
