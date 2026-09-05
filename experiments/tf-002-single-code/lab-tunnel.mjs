@@ -91,6 +91,18 @@ function waitForLocalHealth() {
   });
 }
 
+async function verifyLocalPageMode() {
+  const path = page === 'fountain' ? '/fountain.html?role=sender' : '/?role=sender';
+  const expected = page === 'fountain' ? 'Fountain / rateless single-QR benchmark' : 'Single-code optical baseline';
+  const response = await fetch(`http://127.0.0.1:${port}${path}`);
+  if (!response.ok) throw new Error(`Local ${page} page check failed: HTTP ${response.status}`);
+  const html = await response.text();
+  if (!html.includes(expected)) {
+    throw new Error(`Local ${page} page check failed: expected marker "${expected}" was not served. Tunnel will not start.`);
+  }
+  console.log(`Verified local HTML entry: ${page} (${expected})`);
+}
+
 const cloudflared = await ensureCloudflared();
 const lab = spawn(process.execPath, ['lab-server.mjs'], {
   stdio: ['inherit', 'pipe', 'pipe'],
@@ -110,6 +122,7 @@ lab.stderr.on('data', chunk => process.stderr.write(`[lab] ${chunk}`));
 lab.on('exit', code => { if (code && code !== 0) console.error(`Lab server exited with code ${code}`); });
 
 await waitForLocalHealth();
+await verifyLocalPageMode();
 console.log(`Local ${page} lab healthy on 127.0.0.1:${port} · instance ${instanceId}`);
 console.log(`Starting temporary HTTPS tunnel for ${page} mode ...`);
 
