@@ -9,6 +9,8 @@ const execFileAsync = promisify(execFile);
 const port = Number(process.env.PORT || 5173);
 const host = process.env.HOST || '0.0.0.0';
 const labToken = process.env.OPTILINK_LAB_TOKEN || '';
+const labMode = process.env.OPTILINK_LAB_PAGE === 'fountain' ? 'fountain' : 'baseline';
+const labInstanceId = process.env.OPTILINK_LAB_INSTANCE_ID || '';
 const clients = new Map();
 let latestRun = null;
 let vite;
@@ -61,7 +63,14 @@ const server = createServer((req, res) => {
   if (pathname === '/api/lab/health') {
     res.setHeader('content-type', 'application/json; charset=utf-8');
     res.setHeader('cache-control', 'no-store');
-    res.end(JSON.stringify({status: 'OK', service: 'optilink-tf-002-lab', port, protected: Boolean(labToken)}, null, 2));
+    res.end(JSON.stringify({
+      status: 'OK',
+      service: 'optilink-tf-002-lab',
+      port,
+      protected: Boolean(labToken),
+      mode: labMode,
+      instanceId: labInstanceId || null,
+    }, null, 2));
     return;
   }
   if (!requestAuthorized(req)) {
@@ -214,6 +223,7 @@ wss.on('connection', (ws, req) => {
 
 server.listen(port, host, () => {
   console.log(`OptiLink TF-002 lab coordinator listening on http://${host}:${port}`);
+  console.log(`Lab mode: ${labMode}${labInstanceId ? ` · instance ${labInstanceId}` : ''}`);
   console.log(`Lab control protection: ${labToken ? 'token enabled' : 'disabled'}`);
   console.log('Health URL:   /api/lab/health');
   console.log('Receiver URL: ?role=receiver');
