@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OptiLink TF-003 4QR Benchmark</title>
+</head>
+<body class="multiqr-page">
+  <main class="shell">
+    <header>
+      <div>
+        <p class="eyebrow">OptiLink · TF-003</p>
+        <h1>4QR + Fountain spatial parallelism benchmark</h1>
+        <p class="lede">保持 60 Hz 物理屏幕、24 Hz OptiLink 更新和 Fountain 恢复层不变，把单 QR 扩展为固定 2×2 四码区域。</p>
+      </div>
+      <div class="badge">4QR EXPERIMENT</div>
+    </header>
+
+    <section class="notice">
+      <strong>Fixed comparison:</strong> 1 MiB deterministic incompressible · 4 × 300 B Fountain symbols / visual frame · 480 px each · 24 Hz · ECC L · physical display 60 Hz.
+      <br />
+      <strong>Receiver:</strong> 已知 2×2 网格裁剪后逐区解码；手机只需让电脑上的四码方阵尽量落在取景框中心并点击 Start。
+      <br />
+      <strong>Validity:</strong> 只有完整重建并通过 SHA-256 才记为 PASS；网络仍只用于实验控制和遥测，payload 只走屏幕 → 摄像头。
+    </section>
+
+    <section class="lab-panel">
+      <div>
+        <p class="eyebrow">ONE-CLICK PHYSICAL TEST</p>
+        <h2 id="roleTitle">正在识别角色…</h2>
+        <p id="roleText"></p>
+      </div>
+      <div class="lab-actions">
+        <button id="startButton" class="primary" type="button">Start 4QR benchmark</button>
+        <button id="stopButton" type="button" disabled>Stop</button>
+      </div>
+      <pre id="labStatus" class="status lab-status">connecting…</pre>
+    </section>
+
+    <section id="senderView" class="panel">
+      <div class="panel-head"><div><span class="step">A</span><h2>Sender / 2×2 Fountain grid</h2></div><span>Computer · 60 Hz display</span></div>
+      <div class="multiqr-stage" aria-label="2 by 2 QR grid">
+        <canvas id="qr0" width="480" height="480"></canvas>
+        <canvas id="qr1" width="480" height="480"></canvas>
+        <canvas id="qr2" width="480" height="480"></canvas>
+        <canvas id="qr3" width="480" height="480"></canvas>
+      </div>
+      <pre id="senderStatus" class="status">waiting for phone…</pre>
+    </section>
+
+    <section id="receiverView" class="panel">
+      <div class="panel-head"><div><span class="step">B</span><h2>Receiver / known-grid crop decoder</h2></div><span>moto razr 40 ultra</span></div>
+      <div class="camera-stage multiqr-camera-stage">
+        <video id="camera" muted playsinline></video>
+        <div class="multiqr-reticle" aria-hidden="true"><i></i><i></i></div>
+      </div>
+      <p class="receiver-hint">让电脑上的四码方阵尽量填满并对齐中央正方形取景框；无需逐个扫码。</p>
+      <pre id="receiverStatus" class="status">camera not started</pre>
+    </section>
+  </main>
+  <script>document.body.dataset.role = new URLSearchParams(location.search).get('role') || 'both';</script>
+  <script type="module" src="/src/multiqr-main.ts"></script>
+</body>
+</html>
