@@ -35,7 +35,8 @@ export type FountainDataFrame = {
   payload: Uint8Array;
 };
 
-export type ParsedFrame = ManifestFrame | DataFrame | FountainManifestFrame | FountainDataFrame;
+export type ParsedFrame = ManifestFrame | DataFrame;
+export type FountainParsedFrame = FountainManifestFrame | FountainDataFrame;
 
 const DATA_PREFIX = 'OL1D';
 const MANIFEST_PREFIX = 'OL1M';
@@ -46,9 +47,7 @@ const crcTable = (() => {
   const table = new Uint32Array(256);
   for (let i = 0; i < 256; i += 1) {
     let c = i;
-    for (let k = 0; k < 8; k += 1) {
-      c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
-    }
+    for (let k = 0; k < 8; k += 1) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
     table[i] = c >>> 0;
   }
   return table;
@@ -86,16 +85,7 @@ export function encodeDataFrame(frame: DataFrame): string {
 }
 
 export function encodeFountainManifest(frame: FountainManifestFrame): string {
-  return [
-    FOUNTAIN_MANIFEST_PREFIX,
-    frame.sessionId,
-    frame.sourceBlocks,
-    frame.totalBytes,
-    frame.blockSize,
-    frame.sha256,
-    frame.fountainSeed.toString(16).padStart(8, '0'),
-    encodeURIComponent(frame.fileName),
-  ].join('|');
+  return [FOUNTAIN_MANIFEST_PREFIX, frame.sessionId, frame.sourceBlocks, frame.totalBytes, frame.blockSize, frame.sha256, frame.fountainSeed.toString(16).padStart(8, '0'), encodeURIComponent(frame.fileName)].join('|');
 }
 
 export function encodeFountainDataFrame(frame: FountainDataFrame): string {
@@ -114,7 +104,6 @@ export function parseFrame(text: string): ParsedFrame | null {
     if (!/^[a-f0-9]{64}$/iu.test(parts[5])) return null;
     return {kind: 'manifest', sessionId: parts[1], totalChunks, totalBytes, chunkSize, sha256: parts[5].toLowerCase(), fileName: decodeURIComponent(parts[6])};
   }
-
   if (parts[0] === DATA_PREFIX && parts.length === 6) {
     const index = Number(parts[2]);
     const totalChunks = Number(parts[3]);
@@ -125,7 +114,11 @@ export function parseFrame(text: string): ParsedFrame | null {
     if (!/^[a-f0-9]{8}$/iu.test(parts[4]) || crc32(payload) !== expected) return null;
     return {kind: 'data', sessionId: parts[1], index, totalChunks, payload};
   }
+  return null;
+}
 
+export function parseFountainFrame(text: string): FountainParsedFrame | null {
+  const parts = text.split('|');
   if (parts[0] === FOUNTAIN_MANIFEST_PREFIX && parts.length === 8) {
     const sourceBlocks = Number(parts[2]);
     const totalBytes = Number(parts[3]);
@@ -133,18 +126,8 @@ export function parseFrame(text: string): ParsedFrame | null {
     if (![sourceBlocks, totalBytes, blockSize].every(Number.isSafeInteger)) return null;
     if (sourceBlocks <= 0 || totalBytes < 0 || blockSize <= 0) return null;
     if (!/^[a-f0-9]{64}$/iu.test(parts[5]) || !/^[a-f0-9]{8}$/iu.test(parts[6])) return null;
-    return {
-      kind: 'fountain-manifest',
-      sessionId: parts[1],
-      sourceBlocks,
-      totalBytes,
-      blockSize,
-      sha256: parts[5].toLowerCase(),
-      fountainSeed: Number.parseInt(parts[6], 16) >>> 0,
-      fileName: decodeURIComponent(parts[7]),
-    };
+    return {kind: 'fountain-manifest', sessionId: parts[1], sourceBlocks, totalBytes, blockSize, sha256: parts[5].toLowerCase(), fountainSeed: Number.parseInt(parts[6], 16) >>> 0, fileName: decodeURIComponent(parts[7])};
   }
-
   if (parts[0] === FOUNTAIN_DATA_PREFIX && parts.length === 6) {
     const symbolId = Number(parts[2]);
     const sourceBlocks = Number(parts[3]);
@@ -155,7 +138,6 @@ export function parseFrame(text: string): ParsedFrame | null {
     if (!/^[a-f0-9]{8}$/iu.test(parts[4]) || crc32(payload) !== expected) return null;
     return {kind: 'fountain', sessionId: parts[1], symbolId, sourceBlocks, payload};
   }
-
   return null;
 }
 
