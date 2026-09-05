@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>OptiLink Project Dashboard</title>
+  <style>
+    :root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#172033;background:#f5f7fb;line-height:1.45}*{box-sizing:border-box}body{margin:0}.shell{max-width:1280px;margin:auto;padding:24px}.hero{background:#fff;border:1px solid #e6eaf2;border-radius:20px;padding:28px;box-shadow:0 10px 30px rgba(23,32,51,.06)}.eyebrow{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#667085}.hero h1{margin:7px 0 6px;font-size:34px}.subtitle{color:#667085}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-top:18px}.card{background:#fff;border:1px solid #e6eaf2;border-radius:16px;padding:18px}.metric{font-size:30px;font-weight:700}.muted{color:#667085;font-size:13px}.section{margin-top:20px}.section h2{font-size:18px;margin:0 0 12px}.bar{height:10px;border-radius:999px;background:#edf0f6;overflow:hidden;margin-top:8px}.fill{height:100%;background:#3448c5}.pill{display:inline-flex;padding:5px 9px;border-radius:999px;font-size:11px;font-weight:700;background:#eef2ff;color:#3448c5}.approved{background:#ecfdf3;color:#067647}.warning{background:#fffaeb;color:#b54708}.planned{background:#f2f4f7;color:#475467}.row{display:flex;gap:10px;align-items:center;justify-content:space-between}.approval{padding:13px 0;border-top:1px solid #edf0f6}.approval:first-child{border-top:0}.layout{display:grid;grid-template-columns:1.6fr 1fr;gap:18px}.epic{margin-bottom:14px}.epic-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}.task{padding:10px 0;border-top:1px solid #edf0f6}.subtasks{font-size:12px;color:#667085;margin-top:5px}.gantt{overflow:auto}.gantt-row{display:grid;grid-template-columns:180px minmax(640px,1fr);gap:12px;align-items:center;margin:12px 0}.timeline{position:relative;height:28px;border-radius:8px;background:repeating-linear-gradient(to right,#f4f6fa 0,#f4f6fa 11.9%,#e8ebf2 12%,#e8ebf2 12.2%)}.gbar{position:absolute;top:4px;height:20px;background:#3448c5;border-radius:6px;min-width:12px}.gbar.forecast{opacity:.72}.legend{display:flex;gap:12px;flex-wrap:wrap}.term{border-bottom:1px dashed #667085;cursor:help}.tooltip{position:fixed;display:none;z-index:20;max-width:280px;background:#172033;color:#fff;border-radius:10px;padding:10px 12px;font-size:12px;box-shadow:0 8px 30px rgba(0,0,0,.2)}ul.clean{margin:8px 0 0;padding-left:20px}.empty{color:#98a2b3}.footer{padding:22px 0;color:#98a2b3;font-size:12px;text-align:center}@media(max-width:900px){.grid{grid-template-columns:repeat(2,1fr)}.layout{grid-template-columns:1fr}.gantt-row{grid-template-columns:140px minmax(520px,1fr)}}@media(max-width:560px){.shell{padding:14px}.hero{padding:20px}.hero h1{font-size:28px}.grid{grid-template-columns:1fr 1fr}}
+  </style>
+</head>
+<body>
+<div class="shell">
+  <section class="hero">
+    <div class="eyebrow">Product discovery · GitHub governed</div>
+    <h1>OptiLink</h1>
+    <div class="subtitle" id="summary">Loading project status…</div>
+    <div class="grid">
+      <div class="card"><div class="muted">Overall progress</div><div class="metric" id="overall">—</div><div class="bar"><div class="fill" id="overallBar"></div></div></div>
+      <div class="card"><div class="muted">Current phase</div><strong id="phase">—</strong></div>
+      <div class="card"><div class="muted">Sprint</div><strong id="sprint">—</strong></div>
+      <div class="card"><div class="muted">Last updated</div><strong id="updated">—</strong></div>
+    </div>
+  </section>
+
+  <div class="layout section">
+    <section class="card"><h2>当前工作 / Current focus</h2><ul class="clean" id="focus"></ul></section>
+    <section class="card"><h2>审核 Gate</h2><div id="approvals"></div></section>
+  </div>
+
+  <section class="card section gantt"><h2>甘特图 / Roadmap forecast</h2><div class="muted">虚线式时间安排为当前预测，不代表承诺日期；关键 Gate 未批准时，后续实现不会自动推进。</div><div id="gantt"></div></section>
+
+  <div class="layout section">
+    <section class="card"><h2>任务与子任务</h2><div id="epics"></div></section>
+    <section class="card"><h2>阻塞项 / Blockers</h2><ul class="clean" id="blockers"></ul><h2 style="margin-top:22px">术语 / Glossary</h2><div class="legend" id="terms"></div></section>
+  </div>
+  <div class="footer">Source of truth: project/PROJECT_STATUS.json · Workflow: Issue → Branch → CI → Draft PR → Review → Merge</div>
+</div>
+<div class="tooltip" id="tooltip"></div>
+<script>
+const glossary={
+ ADR:'Architecture Decision Record：架构决策记录，用来保存重要技术/架构决策及其原因。',
+ PR:'Pull Request：从开发分支向目标分支提出合并请求，供审核和 CI 检查。',
+ CI:'Continuous Integration：持续集成；GitHub Actions 自动运行检查。',
+ MVP:'Minimum Viable Product：最小可行产品，用最小范围验证关键产品假设。',
+ Spike:'Agile technical spike：为降低不确定性而进行的限时技术实验。',
+ Epic:'大型工作包，由多个 Story/Task 组成。',
+ Story:'User Story：以用户价值为导向的小型需求单元。',
+ Task:'具体执行任务。',
+ FEC:'Forward Error Correction：前向纠错，通过冗余恢复部分丢失/错误数据。',
+ CRC:'Cyclic Redundancy Check：循环冗余校验，用于发现数据损坏。',
+ 'Net goodput':'有效吞吐：最终正确还原的原始文件字节数 ÷ 实际传输时间。'
+};
+function statusClass(s){return s==='APPROVED'||s==='DONE'?'approved':(s.includes('BLOCK')||s.includes('WAIT')?'warning':'planned')}
+function pctBetween(date,start,end){const t=Date.parse(date),a=Date.parse(start),b=Date.parse(end);return Math.max(0,Math.min(100,(t-a)/(b-a)*100))}
+async function load(){
+ const r=await fetch('./data/status.json',{cache:'no-store'}); if(!r.ok)throw new Error('status.json unavailable'); const d=await r.json();
+ summary.textContent=d.summary; overall.textContent=d.overallProgress+'%'; overallBar.style.width=d.overallProgress+'%'; phase.textContent=d.phase; sprint.textContent=d.sprint; updated.textContent=d.lastUpdated;
+ d.currentFocus.forEach(x=>focus.insertAdjacentHTML('beforeend',`<li>${x}</li>`));
+ d.approvals.forEach(a=>approvals.insertAdjacentHTML('beforeend',`<div class="approval"><div class="row"><strong>${a.id} · ${a.title}</strong><span class="pill ${statusClass(a.status)}">${a.status}</span></div><div class="muted">${a.decision}</div></div>`));
+ const starts=d.epics.map(e=>Date.parse(e.start)), ends=d.epics.map(e=>Date.parse(e.end)); const min=new Date(Math.min(...starts)),max=new Date(Math.max(...ends));
+ d.epics.forEach(e=>{const left=pctBetween(e.start,min,max),right=pctBetween(e.end,min,max);gantt.insertAdjacentHTML('beforeend',`<div class="gantt-row"><div><strong>${e.id}</strong><div class="muted">${e.title}</div></div><div class="timeline"><div class="gbar ${e.scheduleType==='forecast'?'forecast':''}" style="left:${left}%;width:${Math.max(2,right-left)}%" title="${e.start} → ${e.end}"></div></div></div>`)});
+ d.epics.forEach(e=>{let html=`<div class="epic"><div class="epic-head"><div><strong>${e.id} · ${e.title}</strong><div class="muted">${e.start} → ${e.end} · ${e.scheduleType}</div></div><span class="pill ${statusClass(e.status)}">${e.status} · ${e.progress}%</span></div><div class="bar"><div class="fill" style="width:${e.progress}%"></div></div>`;e.tasks.forEach(t=>{html+=`<div class="task"><div class="row"><span>${t.id} · ${t.title}</span><span class="pill ${statusClass(t.status)}">${t.status} · ${t.progress}%</span></div><div class="subtasks">↳ ${t.subtasks.join(' · ')}</div></div>`});html+='</div>';epics.insertAdjacentHTML('beforeend',html)});
+ d.blockers.forEach(x=>blockers.insertAdjacentHTML('beforeend',`<li>${x}</li>`));
+ d.terminology.forEach(t=>terms.insertAdjacentHTML('beforeend',`<span class="pill term" data-term="${t}">${t}</span>`));
+ document.querySelectorAll('.term').forEach(el=>{el.onmouseenter=e=>showTip(e,glossary[el.dataset.term]||el.dataset.term);el.onmousemove=e=>moveTip(e);el.onmouseleave=hideTip});
+}
+const tip=document.getElementById('tooltip');function showTip(e,text){tip.textContent=text;tip.style.display='block';moveTip(e)}function moveTip(e){tip.style.left=Math.min(window.innerWidth-300,e.clientX+14)+'px';tip.style.top=Math.min(window.innerHeight-100,e.clientY+14)+'px'}function hideTip(){tip.style.display='none'}
+load().catch(err=>{summary.textContent='Dashboard data failed to load: '+err.message});
+</script>
+</body>
+</html>
