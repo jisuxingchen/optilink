@@ -8,7 +8,7 @@ import {
   deterministicBytes,
   encodeFountainDataFrame,
   encodeFountainManifest,
-  parseFrame,
+  parseFountainFrame,
   sha256Hex,
   type FountainManifestFrame,
 } from './protocol.ts';
@@ -219,7 +219,7 @@ async function finalizeReceiver(): Promise<void> {
 
 async function handleDecodedText(text: string): Promise<void> {
   receiverDecoded += 1;
-  const frame = parseFrame(text);
+  const frame = parseFountainFrame(text);
   if (!frame) {
     receiverInvalid += 1;
     publishReceiverStatus();
@@ -251,9 +251,9 @@ async function handleDecodedText(text: string): Promise<void> {
     return;
   }
 
-  if (frame.kind !== 'fountain' || !receiverDecoder || !receiverManifest) {
+  if (!receiverDecoder || !receiverManifest) {
     receiverInvalid += 1;
-    publishReceiverStatus('non-Fountain frame ignored');
+    publishReceiverStatus('Fountain decoder unavailable');
     return;
   }
   if (frame.sourceBlocks !== receiverManifest.sourceBlocks) {
@@ -455,7 +455,7 @@ async function runBenchmark(): Promise<void> {
         totalSourceBlocks: telemetry.total || session.sourceBlocks,
         acceptedSymbols: telemetry.acceptedSymbols,
         displayedSymbols,
-        duplicateSymbolDecodes: telemetry.duplicateSymbols,
+        duplicateSymbolDecodes: telemetry.duplicateSymbolDecodes ?? telemetry.duplicateSymbols,
         redundantSymbols: telemetry.redundantSymbols,
         pendingEquations: telemetry.pendingEquations,
         decodedQrResults: telemetry.decoded,
@@ -514,12 +514,12 @@ function connect(): void {
       latestReceiverMetadata = captureReceiverMetadata();
       send({type: 'state', event: 'fountain-reset-complete', resetId: message.resetId, receiver: latestReceiverMetadata});
     }
-    if (message.type === 'state' && message.event === 'fountain-reset-complete' && role === 'sender' && pendingReset?.id === message.resetId) {
+    const reset = pendingReset;
+    if (message.type === 'state' && message.event === 'fountain-reset-complete' && role === 'sender' && reset?.id === message.resetId) {
       if (message.receiver) latestReceiverMetadata = message.receiver;
-      window.clearTimeout(pendingReset.timer);
-      const resolve = pendingReset.resolve;
+      window.clearTimeout(reset.timer);
       pendingReset = null;
-      resolve();
+      reset.resolve();
     }
     if (message.type === 'command' && message.action === 'fountain-stop') {
       aborted = true;
