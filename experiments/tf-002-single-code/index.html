@@ -11,13 +11,15 @@
       <div>
         <p class="eyebrow">OptiLink · TF-002</p>
         <h1>Single-code optical baseline</h1>
-        <p class="lede">实验性 Browser → QR → Android Browser 基线。支持手动模式和低操作量 Auto Lab。</p>
+        <p class="lede">实验性 Browser → QR → Android Browser 基线。支持一键性能基准、工程校准和手动文件模式。</p>
       </div>
       <div class="badge">G1 APPROVED · EXPERIMENT</div>
     </header>
 
     <section class="notice">
-      <strong>Benchmark rule:</strong> Sender 的理论速率不是成绩。只有接收端完成重组、SHA-256 一致后的 end-to-end net goodput 才算有效结果。
+      <strong>Performance baseline:</strong> 从本版本开始，当前测试显示器按 <strong>60 Hz 物理刷新率</strong>记录；OptiLink QR 视觉更新率是独立参数。此前 Auto Lab 轮次仅作为功能/测试链路验证，不作为工具性能结论。
+      <br />
+      <strong>Benchmark rule:</strong> Sender 理论速率不是成绩。只有完整重组、SHA-256 一致后的 end-to-end 指标才可用于性能分析。
       <br />
       <strong>Auto Lab:</strong> 网络只用于实验控制与遥测，文件 payload 仍只通过屏幕 → 摄像头传输；正式离线验收会关闭该控制通道。
     </section>
@@ -28,6 +30,20 @@
         <h2>Auto Lab</h2>
         <p id="labRoleText">正在识别当前设备角色…</p>
       </div>
+      <div class="form-grid">
+        <label>
+          <span>Auto Lab mode</span>
+          <select id="labMode">
+            <option value="benchmark-1mib" selected>Benchmark · automatic 1 MiB stability</option>
+            <option value="calibration">Engineering · 64 KiB calibration sweep</option>
+          </select>
+        </label>
+        <label>
+          <span>Physical display refresh (Hz)</span>
+          <input id="physicalDisplayHz" type="number" min="1" max="360" step="1" value="60" />
+        </label>
+      </div>
+      <p class="lede"><strong>默认 Benchmark 模式无需选择文件，也无需点击 Generate。</strong> 手机点击一次 Start 后，程序自动生成 1 MiB 不可压缩测试数据并执行完整传输。</p>
       <div class="lab-actions">
         <button id="labStart" class="primary" type="button">Start auto test</button>
         <button id="labStop" type="button" disabled>Stop / finish</button>
@@ -45,13 +61,15 @@
           <span>Computer browser</span>
         </div>
 
+        <p class="lede"><strong>File mode / manual engineering mode.</strong> 下面的文件选择和 Generate 仅用于手动功能测试；Auto Lab Benchmark 不依赖这些操作。</p>
+
         <div class="form-grid">
           <label>
-            <span>Choose file</span>
+            <span>File mode · choose real file</span>
             <input id="fileInput" type="file" />
           </label>
           <label>
-            <span>Generated payload</span>
+            <span>Manual generated payload</span>
             <div class="inline">
               <select id="payloadSize">
                 <option value="65536">64 KiB calibration</option>
@@ -63,7 +81,7 @@
           </label>
           <label>
             <span>Payload / QR frame (bytes)</span>
-            <input id="chunkSize" type="number" min="64" max="2100" step="32" value="600" />
+            <input id="chunkSize" type="number" min="64" max="2100" step="1" value="300" />
           </label>
           <label>
             <span>Target visual update rate (Hz)</span>
@@ -71,13 +89,13 @@
           </label>
           <label>
             <span>QR render size (px)</span>
-            <input id="qrSize" type="number" min="160" max="1600" step="16" value="640" />
+            <input id="qrSize" type="number" min="160" max="1600" step="16" value="560" />
           </label>
           <label>
             <span>QR ECC</span>
             <select id="ecc">
-              <option value="L">L · maximum payload</option>
-              <option value="M" selected>M · baseline</option>
+              <option value="L" selected>L · selected TF-002 candidate</option>
+              <option value="M">M</option>
               <option value="Q">Q</option>
               <option value="H">H · maximum redundancy</option>
             </select>
@@ -123,9 +141,10 @@
     <section class="method">
       <h2>测试原则</h2>
       <ol>
-        <li>Auto Lab 先用 64 KiB 校准流自动探索 payload/frame、QR size 与视觉更新率。</li>
-        <li>手机固定后只需 Start / Stop；Sender 根据接收端 unique-symbol yield 自动切换配置。</li>
-        <li>Auto Lab 找到候选配置后，再切到 1 MiB / 10 MiB 做真实 SHA-256 完整传输。</li>
+        <li>后续性能轮次固定记录当前显示器物理刷新率为 60 Hz；OptiLink 视觉更新率单独记录。</li>
+        <li>默认 Benchmark 模式自动生成 1 MiB deterministic incompressible payload，不需要上传文件或点击 Generate。</li>
+        <li>第一轮 1 MiB 稳定性配置固定为 300 B/frame、560 px、24 Hz、ECC L，并自动记录 timeout、完整率、SHA-256 与端到端耗时。</li>
+        <li>Calibration 模式仍保留给工程调参；此前轮次只作为功能链路验证。</li>
         <li>如果单码明显受限，不修改 ≥100 KB/s 目标，进入 TF-003 多码实验。</li>
       </ol>
     </section>
