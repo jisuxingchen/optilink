@@ -1,0 +1,23 @@
+{
+  "name": "optilink-tf-002-single-code",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "lab": "node lab-server.mjs",
+    "lab:tunnel": "node lab-tunnel.mjs",
+    "build": "tsc --noEmit && vite build",
+    "test": "node --test src/protocol.test.ts"
+  },
+  "dependencies": {
+    "@zxing/browser": "0.2.1",
+    "qrcode": "1.5.4",
+    "ws": "8.18.3"
+  },
+  "devDependencies": {
+    "@types/qrcode": "1.5.6",
+    "typescript": "7.0.2",
+    "vite": "8.2.2"
+  }
+}

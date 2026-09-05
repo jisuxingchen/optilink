@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OptiLink TF-002 Single-Code Spike</title>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div>
+        <p class="eyebrow">OptiLink · TF-002</p>
+        <h1>Single-code optical baseline</h1>
+        <p class="lede">实验性 Browser → QR → Android Browser 基线。支持一键性能基准、工程校准和手动文件模式。</p>
+      </div>
+      <div class="badge">G1 APPROVED · EXPERIMENT</div>
+    </header>
+
+    <section class="notice">
+      <strong>Performance baseline:</strong> 从本版本开始，当前测试显示器按 <strong>60 Hz 物理刷新率</strong>记录；OptiLink QR 视觉更新率是独立参数。此前 Auto Lab 轮次仅作为功能/测试链路验证，不作为工具性能结论。
+      <br />
+      <strong>Benchmark rule:</strong> Sender 理论速率不是成绩。只有完整重组、SHA-256 一致后的 end-to-end 指标才可用于性能分析。
+      <br />
+      <strong>Auto Lab:</strong> 网络只用于实验控制与遥测，文件 payload 仍只通过屏幕 → 摄像头传输；正式离线验收会关闭该控制通道。
+    </section>
+
+    <section id="labPanel" class="lab-panel">
+      <div>
+        <p class="eyebrow">LOW-TOUCH TEST MODE</p>
+        <h2>Auto Lab</h2>
+        <p id="labRoleText">正在识别当前设备角色…</p>
+      </div>
+      <div class="form-grid">
+        <label>
+          <span>Auto Lab mode</span>
+          <select id="labMode">
+            <option value="benchmark-1mib" selected>Benchmark · automatic 1 MiB stability</option>
+            <option value="calibration">Engineering · 64 KiB calibration sweep</option>
+          </select>
+        </label>
+        <label>
+          <span>Physical display refresh (Hz)</span>
+          <input id="physicalDisplayHz" type="number" min="1" max="360" step="1" value="60" />
+        </label>
+      </div>
+      <p class="lede"><strong>默认 Benchmark 模式无需选择文件，也无需点击 Generate。</strong> 手机点击一次 Start 后，程序自动生成 1 MiB 不可压缩测试数据并执行完整传输。</p>
+      <div class="lab-actions">
+        <button id="labStart" class="primary" type="button">Start auto test</button>
+        <button id="labStop" type="button" disabled>Stop / finish</button>
+      </div>
+      <pre id="labStatus" class="status lab-status">connecting to lab coordinator…</pre>
+    </section>
+
+    <div class="grid">
+      <section id="senderPanel" class="panel">
+        <div class="panel-head">
+          <div>
+            <span class="step">A</span>
+            <h2>Sender / Display</h2>
+          </div>
+          <span>Computer browser</span>
+        </div>
+
+        <p class="lede"><strong>File mode / manual engineering mode.</strong> 下面的文件选择和 Generate 仅用于手动功能测试；Auto Lab Benchmark 不依赖这些操作。</p>
+
+        <div class="form-grid">
+          <label>
+            <span>File mode · choose real file</span>
+            <input id="fileInput" type="file" />
+          </label>
+          <label>
+            <span>Manual generated payload</span>
+            <div class="inline">
+              <select id="payloadSize">
+                <option value="65536">64 KiB calibration</option>
+                <option value="1048576" selected>1 MiB quick test</option>
+                <option value="10485760">10 MiB G0 benchmark</option>
+              </select>
+              <button id="generateButton" type="button">Generate</button>
+            </div>
+          </label>
+          <label>
+            <span>Payload / QR frame (bytes)</span>
+            <input id="chunkSize" type="number" min="64" max="2100" step="1" value="300" />
+          </label>
+          <label>
+            <span>Target visual update rate (Hz)</span>
+            <input id="targetHz" type="number" min="1" max="120" step="1" value="24" />
+          </label>
+          <label>
+            <span>QR render size (px)</span>
+            <input id="qrSize" type="number" min="160" max="1600" step="16" value="560" />
+          </label>
+          <label>
+            <span>QR ECC</span>
+            <select id="ecc">
+              <option value="L" selected>L · selected TF-002 candidate</option>
+              <option value="M">M</option>
+              <option value="Q">Q</option>
+              <option value="H">H · maximum redundancy</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="actions">
+          <button id="startSender" class="primary" type="button">Start optical stream</button>
+          <button id="stopSender" type="button" disabled>Stop</button>
+        </div>
+
+        <div class="qr-stage">
+          <canvas id="qrCanvas" width="640" height="640"></canvas>
+        </div>
+        <pre id="senderStatus" class="status"></pre>
+      </section>
+
+      <section id="receiverPanel" class="panel">
+        <div class="panel-head">
+          <div>
+            <span class="step">B</span>
+            <h2>Receiver / Camera</h2>
+          </div>
+          <span>Android browser · moto razr 40 ultra baseline</span>
+        </div>
+
+        <div class="actions manual-receiver-actions">
+          <button id="startCamera" class="primary" type="button">Start camera</button>
+          <button id="stopCamera" type="button">Stop camera</button>
+          <button id="resetReceiver" type="button">Reset session</button>
+        </div>
+
+        <div class="camera-stage">
+          <video id="camera" muted playsinline></video>
+          <div class="reticle"></div>
+        </div>
+
+        <pre id="receiverStatus" class="status"></pre>
+        <button id="downloadReceived" type="button" disabled>Download verified file</button>
+      </section>
+    </div>
+
+    <section class="method">
+      <h2>测试原则</h2>
+      <ol>
+        <li>后续性能轮次固定记录当前显示器物理刷新率为 60 Hz；OptiLink 视觉更新率单独记录。</li>
+        <li>默认 Benchmark 模式自动生成 1 MiB deterministic incompressible payload，不需要上传文件或点击 Generate。</li>
+        <li>第一轮 1 MiB 稳定性配置固定为 300 B/frame、560 px、24 Hz、ECC L，并自动记录 timeout、完整率、SHA-256 与端到端耗时。</li>
+        <li>Calibration 模式仍保留给工程调参；此前轮次只作为功能链路验证。</li>
+        <li>如果单码明显受限，不修改 ≥100 KB/s 目标，进入 TF-003 多码实验。</li>
+      </ol>
+    </section>
+  </main>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

@@ -1,10 +1,10 @@
 # Optical Throughput Benchmark Specification
 
-Status: **Draft for Gate G1 review**
+Status: **Approved at Gate G1 — baseline frozen for TF-002**
 
-Issue: `TF-001` (#2)
+Issue: `TF-001` (#2, completed)
 
-This document defines how OptiLink will measure optical transfer performance before implementation begins. Its purpose is to prevent cherry-picking and post-hoc changes to the success criteria.
+This document defines how OptiLink measures optical transfer performance. Its purpose is to prevent cherry-picking and post-hoc changes to the success criteria.
 
 ## 1. Primary question
 
@@ -18,7 +18,7 @@ Public third-party results may inform feasibility, but they do not count as Opti
 
 **Net goodput**
 
-```
+```text
 net_goodput = verified_original_file_bytes / elapsed_transfer_seconds
 ```
 
@@ -48,7 +48,7 @@ If any condition fails, the run is recorded as **FAILED**, not as a slow success
 
 ## 4. Primary benchmark payload
 
-The headline benchmark must use a deterministic pseudorandom/incompressible binary payload so compression cannot manufacture a better speed number.
+The headline benchmark uses deterministic pseudorandom/incompressible binary data so compression cannot manufacture a better speed number.
 
 Required payload sizes:
 
@@ -58,21 +58,21 @@ Required payload sizes:
 
 The payload generator seed must be recorded so the test can be reproduced.
 
-Compression must be **disabled** for the primary headline result.
-
-Secondary tests may include compressible logs/text and representative industrial data, but results must be labeled separately.
+Compression is **disabled** for the primary headline result.
 
 ## 5. Timing definition
 
-Elapsed time starts when the sender displays the first transfer frame that belongs to the measured session.
+Elapsed time starts when the sender displays the first transfer frame belonging to the measured session.
 
 Elapsed time ends when the receiver:
 
 1. has enough information to reconstruct the full file;
 2. finishes reconstruction;
-3. verifies the final SHA-256 successfully.
+3. verifies final SHA-256 successfully.
 
-This intentionally includes receiver-side completion work. A separate metric may report optical acquisition time, but it must not replace end-to-end net goodput.
+This intentionally includes receiver-side completion work. A separate optical-acquisition metric may be reported, but it must not replace end-to-end net goodput.
+
+For the network-assisted Auto Lab only, a sender-observed timing may be recorded from optical-stream start until verified receiver-completion telemetry reaches the sender. This measurement is conservative because it includes the control-plane completion latency and **does not replace** the later official offline benchmark.
 
 ## 6. Minimum repeated-run method
 
@@ -88,18 +88,22 @@ If fewer than 5/5 runs complete correctly under the baseline condition, the conf
 
 ## 7. Test environment record
 
-Every run group must record:
+Every run group records:
 
 ### Sender
-- device make/model
+- device make/model when known
 - OS/version
 - browser/app/version
 - physical display resolution
 - display scaling
-- refresh rate
+- physical display refresh rate
+- target visual-code update rate
 - brightness setting
 - fullscreen/windowed state
-- code/grid physical size or pixel dimensions
+- render window dimensions
+- code pixel dimensions
+- QR version / module count when fixed
+- approximate module pixels where applicable
 
 ### Receiver
 - device make/model
@@ -114,12 +118,12 @@ Every run group must record:
 
 ### Geometry
 - screen-to-camera distance
-- viewing angle (horizontal/vertical or defined test fixture)
+- viewing angle
 - approximate framing percentage in camera view
 
 ### Environment
 - indoor/controlled/bright condition
-- measured lux if a meter is available
+- measured lux if available
 - obvious reflections/glare
 - screen PWM/flicker observations if relevant
 
@@ -130,43 +134,59 @@ Every run group must record:
 - payload bytes per code/frame
 - visual ECC level
 - transport/FEC configuration
-- target sender FPS
+- target visual update rate
 - actual unique useful frames/s if measurable
 
-## 8. Baseline geometry proposed for G1
+## 8. Frozen TF-002 baseline
 
-The following is a **candidate**, not yet frozen:
+Approved at G1:
 
-- laptop/desktop display → Android phone
-- screen brightness: 100%
-- camera perpendicular to screen
-- distance: 40–50 cm
+- **receiver:** Motorola moto razr 40 ultra
+- **sender:** ordinary computer display; exact make/model is not required for the first iteration
+- **initial target visual-code update rate:** **24 Hz**
+- screen brightness: start at 100% unless glare makes decoding materially worse; any change must be recorded
+- camera approximately perpendicular to screen
+- initial distance: 40–50 cm
 - normal indoor lighting with no direct glare
-- sender fullscreen
-- handheld is allowed only after a fixed/steady baseline is established
+- sender uses a dedicated large display window / fullscreen when practical
+- fixed/steady receiver baseline before handheld robustness testing
 
-G1 must approve the actual baseline device pair and conditions.
+Current physical sender condition for performance-oriented TF-002 runs, owner-confirmed on 2026-09-05:
+
+- **physical display refresh rate: 60 Hz**
+- **OptiLink visual-code update target: 24 Hz**
+- these are separate quantities and must both be recorded in every result
+- earlier manual and Auto Lab rounds before this physical-refresh condition was frozen are classified as **functional / engineering evidence**, not the starting performance dataset
+
+The following are deliberate experiment variables and must be exposed by the harness rather than hidden constants:
+
+- visual-code update rate (24 Hz baseline; later values allowed)
+- code render size in pixels
+- QR/code density / module size
+- payload bytes per code
+- QR version and ECC where applicable
+- display/window dimensions
+
+The actual physical display resolution and refresh rate are recorded at test time. The 24 Hz value is the **OptiLink visual update target**, not an assumption about the monitor's hardware refresh rate.
 
 ## 9. Carrier experiment matrix
 
-Carrier choice remains open until G1, but the measurement sequence should support at least:
-
 | ID | Configuration | Purpose |
 |---|---|---|
-| B0 | Single standard QR, baseline FPS | simplest reference point |
-| B1 | Single standard QR, highest stable FPS | determine frame-rate ceiling |
-| B2 | Multiple QR/codes per display frame, baseline FPS | test density scaling |
-| B3 | Multiple QR/codes, highest stable FPS | attempt G0 target |
-| B4 | Custom dense optical code, if justified | later optimization only |
+| B0 | Single standard QR, 24 Hz target | simplest frozen TF-002 reference point |
+| B1 | Single standard QR, higher stable visual update rate | determine single-code timing ceiling |
+| B2 | Multiple standard codes, 24 Hz target | TF-003 density scaling |
+| B3 | Multiple codes, higher stable rate | attempt G0 target with standard codes |
+| B4 | Custom dense optical code, only if justified | later optimization only |
 
-The benchmark must record **actual decoded/useful frame rate** rather than assuming display refresh equals camera decode rate.
+The benchmark records **actual decoded/useful frame rate** rather than assuming display refresh equals camera decode rate.
 
 ## 10. Required intermediate metrics
 
 At minimum capture:
 
 - displayed frame count
-- camera frames processed (when available)
+- camera frames processed when available
 - successfully decoded code count
 - unique transport symbols accepted
 - duplicate symbols
@@ -188,7 +208,7 @@ Derived metrics:
 
 ## 11. Robustness matrix
 
-After the baseline reaches stable correctness, test degradation separately:
+After the baseline reaches stable correctness, test degradation separately.
 
 ### Distance
 - 30 cm
@@ -209,19 +229,17 @@ After the baseline reaches stable correctness, test degradation separately:
 - fixed receiver
 - normal handheld receiver
 
-These tests are not allowed to redefine the primary baseline result.
+These tests do not redefine the primary baseline result.
 
 ## 12. Offline/no-network verification
 
-Because G0 requires an offline transfer session, at least one acceptance run must demonstrate:
+At least one acceptance run demonstrates:
 
 - no USB data connection between sender and receiver;
 - receiver Wi-Fi and Bluetooth disabled;
-- receiver mobile data disabled or device in airplane mode with camera still available;
+- receiver mobile data disabled or airplane mode used while camera remains available;
 - no application network request is required for payload transfer;
-- if the web sender was previously loaded from a network, it must still complete the actual transfer without using that network path.
-
-Longer term, a packaged/self-hosted/PWA deployment may be tested separately.
+- if a web application was previously loaded from a network, the actual payload transfer does not use that network path.
 
 ## 13. G0 success criteria
 
@@ -230,7 +248,7 @@ Longer term, a packaged/self-hosted/PWA deployment may be tested separately.
 - 5/5 correct runs under frozen baseline conditions
 - exact SHA-256 match for every successful run
 - median **≥100 KB/s net goodput**
-- no hidden network data path during the optical transfer
+- no hidden network data path during optical transfer
 
 ### Stretch goals
 - p10 ≥100 KB/s
@@ -240,7 +258,7 @@ Longer term, a packaged/self-hosted/PWA deployment may be tested separately.
 
 ## 14. Failure classification
 
-Failures must be labeled rather than discarded:
+Failures are labeled rather than discarded:
 
 - `CAPTURE_FAILURE`
 - `DECODE_FAILURE`
@@ -256,9 +274,7 @@ Failures must be labeled rather than discarded:
 
 ## 15. Evidence package
 
-Each benchmark release should preserve:
-
-```
+```text
 experiments/benchmark/<date>-<device-pair>/
 ├── README.md
 ├── environment.json
@@ -268,19 +284,21 @@ experiments/benchmark/<date>-<device-pair>/
 └── screenshots-or-recordings/
 ```
 
-Only non-sensitive test artifacts should be committed to the public repository.
+Only non-sensitive test artifacts are committed to the public repository.
 
 CI can validate file format and synthetic/protocol tests, but **GitHub Actions cannot replace the physical screen→camera benchmark**.
 
-## 16. Decisions required at G1
+## 16. G1 decisions now in force
 
-Before implementing the physical benchmark harness, owner review must freeze:
+G1 approved:
 
-1. first sender platform;
-2. first receiver platform;
-3. baseline device pair available for testing;
-4. first carrier family;
-5. minimum integrity method;
-6. first loss-recovery strategy;
-7. whether third-party open-source components are used, referenced, or avoided;
-8. baseline camera/display conditions.
+1. Browser / TypeScript sender first.
+2. Android browser receiver first; Kotlin + CameraX is an evidence-driven escalation path.
+3. Single standard QR/code is the first carrier baseline.
+4. SHA-256 is mandatory final integrity evidence.
+5. Fountain / rateless erasure coding is the leading one-way recovery candidate.
+6. Permissive commodity libraries may be reused after provenance/license review; third-party optical transport implementations are not copied wholesale.
+7. The first physical receiver is moto razr 40 ultra.
+8. TF-002 starts at a 24 Hz visual-code update target with adjustable code size/density and later rate variants.
+
+Durable rationale is recorded in `docs/adr/ADR-0002-g1-initial-technical-path.md`.
