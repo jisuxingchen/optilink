@@ -7,6 +7,9 @@ required = [
     "README.md",
     "docs/PRODUCT_VISION.md",
     "docs/SCENARIO_LIBRARY.md",
+    "docs/BENCHMARK_SPEC.md",
+    "docs/COMPETITIVE_LANDSCAPE.md",
+    "docs/G1_DECISION_PACKET.md",
     "docs/PRODUCT_REQUIREMENTS.md",
     "docs/TECHNICAL_OPTIONS.md",
     "docs/GLOSSARY.md",
@@ -39,6 +42,10 @@ for key in ["name", "url", "workingBranch", "pullRequest"]:
     if key not in repo:
         raise SystemExit(f"repository missing key: {key}")
 
+pr = repo["pullRequest"]
+if not {"number", "title", "url", "status"}.issubset(pr):
+    raise SystemExit("repository.pullRequest is malformed")
+
 metrics = status["metrics"]
 for key in ["openIssues", "ownerActions", "blockers", "ciStatus", "ciUrl"]:
     if key not in metrics:
@@ -53,6 +60,7 @@ for review in status["reviewQueue"]:
     if not required_review.issubset(review):
         raise SystemExit(f"Malformed review item: {review}")
 
+seen_task_ids = set()
 for epic in status["epics"]:
     for key in ["id", "title", "status", "progress", "start", "end", "tasks"]:
         if key not in epic:
@@ -62,6 +70,9 @@ for epic in status["epics"]:
     for task in epic["tasks"]:
         if not {"id", "title", "status", "progress", "subtasks"}.issubset(task):
             raise SystemExit(f"Malformed task in {epic['id']}: {task}")
+        if task["id"] in seen_task_ids:
+            raise SystemExit(f"Duplicate task id: {task['id']}")
+        seen_task_ids.add(task["id"])
         if not 0 <= task["progress"] <= 100:
             raise SystemExit(f"Invalid task progress: {task['id']}")
         for subtask in task["subtasks"]:
@@ -70,9 +81,33 @@ for epic in status["epics"]:
             if not {"title", "status"}.issubset(subtask):
                 raise SystemExit(f"Malformed subtask in {task['id']}: {subtask}")
 
+for expected in ["PD-002", "PD-004", "TF-001", "TF-002", "TF-003"]:
+    if expected not in seen_task_ids:
+        raise SystemExit(f"Missing tracked Sprint 0 task: {expected}")
+
 for doc in status["documents"]:
     if not {"title", "type", "status", "note", "url"}.issubset(doc):
         raise SystemExit(f"Malformed document item: {doc}")
+
+scenario = (ROOT / "docs/SCENARIO_LIBRARY.md").read_text(encoding="utf-8")
+for marker in ["SCN-005", "SCN-004", "SCN-002", "SCN-010", "SCN-003", "weighted"]:
+    if marker.lower() not in scenario.lower():
+        raise SystemExit(f"Scenario library missing marker: {marker}")
+
+benchmark = (ROOT / "docs/BENCHMARK_SPEC.md").read_text(encoding="utf-8")
+for marker in ["100 KB/s", "10 MiB", "SHA-256", "5/5", "Net goodput", "incompressible"]:
+    if marker.lower() not in benchmark.lower():
+        raise SystemExit(f"Benchmark spec missing marker: {marker}")
+
+competitive = (ROOT / "docs/COMPETITIVE_LANDSCAPE.md").read_text(encoding="utf-8")
+for marker in ["prior art", "third-party self-reported", "licens", "enterprise/industrial"]:
+    if marker.lower() not in competitive.lower():
+        raise SystemExit(f"Competitive landscape missing marker: {marker}")
+
+g1 = (ROOT / "docs/G1_DECISION_PACKET.md").read_text(encoding="utf-8")
+for marker in ["G1-D1", "G1-D2", "G1-D3", "G1-D4", "G1-D5", "G1-D6", "G1-D7", "NOT APPROVED", "Android"]:
+    if marker.lower() not in g1.lower():
+        raise SystemExit(f"G1 decision packet missing marker: {marker}")
 
 html = (ROOT / "dashboard/index.html").read_text(encoding="utf-8")
 for marker in ["./data/status.json", "Owner Review Center", "Roadmap Forecast", "GitHub Actions"]:
