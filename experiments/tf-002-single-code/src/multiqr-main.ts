@@ -22,7 +22,8 @@ const QR_SIZE = 480;
 const ECC = 'L' as const;
 const TIMEOUT_MS = 6 * 60 * 1000;
 const ROI_FILL = 0.94;
-const CROP_OUTPUT = 520;
+const CROP_OUTPUT = 360;
+const NATIVE_ROI_OUTPUT = 720;
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const node = document.getElementById(id);
@@ -53,10 +54,25 @@ const cropCanvases = Array.from({length: REGION_COUNT}, () => {
 });
 const cropReader = new BrowserQRCodeReader();
 
+const nativeRoiCanvas = document.createElement('canvas');
+nativeRoiCanvas.width = NATIVE_ROI_OUTPUT;
+nativeRoiCanvas.height = NATIVE_ROI_OUTPUT;
+
+type NativeDetectedBarcode = {
+  rawValue?: string;
+  boundingBox?: {x: number; y: number; width: number; height: number};
+};
+type NativeBarcodeDetector = {
+  detect(source: CanvasImageSource): Promise<NativeDetectedBarcode[]>;
+};
+type NativeBarcodeDetectorCtor = new (options?: {formats?: string[]}) => NativeBarcodeDetector;
+
 type ReceiverMeta = ReturnType<typeof captureReceiverMetadata>;
 type RegionMetric = {attempts: number; decoded: number; accepted: number; duplicate: number; redundant: number};
+type DecoderBackend = 'barcode-detector' | 'zxing-crops';
 type Telemetry = {
   transport: 'fountain-lt-4qr';
+  decoderBackend: DecoderBackend;
   sessionId: string;
   unique: number;
   total: number;
@@ -85,6 +101,9 @@ let scanStartedAt = 0;
 let scanRounds = 0;
 let receiverFlushUntil = 0;
 let lastTelemetrySentAt = 0;
+let nativeDetector: NativeBarcodeDetector | null = null;
+let nativeDetectionFailures = 0;
+let decoderBackend: DecoderBackend = 'zxing-crops';
 
 let senderRunning = false;
 let senderTimer: number | undefined;
@@ -115,7 +134,7 @@ function freshRegionMetrics(): RegionMetric[] {
 
 function emptyTelemetry(): Telemetry {
   return {
-    transport: 'fountain-lt-4qr', sessionId: '', unique: 0, total: 0,
+    transport: 'fountain-lt-4qr', decoderBackend, sessionId: '', unique: 0, total: 0,
     acceptedSymbols: 0, duplicateSymbols: 0, redundantSymbols: 0, pendingEquations: 0,
     decoded: 0, invalid: 0, ignoredBeforeManifest: 0,
     scanRounds: 0, scanRoundsPerSecond: 0, regions: freshRegionMetrics(),
@@ -135,6 +154,26 @@ function send(message: unknown): void {
   if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
 }
 
+function nativeBarcodeDetectorAvailable(): boolean {
+  return typeof (globalThis as typeof globalThis & {BarcodeDetector?: NativeBarcodeDetectorCtor}).BarcodeDetector === 'function';
+}
+
+function initializeDecoderBackend(): void {
+  nativeDetector = null;
+  nativeDetectionFailures = 0;
+  if (nativeBarcodeDetectorAvailable()) {
+    try {
+      const Detector = (globalThis as typeof globalThis & {BarcodeDetector: NativeBarcodeDetectorCtor}).BarcodeDetector;
+      nativeDetector = new Detector({formats: ['qr_code']});
+      decoderBackend = 'barcode-detector';
+      return;
+    } catch {
+      nativeDetector = null;
+    }
+  }
+  decoderBackend = 'zxing-crops';
+}
+
 function captureReceiverMetadata() {
   return {
     configuredDevice: 'moto razr 40 ultra',
@@ -143,6 +182,8 @@ function captureReceiverMetadata() {
     language: navigator.language || 'unknown',
     screen: {width: screen.width, height: screen.height, devicePixelRatio},
     cameraVideo: {width: video.videoWidth || 0, height: video.videoHeight || 0},
+    barcodeDetectorAvailable: nativeBarcodeDetectorAvailable(),
+    decoderBackend,
     capturedAt: new Date().toISOString(),
     source: 'multiqr-receiver-page' as const,
   };
@@ -162,6 +203,7 @@ function snapshot(): Telemetry {
   const scanElapsed = scanStartedAt ? Math.max(0.001, (performance.now() - scanStartedAt) / 1000) : 0;
   return {
     transport: 'fountain-lt-4qr',
+    decoderBackend,
     sessionId: receiverSessionId,
     unique: decoder?.solvedCount ?? 0,
     total: manifest?.sourceBlocks ?? 0,
@@ -187,12 +229,13 @@ function publishStatus(extra = '', force = false): void {
   const pct = t.total ? 100 * t.unique / t.total : 0;
   const regionLine = t.regions.map((metric, index) => `R${index + 1} d${metric.decoded}/a${metric.accepted}`).join(' · ');
   receiverStatus.textContent = [
-    'transport: Fountain / 4QR known-grid crop',
+    'transport: Fountain / 4QR known-grid',
+    `decoder backend: ${t.decoderBackend}`,
     `session: ${t.sessionId || '-'}`,
     `source blocks solved: ${t.unique}${t.total ? ` / ${t.total} (${pct.toFixed(2)}%)` : ''}`,
     `accepted symbols: ${t.acceptedSymbols} · duplicate: ${t.duplicateSymbols} · redundant: ${t.redundantSymbols}`,
     `pending equations: ${t.pendingEquations}`,
-    `scan rounds: ${t.scanRounds} · ${t.scanRoundsPerSecond.toFixed(2)} rounds/s · 4 crops/round`,
+    `scan rounds: ${t.scanRounds} · ${t.scanRoundsPerSecond.toFixed(2)} rounds/s`,
     regionLine,
     `decoded QR results: ${t.decoded} · invalid/foreign: ${t.invalid} · pre-manifest ignored: ${t.ignoredBeforeManifest}`,
     `camera: ${video.videoWidth || 0}×${video.videoHeight || 0} · center-square ROI ${(ROI_FILL * 100).toFixed(0)}%`,
@@ -307,13 +350,22 @@ async function handleDecoded(text: string, regionIndex: number): Promise<void> {
   await finalizeReceiver();
 }
 
-function drawCrop(regionIndex: number): void {
+function sourceSquare() {
   const sourceWidth = video.videoWidth;
   const sourceHeight = video.videoHeight;
-  if (!sourceWidth || !sourceHeight) return;
   const square = Math.min(sourceWidth, sourceHeight) * ROI_FILL;
-  const originX = (sourceWidth - square) / 2;
-  const originY = (sourceHeight - square) / 2;
+  return {
+    sourceWidth,
+    sourceHeight,
+    square,
+    originX: (sourceWidth - square) / 2,
+    originY: (sourceHeight - square) / 2,
+  };
+}
+
+function drawCrop(regionIndex: number): void {
+  const {sourceWidth, sourceHeight, square, originX, originY} = sourceSquare();
+  if (!sourceWidth || !sourceHeight) return;
   const half = square / 2;
   const column = regionIndex % 2;
   const row = Math.floor(regionIndex / 2);
@@ -322,22 +374,75 @@ function drawCrop(regionIndex: number): void {
   context.drawImage(video, originX + column * half, originY + row * half, half, half, 0, 0, CROP_OUTPUT, CROP_OUTPUT);
 }
 
+function drawNativeRoi(): void {
+  const {sourceWidth, sourceHeight, square, originX, originY} = sourceSquare();
+  if (!sourceWidth || !sourceHeight) return;
+  const context = nativeRoiCanvas.getContext('2d', {alpha: false});
+  if (!context) return;
+  context.drawImage(video, originX, originY, square, square, 0, 0, NATIVE_ROI_OUTPUT, NATIVE_ROI_OUTPUT);
+}
+
+function regionFromNativeBox(box?: {x: number; y: number; width: number; height: number}): number {
+  if (!box) return 0;
+  const centerX = box.x + box.width / 2;
+  const centerY = box.y + box.height / 2;
+  const column = centerX >= NATIVE_ROI_OUTPUT / 2 ? 1 : 0;
+  const row = centerY >= NATIVE_ROI_OUTPUT / 2 ? 1 : 0;
+  return row * 2 + column;
+}
+
+async function scanNativeRound(): Promise<void> {
+  const detector = nativeDetector;
+  if (!detector) return;
+  scanRounds += 1;
+  for (const metric of regionMetrics) metric.attempts += 1;
+  drawNativeRoi();
+  try {
+    const results = await detector.detect(nativeRoiCanvas);
+    nativeDetectionFailures = 0;
+    const seen = new Set<string>();
+    for (const result of results) {
+      const text = String(result.rawValue || '');
+      if (!text) continue;
+      const regionIndex = regionFromNativeBox(result.boundingBox);
+      const key = `${regionIndex}:${text}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      await handleDecoded(text, regionIndex);
+      if (receiverComplete) break;
+    }
+  } catch (error) {
+    nativeDetectionFailures += 1;
+    if (nativeDetectionFailures >= 3) {
+      nativeDetector = null;
+      decoderBackend = 'zxing-crops';
+      log(`Native BarcodeDetector failed repeatedly; falling back to ZXing crops: ${String(error)}`);
+      publishStatus('native detector fallback activated', true);
+    }
+  }
+}
+
+async function scanZxingRound(): Promise<void> {
+  scanRounds += 1;
+  for (let regionIndex = 0; regionIndex < REGION_COUNT; regionIndex += 1) {
+    const metric = regionMetrics[regionIndex];
+    metric.attempts += 1;
+    drawCrop(regionIndex);
+    try {
+      const result = cropReader.decodeFromCanvas(cropCanvases[regionIndex]);
+      if (result) await handleDecoded(result.getText(), regionIndex);
+    } catch {
+      // A crop with no decodable QR is a normal camera sample, not an invalid protocol frame.
+    }
+    if (receiverComplete) break;
+  }
+}
+
 async function scanLoop(): Promise<void> {
   if (!scanActive) return;
   if (performance.now() >= receiverFlushUntil && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-    scanRounds += 1;
-    for (let regionIndex = 0; regionIndex < REGION_COUNT; regionIndex += 1) {
-      const metric = regionMetrics[regionIndex];
-      metric.attempts += 1;
-      drawCrop(regionIndex);
-      try {
-        const result = cropReader.decodeFromCanvas(cropCanvases[regionIndex]);
-        if (result) await handleDecoded(result.getText(), regionIndex);
-      } catch {
-        // A crop with no decodable QR is a normal camera sample, not an invalid protocol frame.
-      }
-      if (receiverComplete) break;
-    }
+    if (decoderBackend === 'barcode-detector' && nativeDetector) await scanNativeRound();
+    else await scanZxingRound();
     publishStatus();
   }
   if (scanActive && !receiverComplete) requestAnimationFrame(() => void scanLoop());
@@ -345,6 +450,7 @@ async function scanLoop(): Promise<void> {
 
 async function startCamera(): Promise<void> {
   if (cameraStream) return;
+  initializeDecoderBackend();
   cameraStream = await navigator.mediaDevices.getUserMedia({
     audio: false,
     video: {facingMode: {ideal: 'environment'}, width: {ideal: 1920}, height: {ideal: 1080}, frameRate: {ideal: 60}},
@@ -354,7 +460,7 @@ async function startCamera(): Promise<void> {
   scanActive = true;
   scanStartedAt = performance.now();
   requestAnimationFrame(() => void scanLoop());
-  publishStatus('camera running; align the 2×2 sender grid with the square reticle', true);
+  publishStatus(`camera running; decoder=${decoderBackend}; align the 2×2 sender grid with the square reticle`, true);
 }
 
 function stopCamera(): void {
@@ -449,6 +555,7 @@ async function startMultiQrSender(bytes: Uint8Array) {
       `grid: 2×2 · ${QR_SIZE}px each · ECC ${ECC}`,
       `gross payload ceiling: ${formatRate(rawCeiling)}`,
       `displayed Fountain symbols: ${displayedSymbols}`,
+      `receiver decoder: ${latestTelemetry.decoderBackend}`,
       `receiver solved: ${latestTelemetry.unique}/${latestTelemetry.total || encoder.sourceCount}`,
       `receiver accepted: ${latestTelemetry.acceptedSymbols} · ${regionLine}`,
       `receiver scan: ${latestTelemetry.scanRoundsPerSecond.toFixed(2)} rounds/s`,
@@ -468,7 +575,7 @@ async function runBenchmark(): Promise<void> {
   const source = deterministicBytes(PAYLOAD_BYTES, 0x4f505449);
   const senderMetadata = captureSenderMetadata();
   try {
-    log('4QR benchmark: Fountain recovery retained; carrier expanded to four fixed standard QR regions.');
+    log('4QR benchmark: Fountain retained; testing native multi-code detection first with ZXing crop fallback.');
     await resetReceiverFromSender();
     const session = await startMultiQrSender(source);
     const started = senderStartedAt;
@@ -478,7 +585,7 @@ async function runBenchmark(): Promise<void> {
       if (performance.now() - lastProgress > 10_000) {
         lastProgress = performance.now();
         const pct = latestTelemetry.total ? 100 * latestTelemetry.unique / latestTelemetry.total : 0;
-        log(`progress ${latestTelemetry.unique}/${latestTelemetry.total || session.sourceBlocks} (${pct.toFixed(1)}%) · accepted ${latestTelemetry.acceptedSymbols} · scan ${latestTelemetry.scanRoundsPerSecond.toFixed(2)} rounds/s`);
+        log(`progress ${latestTelemetry.unique}/${latestTelemetry.total || session.sourceBlocks} (${pct.toFixed(1)}%) · accepted ${latestTelemetry.acceptedSymbols} · decoder ${latestTelemetry.decoderBackend} · scan ${latestTelemetry.scanRoundsPerSecond.toFixed(2)} rounds/s`);
       }
     }
 
@@ -499,6 +606,7 @@ async function runBenchmark(): Promise<void> {
       decodedQrResults: t.decoded,
       invalid: t.invalid,
       ignoredBeforeManifest: t.ignoredBeforeManifest,
+      decoderBackend: t.decoderBackend,
       scanRounds: t.scanRounds,
       scanRoundsPerSecond: t.scanRoundsPerSecond,
       perRegion: t.regions,
@@ -513,24 +621,31 @@ async function runBenchmark(): Promise<void> {
     send({
       type: 'lab-result',
       run: {
-        schema: 'optilink.tf003.4qr.v1', kind: 'benchmark-1mib-4qr-fountain', evidenceClass: 'performance-experiment',
+        schema: 'optilink.tf003.4qr.v2', kind: 'benchmark-1mib-4qr-fountain', evidenceClass: 'performance-experiment',
         status, startedBy: 'receiver-one-click', finishedAt: new Date().toISOString(),
         transport: {family: 'LT-style Fountain / rateless XOR', systematicFirst: true, peelingDecoder: true, seed: `0x${session.seed.toString(16).padStart(8, '0')}`},
         sender: senderMetadata, receiver: latestReceiverMetadata,
         displayBaseline: {physicalRefreshHz: PHYSICAL_HZ, targetOpticalVisualUpdateHz: VISUAL_HZ},
         payload: {kind: 'deterministic-incompressible', bytes: PAYLOAD_BYTES, seed: '0x4f505449', sha256: session.sha256},
-        config: {regions: REGION_COUNT, layout: '2x2-known-grid', blockSize: BLOCK_SIZE, qrSize: QR_SIZE, targetHz: VISUAL_HZ, ecc: ECC, carrier: 'four-standard-qr'},
+        config: {
+          regions: REGION_COUNT, layout: '2x2-known-grid', blockSize: BLOCK_SIZE, qrSize: QR_SIZE,
+          targetHz: VISUAL_HZ, ecc: ECC, carrier: 'four-standard-qr',
+          receiverStrategy: 'native BarcodeDetector on one square ROI when available; 360px ZXing crops fallback',
+        },
         theoreticalGrossPayloadBytesPerSecond: REGION_COUNT * BLOCK_SIZE * VISUAL_HZ,
         timeoutSeconds: TIMEOUT_MS / 1000,
         result,
-        comparison: {singleQrFountain: '1 MiB PASS in 436.235 s at 2403.70 B/s on 60 Hz / 24 Hz / 300 B / 560 px single QR'},
+        comparison: {
+          singleQrFountain: '1 MiB PASS in 436.235 s at 2403.70 B/s on 60 Hz / 24 Hz / 300 B / 560 px single QR',
+          fourQrV1: 'TIMEOUT at 10.96% after 360.060 s; 1805 accepted symbols; 2.99 sequential ZXing crop rounds/s',
+        },
         controlPlane: 'WebSocket telemetry only; payload bytes remain optical',
       },
     });
     send({type: 'command', action: 'multiqr-finished', status, result});
     log(status === 'PASS'
       ? `4QR PASS · SHA-256 verified · ${elapsed.toFixed(2)} s · ${formatRate(goodput)}.`
-      : `4QR ${status} · solved ${(completionRatio * 100).toFixed(2)}% · result saved.`);
+      : `4QR ${status} · solved ${(completionRatio * 100).toFixed(2)}% · decoder ${t.decoderBackend} · result saved.`);
   } catch (error) {
     stopSender();
     log(`4QR benchmark failed: ${String(error)}`);
@@ -601,7 +716,7 @@ async function receiverStart(): Promise<void> {
   startButton.disabled = true;
   stopButton.disabled = false;
   send({type: 'state', event: 'multiqr-receiver-ready', receiver: latestReceiverMetadata});
-  log('Camera started. Align the four-code square with the reticle; benchmark will finish or timeout automatically.');
+  log(`Camera started with ${decoderBackend}. Align the four-code square with the reticle; benchmark will finish or timeout automatically.`);
 }
 
 function userStop(): void {
@@ -629,7 +744,7 @@ if (role === 'sender') {
 } else if (role === 'receiver') {
   senderView.hidden = true;
   roleTitle.textContent = 'Receiver ready';
-  roleText.textContent = '让四码方阵对齐中央正方形取景框，然后只点一次 Start；完成或超时后摄像头自动停止。';
+  roleText.textContent = '让四码方阵对齐中央正方形取景框，然后只点一次 Start；系统会优先使用浏览器原生多码检测，必要时自动回退 ZXing。';
 } else {
   roleTitle.textContent = 'Open role-specific URLs';
   roleText.textContent = '电脑使用 ?role=sender，手机使用 ?role=receiver。';
@@ -637,5 +752,6 @@ if (role === 'sender') {
 }
 
 clearSenderGrid();
+initializeDecoderBackend();
 resetReceiver();
 connect();
