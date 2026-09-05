@@ -11,17 +11,32 @@
       <div>
         <p class="eyebrow">OptiLink · TF-002</p>
         <h1>Single-code optical baseline</h1>
-        <p class="lede">实验性 Browser → QR → Android Browser 基线。首轮按 24 Hz 目标视觉更新率，码尺寸和负载均可调。</p>
+        <p class="lede">实验性 Browser → QR → Android Browser 基线。支持手动模式和低操作量 Auto Lab。</p>
       </div>
       <div class="badge">G1 APPROVED · EXPERIMENT</div>
     </header>
 
     <section class="notice">
       <strong>Benchmark rule:</strong> Sender 的理论速率不是成绩。只有接收端完成重组、SHA-256 一致后的 end-to-end net goodput 才算有效结果。
+      <br />
+      <strong>Auto Lab:</strong> 网络只用于实验控制与遥测，文件 payload 仍只通过屏幕 → 摄像头传输；正式离线验收会关闭该控制通道。
+    </section>
+
+    <section id="labPanel" class="lab-panel">
+      <div>
+        <p class="eyebrow">LOW-TOUCH TEST MODE</p>
+        <h2>Auto Lab</h2>
+        <p id="labRoleText">正在识别当前设备角色…</p>
+      </div>
+      <div class="lab-actions">
+        <button id="labStart" class="primary" type="button">Start auto test</button>
+        <button id="labStop" type="button" disabled>Stop / finish</button>
+      </div>
+      <pre id="labStatus" class="status lab-status">connecting to lab coordinator…</pre>
     </section>
 
     <div class="grid">
-      <section class="panel">
+      <section id="senderPanel" class="panel">
         <div class="panel-head">
           <div>
             <span class="step">A</span>
@@ -39,7 +54,8 @@
             <span>Generated payload</span>
             <div class="inline">
               <select id="payloadSize">
-                <option value="1048576">1 MiB quick test</option>
+                <option value="65536">64 KiB calibration</option>
+                <option value="1048576" selected>1 MiB quick test</option>
                 <option value="10485760">10 MiB G0 benchmark</option>
               </select>
               <button id="generateButton" type="button">Generate</button>
@@ -79,7 +95,7 @@
         <pre id="senderStatus" class="status"></pre>
       </section>
 
-      <section class="panel">
+      <section id="receiverPanel" class="panel">
         <div class="panel-head">
           <div>
             <span class="step">B</span>
@@ -88,7 +104,7 @@
           <span>Android browser · moto razr 40 ultra baseline</span>
         </div>
 
-        <div class="actions">
+        <div class="actions manual-receiver-actions">
           <button id="startCamera" class="primary" type="button">Start camera</button>
           <button id="stopCamera" type="button">Stop camera</button>
           <button id="resetReceiver" type="button">Reset session</button>
@@ -105,11 +121,11 @@
     </div>
 
     <section class="method">
-      <h2>首轮物理测试顺序</h2>
+      <h2>测试原则</h2>
       <ol>
-        <li>先用 1 MiB、24 Hz、600 B/frame、640 px QR，在固定手机位置验证连续解码。</li>
-        <li>逐步增加 payload/frame 和 QR 尺寸，记录实际 rendered Hz 与接收端 unique-symbol yield。</li>
-        <li>稳定后切到 10 MiB，并执行 5 次完整 SHA-256 重组。</li>
+        <li>Auto Lab 先用 64 KiB 校准流自动探索 payload/frame、QR size 与视觉更新率。</li>
+        <li>手机固定后只需 Start / Stop；Sender 根据接收端 unique-symbol yield 自动切换配置。</li>
+        <li>Auto Lab 找到候选配置后，再切到 1 MiB / 10 MiB 做真实 SHA-256 完整传输。</li>
         <li>如果单码明显受限，不修改 ≥100 KB/s 目标，进入 TF-003 多码实验。</li>
       </ol>
     </section>
