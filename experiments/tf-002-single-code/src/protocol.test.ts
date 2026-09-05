@@ -11,6 +11,7 @@ import {
   encodeFountainDataFrame,
   encodeFountainManifest,
   encodeManifest,
+  parseFountainFrame,
   parseFrame,
   sha256Hex,
 } from './protocol.ts';
@@ -36,29 +37,18 @@ test('manifest roundtrip preserves benchmark metadata', () => {
 
 test('fountain manifest and symbol frames roundtrip', () => {
   const manifest = encodeFountainManifest({
-    kind: 'fountain-manifest',
-    sessionId: '0123456789abcdef',
-    sourceBlocks: 42,
-    totalBytes: 12345,
-    blockSize: 300,
-    sha256: 'b'.repeat(64),
-    fileName: 'fountain 1 MiB.bin',
-    fountainSeed: 0x89abcdef,
+    kind: 'fountain-manifest', sessionId: '0123456789abcdef', sourceBlocks: 42, totalBytes: 12345, blockSize: 300,
+    sha256: 'b'.repeat(64), fileName: 'fountain 1 MiB.bin', fountainSeed: 0x89abcdef,
   });
-  assert.deepEqual(parseFrame(manifest), {
-    kind: 'fountain-manifest',
-    sessionId: '0123456789abcdef',
-    sourceBlocks: 42,
-    totalBytes: 12345,
-    blockSize: 300,
-    sha256: 'b'.repeat(64),
-    fileName: 'fountain 1 MiB.bin',
-    fountainSeed: 0x89abcdef,
+  assert.deepEqual(parseFountainFrame(manifest), {
+    kind: 'fountain-manifest', sessionId: '0123456789abcdef', sourceBlocks: 42, totalBytes: 12345, blockSize: 300,
+    sha256: 'b'.repeat(64), fileName: 'fountain 1 MiB.bin', fountainSeed: 0x89abcdef,
   });
+  assert.equal(parseFrame(manifest), null);
 
   const payload = deterministicBytes(300, 77);
   const symbol = encodeFountainDataFrame({kind: 'fountain', sessionId: '0123456789abcdef', symbolId: 99, sourceBlocks: 42, payload});
-  const parsed = parseFrame(symbol);
+  const parsed = parseFountainFrame(symbol);
   assert.ok(parsed);
   assert.equal(parsed.kind, 'fountain');
   if (parsed.kind !== 'fountain') return;
@@ -89,13 +79,10 @@ test('fountain decoder reconstructs exact bytes through deterministic 45% symbol
   const seed = 0x12345678;
   const encoder = new FountainEncoder(source, blockSize, seed);
   const decoder = new FountainDecoder(encoder.sourceCount, blockSize, seed);
-
   for (let symbolId = 0; symbolId < encoder.sourceCount * 4 && !decoder.complete; symbolId += 1) {
-    const keep = ((symbolId * 37 + 11) % 100) < 55;
-    if (!keep) continue;
+    if (((symbolId * 37 + 11) % 100) >= 55) continue;
     decoder.addSymbol(symbolId, encoder.symbol(symbolId));
   }
-
   assert.equal(decoder.complete, true);
   assert.deepEqual(decoder.reconstruct(source.length), source);
   assert.ok(decoder.acceptedSymbols >= encoder.sourceCount);
