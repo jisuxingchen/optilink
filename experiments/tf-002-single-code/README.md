@@ -8,25 +8,35 @@ This directory implements the first executable feasibility harness after Gate G1
 
 The same browser application supports:
 
-- **Sender** — generate/select bytes, chunk them, render sequential standard QR codes on the computer display.
-- **Receiver** — use the Android browser camera to decode, deduplicate, reassemble and verify SHA-256.
-- **Auto Lab coordinator** — relay only test control/telemetry between sender and receiver so parameter sweeps can run with almost no manual interaction.
+- **Auto Benchmark mode** — one phone-side Start automatically generates and transfers a deterministic incompressible 1 MiB payload using the selected TF-002 candidate configuration.
+- **Engineering Calibration mode** — retains the 64 KiB automatic parameter sweep for tuning.
+- **File / Manual mode** — select a real file or manually generate a payload for functional experiments.
+- **Receiver** — Android browser camera decodes, deduplicates, reassembles and verifies SHA-256.
+- **Auto Lab coordinator** — relays test control/telemetry only; payload bytes remain on the optical screen→camera path.
 
-The optical file payload remains screen→camera. The WebSocket control plane is **lab instrumentation only** and must be disabled for official offline acceptance runs.
+The WebSocket control plane is **lab instrumentation only** and must be disabled for official offline acceptance runs.
 
-## First physical baseline
+## Performance-baseline boundary
 
-- receiver: Motorola moto razr 40 ultra;
-- sender: ordinary computer display;
-- first reference visual update rate: 24 Hz;
-- QR size, payload/frame and update rate are adjustable;
-- standard QR only.
+The owner has now fixed the current sender display at **60 Hz physical refresh rate** for subsequent performance-oriented runs.
 
-The cyclic single-code sequence is deliberately temporary. Fountain/rateless recovery remains the approved leading candidate for later one-way loss recovery.
+This is distinct from the OptiLink **visual-code update rate**. The first 1 MiB stability candidate remains:
+
+- 300 B/frame
+- 560 px QR
+- 24 Hz OptiLink visual-code update rate
+- ECC L
+
+All earlier manual and Auto Lab calibration runs are retained as **functional / engineering evidence only**. They prove the harness, optical path, control plane and tuning logic, but they are not used as the starting performance claim because the physical display refresh condition was not yet frozen and recorded consistently.
+
+From the 60 Hz baseline onward, machine-readable performance results explicitly record both:
+
+- physical display refresh rate;
+- OptiLink target visual-code update rate.
 
 ## Recommended low-touch workflow
 
-Because the tested Codespace showed a GitHub tunnel/edge forwarding failure, the preferred physical-test launcher is now the temporary HTTPS tunnel wrapper:
+Because the tested Codespace showed a GitHub tunnel/edge forwarding failure, use the temporary HTTPS tunnel wrapper:
 
 ```bash
 cd experiments/tf-002-single-code
@@ -37,55 +47,66 @@ npm run lab:tunnel
 
 The launcher starts the local coordinator, creates a random Lab Token, starts a temporary HTTPS tunnel and prints complete Sender / Receiver URLs.
 
-Open the printed **Sender** URL on the computer and the printed **Receiver** URL on the moto razr 40 ultra. Then:
+Open the printed **Sender** URL on the computer and the printed **Receiver** URL on the moto razr 40 ultra.
 
-1. Keep the computer sender page open. No sender-side button is required for the normal auto flow.
-2. Fix the phone in place and frame the QR region.
-3. On the phone press **Start auto test** once and grant camera permission if requested.
-4. The sender automatically sweeps a short calibration matrix for QR payload density and visual update rate.
-5. The receiver reports decode/unique/duplicate telemetry through the lab control channel.
-6. The coordinator stores the latest structured result in `results/latest.json` and can automatically post it to Issue #9.
-7. Press **Stop / finish** on the phone if you want to end early or after calibration.
+### Default 1 MiB benchmark
 
-`npm run lab` remains available for localhost or a working forwarded HTTPS environment.
+1. Keep the computer Sender page open.
+2. Keep **Auto Lab mode = Benchmark · automatic 1 MiB stability**.
+3. The Sender records the current physical display refresh as **60 Hz**.
+4. Fix the phone in place and frame the QR region.
+5. On the phone press **Start auto test** once and grant camera permission if requested.
+6. Do **not** choose/upload a file and do **not** press Generate.
+7. The program automatically generates the deterministic 1 MiB incompressible payload, resets the receiver cleanly, starts the optical stream and waits for either verified completion or timeout.
+8. On completion, the receiver camera stops automatically. The coordinator stores `results/latest.json` and can post the structured result to Issue #9.
+
+The 1 MiB run uses an 8-minute timeout. A timeout is recorded as evidence rather than silently discarded.
+
+### Engineering calibration
+
+Select **Engineering · 64 KiB calibration sweep** only when new tuning evidence is required. This mode automatically explores payload density / QR size / visual update rate and is not the default performance run.
+
+### File mode
+
+The manual Sender controls remain available for real-file functional tests. A manually selected file overrides generated manual payloads, but manual File mode is not automatically classified as benchmark evidence.
 
 ## Sweep synchronization and data-quality rules
 
-Auto Lab v2 explicitly prevents one sweep from contaminating the next:
+Auto Lab prevents one measurement from contaminating the next:
 
 1. Sender stops and blanks the QR canvas.
-2. Sender waits for the camera to drain stale frames.
+2. Sender waits for camera stale-frame drain.
 3. Sender sends a reset command with a unique reset id.
-4. Receiver clears its session state, enters a short flush window and sends `receiver-reset-complete` with the same reset id.
+4. Receiver clears session state, enters a short flush window and sends `receiver-reset-complete` with the same reset id.
 5. Sender waits for that acknowledgement before starting the next optical session.
-6. Receiver does not bind a new session id from a data frame; the new session is anchored by its manifest first.
+6. Receiver anchors the new session on the manifest rather than on an arbitrary data frame.
 
-Data frames seen before a manifest are reported separately as `ignoredBeforeManifest` instead of being counted as foreign/invalid session data.
+Data frames seen before a manifest are reported separately as `ignoredBeforeManifest` instead of foreign/invalid session data.
 
-Receiver metadata is captured **on the receiver page** and sent to the sender/coordinator. The result therefore records the receiver page's actual browser user-agent, platform, language and screen information rather than accidentally recording the computer sender's browser.
+Receiver metadata is captured on the **receiver page**. Sender metadata records the owner-configured physical display refresh rate and sender browser/screen information.
 
-## Calibration matrix
+## 1 MiB stability result fields
 
-Auto Lab first uses a 64 KiB deterministic payload and measures unique-symbol yield rather than pretending it is the final file-throughput benchmark.
+The benchmark result records at least:
 
-Stage A explores representative density/size pairs at low update rate. Stage B takes the best density candidate and sweeps visual update rate up to the approved 24 Hz reference point.
+- evidence class (`performance-baseline`);
+- physical display refresh rate;
+- target OptiLink visual update rate;
+- payload SHA-256 and deterministic seed;
+- payload bytes and QR configuration;
+- unique / total chunks and completion ratio;
+- decoded / duplicate / invalid / pre-manifest counts;
+- SHA-256 result;
+- receiver-reported goodput;
+- sender-observed elapsed time;
+- conservative lab end-to-end goodput;
+- PASS / HASH_MISMATCH / TIMEOUT / ABORTED status.
 
-The result records, per configuration:
+The lab end-to-end measurement begins at Sender optical-stream start and ends when completion telemetry reaches the Sender. It therefore includes a small control-plane completion latency and is intentionally conservative. Official offline acceptance remains a separate stage.
 
-- unique symbols received;
-- decoded QR results;
-- duplicate results;
-- invalid/foreign results;
-- pre-manifest ignored results;
-- unique symbols/second;
-- decoded results/second;
-- duplicate ratio.
+## Measurement rule
 
-The best calibration candidate is selected by unique-symbol rate. That candidate is then used for the next 1 MiB stability test.
-
-## Important measurement rule
-
-Sender raw bitrate is diagnostic only. The authoritative product benchmark remains:
+Sender raw bitrate is diagnostic only. The product benchmark remains:
 
 ```text
 net_goodput = verified_original_file_bytes / elapsed_end_to_end_seconds
@@ -93,10 +114,4 @@ net_goodput = verified_original_file_bytes / elapsed_end_to_end_seconds
 
 A valid headline run requires exact final SHA-256 reconstruction according to `docs/BENCHMARK_SPEC.md`.
 
-## Interpretation of the first physical evidence
-
-The first manual screenshots used `README.md` (2,064 bytes), not the 1 MiB generated payload, because a manually selected file overrides the generated payload. Auto Lab always generates its own calibration payload and removes this ambiguity.
-
-The manual screenshots proved that the Browser→QR→moto razr 40 ultra optical path works end-to-end: ECC L completed a 4-chunk transfer with exact SHA-256. The first automated run then proved that one-click receiver-start → automatic parameter sweep → structured telemetry → automatic GitHub Issue publishing works end-to-end.
-
-That first automated run also exposed two data-quality defects which Auto Lab v2 fixes: receiver metadata was assembled on the sender page, and stale frames from the previous sweep could bind or contaminate the next session. Those defects must be considered when interpreting the first automated calibration result; the next run is the first one intended for clean comparison across sweep configurations.
+The cyclic single-code sequence remains deliberately temporary. Fountain/rateless recovery is still the approved leading candidate for one-way loss recovery, and TF-003 multi-code remains the next carrier-scaling path if the single-code baseline is clearly below target.
