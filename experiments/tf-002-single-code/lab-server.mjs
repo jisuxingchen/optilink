@@ -127,16 +127,21 @@ async function persistResult(run) {
 
 async function tryPublishIssue(run) {
   if (process.env.OPTILINK_PUBLISH_GITHUB !== '1') return {published: false, reason: 'disabled'};
+  const receiverLabel = run.receiver?.configuredDevice || run.receiver?.device || 'moto razr 40 ultra';
+  const receiverUa = run.receiver?.userAgent || 'n/a';
   const body = [
     '## TF-002 automated lab result',
     '',
     `- Time: ${run.finishedAt || new Date().toISOString()}`,
-    `- Receiver: ${run.receiver?.device || 'moto razr 40 ultra'}`,
+    `- Receiver baseline: ${receiverLabel}`,
+    `- Receiver UA (captured on receiver page): ${receiverUa}`,
     `- Status: ${run.status}`,
     `- Best config: ${run.best ? JSON.stringify(run.best.config) : 'n/a'}`,
     `- Best unique-symbol rate: ${run.best?.metrics?.uniquePerSecond ?? 'n/a'} /s`,
     `- Best decoded QR rate: ${run.best?.metrics?.decodedPerSecond ?? 'n/a'} /s`,
     `- Best duplicate ratio: ${run.best?.metrics?.duplicateRatio ?? 'n/a'}`,
+    `- Best invalid/foreign: ${run.best?.metrics?.invalid ?? 'n/a'}`,
+    `- Best pre-manifest ignored: ${run.best?.metrics?.ignoredBeforeManifest ?? 'n/a'}`,
     '',
     '<details><summary>Machine-readable summary</summary>',
     '',
