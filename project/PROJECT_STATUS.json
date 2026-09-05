@@ -3,46 +3,46 @@
   "tagline": "Offline optical data exchange · screen → camera",
   "phase": "Phase 0 — Product Discovery & Feasibility",
   "sprint": "Sprint 0 — Product Discovery",
-  "overallProgress": 18,
-  "sprintProgress": 55,
+  "overallProgress": 24,
+  "sprintProgress": 68,
   "lastUpdated": "2026-09-05",
-  "summary": "G0 is approved. Sprint 0 is establishing evidence, governance and a reproducible feasibility benchmark before the technical architecture is frozen.",
+  "summary": "PR #5 is merged and the project dashboard is live. Discovery has now confirmed substantial public prior art, ranked the first target scenarios, and drafted a reproducible benchmark protocol. G1 remains intentionally unapproved until scenario evidence and the physical-test baseline are reviewed.",
   "repository": {
     "name": "jisuxingchen/optilink",
     "url": "https://github.com/jisuxingchen/optilink",
-    "workingBranch": "planning/sprint-0-product-discovery",
+    "workingBranch": "discovery/sprint-0-scenarios-benchmark",
     "pullRequest": {
-      "number": 5,
-      "title": "Sprint 0: product discovery foundation, dashboard and CI",
-      "url": "https://github.com/jisuxingchen/optilink/pull/5",
+      "number": 8,
+      "title": "Sprint 0 discovery: scenario scoring, benchmark spec and competitive landscape",
+      "url": "https://github.com/jisuxingchen/optilink/pull/8",
       "status": "DRAFT"
     }
   },
   "metrics": {
-    "openIssues": 4,
-    "ownerActions": 1,
+    "openIssues": 5,
+    "ownerActions": 0,
     "blockers": 2,
     "ciStatus": "PASSING",
     "ciUrl": "https://github.com/jisuxingchen/optilink/actions/workflows/ci.yml"
   },
   "currentFocus": [
     {
-      "title": "Finalize the project dashboard and publishing path",
-      "detail": "Make project state, owner approvals, roadmap, tasks, documents and terminology visible in one mobile-friendly page.",
-      "status": "IN_PROGRESS",
-      "link": "https://github.com/jisuxingchen/optilink/issues/4"
-    },
-    {
-      "title": "Expand and score the scenario library",
-      "detail": "Find cases where existing USB/network/NFC/Bluetooth alternatives are genuinely insufficient rather than forcing an optical-transfer use case.",
+      "title": "Validate the top 5 product scenarios",
+      "detail": "The first scoring pass favors OEM optical service/export, industrial HMI diagnostics, managed isolated-workstation export, field-service exchange, and GMP read-only export. The next step is stronger buyer/workflow evidence.",
       "status": "IN_PROGRESS",
       "link": "https://github.com/jisuxingchen/optilink/issues/1"
     },
     {
-      "title": "Freeze the benchmark method before the prototype",
-      "detail": "Define devices, viewing conditions, integrity checks and net-goodput measurement before throughput code is written.",
-      "status": "PLANNED",
+      "title": "Finalize the benchmark protocol before code",
+      "detail": "A draft now defines incompressible payloads, repeated runs, SHA-256 correctness, net-goodput timing, environment capture and the ≥100 KB/s G0 success rule. Baseline hardware/conditions still require G1 review.",
+      "status": "IN_PROGRESS",
       "link": "https://github.com/jisuxingchen/optilink/issues/2"
+    },
+    {
+      "title": "Turn prior art into product differentiation",
+      "detail": "Public projects already demonstrate animated-code optical transfer at useful speeds. OptiLink must decide whether its moat is enterprise/industrial governance, OEM integration and structured data exchange rather than raw file transfer.",
+      "status": "IN_PROGRESS",
+      "link": "https://github.com/jisuxingchen/optilink/issues/6"
     }
   ],
   "approvals": [
@@ -55,31 +55,20 @@
     },
     {
       "id": "G1",
-      "title": "Initial technical path",
+      "title": "Initial technical and product path",
       "status": "NOT_READY",
       "ownerAction": false,
-      "decision": "Wait for scenario evidence and benchmark definition before choosing sender, receiver, carrier and error-control baselines.",
+      "decision": "Before approval: review top scenarios, prior-art/licensing implications, product positioning, benchmark device/conditions, sender/receiver baseline, carrier and one-way loss-recovery strategy.",
       "link": "https://github.com/jisuxingchen/optilink/issues/3"
     }
   ],
-  "reviewQueue": [
-    {
-      "id": "PR-5",
-      "kind": "PR",
-      "title": "Sprint 0 foundation + dashboard",
-      "status": "AWAITING_OWNER",
-      "priority": "HIGH",
-      "why": "This establishes the project-management structure, dashboard, CI and discovery documentation that later work will build on.",
-      "action": "Review structure and dashboard; approve merge only if the management model is acceptable.",
-      "url": "https://github.com/jisuxingchen/optilink/pull/5"
-    }
-  ],
+  "reviewQueue": [],
   "epics": [
     {
       "id": "E0",
       "title": "Product Discovery",
       "status": "IN_PROGRESS",
-      "progress": 55,
+      "progress": 75,
       "start": "2026-09-05",
       "end": "2026-09-12",
       "scheduleType": "forecast",
@@ -98,41 +87,68 @@
           "id": "PD-002",
           "title": "Scenario library",
           "status": "IN_PROGRESS",
-          "progress": 40,
+          "progress": 78,
           "issue": "https://github.com/jisuxingchen/optilink/issues/1",
           "subtasks": [
             {"title": "Seed initial scenarios", "status": "DONE"},
-            {"title": "Define screening criteria", "status": "DONE"},
-            {"title": "Expand candidate scenarios", "status": "TODO"},
-            {"title": "Score scenarios", "status": "TODO"},
-            {"title": "Select top 3–5 candidates", "status": "TODO"}
+            {"title": "Define weighted screening criteria", "status": "DONE"},
+            {"title": "Expand candidate scenarios", "status": "DONE"},
+            {"title": "Score and rank scenarios", "status": "DONE"},
+            {"title": "Select top 5 for deeper validation", "status": "DONE"},
+            {"title": "Validate buyer/workflow evidence", "status": "TODO"}
           ]
         },
         {
           "id": "PD-003",
           "title": "Requirements baseline",
           "status": "IN_PROGRESS",
-          "progress": 70,
+          "progress": 82,
           "subtasks": [
             {"title": "Record approved G0 requirements", "status": "DONE"},
             {"title": "Define net-goodput metric", "status": "DONE"},
             {"title": "List G1 open decisions", "status": "DONE"},
+            {"title": "Add differentiation implications from discovery", "status": "DONE"},
             {"title": "Refine explicit non-goals", "status": "TODO"}
           ]
         },
         {
-          "id": "PM-001",
-          "title": "Project dashboard",
+          "id": "PD-004",
+          "title": "Competitive landscape and differentiation",
           "status": "IN_PROGRESS",
-          "progress": 85,
+          "progress": 60,
+          "issue": "https://github.com/jisuxingchen/optilink/issues/6",
+          "subtasks": [
+            {"title": "Identify relevant public implementations", "status": "DONE"},
+            {"title": "Capture self-reported performance and license notes", "status": "DONE"},
+            {"title": "Separate third-party claims from OptiLink evidence", "status": "DONE"},
+            {"title": "Deep capability comparison", "status": "TODO"},
+            {"title": "Freeze differentiation proposal for G1", "status": "TODO"}
+          ]
+        },
+        {
+          "id": "PM-001",
+          "title": "Project dashboard publishing",
+          "status": "DONE",
+          "progress": 100,
           "issue": "https://github.com/jisuxingchen/optilink/issues/4",
           "subtasks": [
-            {"title": "Overall project status", "status": "DONE"},
-            {"title": "Owner review center", "status": "DONE"},
-            {"title": "Gantt-style roadmap", "status": "DONE"},
-            {"title": "Task/subtask drill-down", "status": "DONE"},
-            {"title": "Glossary tooltips", "status": "DONE"},
-            {"title": "Validate GitHub Pages publication", "status": "TODO"}
+            {"title": "Project cockpit UI", "status": "DONE"},
+            {"title": "Gantt and task drill-down", "status": "DONE"},
+            {"title": "Local artifact fallback", "status": "DONE"},
+            {"title": "GitHub Pages deployment", "status": "DONE"},
+            {"title": "Verify public URL", "status": "DONE"}
+          ]
+        },
+        {
+          "id": "PM-002",
+          "title": "Automate dashboard status from GitHub metadata",
+          "status": "BACKLOG",
+          "progress": 0,
+          "issue": "https://github.com/jisuxingchen/optilink/issues/7",
+          "subtasks": [
+            {"title": "Issue/PR counts", "status": "TODO"},
+            {"title": "CI state aggregation", "status": "TODO"},
+            {"title": "Preserve human-controlled Gates", "status": "TODO"}
           ]
         }
       ]
@@ -140,8 +156,8 @@
     {
       "id": "E1",
       "title": "Technical Feasibility",
-      "status": "PLANNED",
-      "progress": 10,
+      "status": "IN_PROGRESS",
+      "progress": 24,
       "start": "2026-09-08",
       "end": "2026-09-19",
       "scheduleType": "forecast",
@@ -149,36 +165,38 @@
         {
           "id": "TF-001",
           "title": "Benchmark design",
-          "status": "PLANNED",
-          "progress": 10,
+          "status": "IN_PROGRESS",
+          "progress": 70,
           "issue": "https://github.com/jisuxingchen/optilink/issues/2",
           "subtasks": [
-            {"title": "Define test devices", "status": "TODO"},
-            {"title": "Define distance/angle/lighting", "status": "TODO"},
             {"title": "Define net-goodput timing", "status": "DONE"},
-            {"title": "Define pass/fail evidence", "status": "TODO"}
+            {"title": "Define incompressible primary payload", "status": "DONE"},
+            {"title": "Define repeated-run and SHA-256 correctness rules", "status": "DONE"},
+            {"title": "Define evidence package and failure taxonomy", "status": "DONE"},
+            {"title": "Freeze available baseline test devices", "status": "TODO"},
+            {"title": "Approve distance/angle/lighting baseline at G1", "status": "TODO"}
           ]
         },
         {
           "id": "TF-002",
-          "title": "Single-QR spike",
+          "title": "Single-code spike",
           "status": "BLOCKED_BY_GATE",
           "progress": 0,
           "subtasks": [
             {"title": "Sender benchmark harness", "status": "BLOCKED"},
             {"title": "Receiver benchmark harness", "status": "BLOCKED"},
-            {"title": "Measurements", "status": "BLOCKED"}
+            {"title": "Physical measurements", "status": "BLOCKED"}
           ]
         },
         {
           "id": "TF-003",
-          "title": "Multi-QR spike",
+          "title": "Multi-code spike",
           "status": "BLOCKED_BY_GATE",
           "progress": 0,
           "subtasks": [
-            {"title": "Parallel layout", "status": "BLOCKED"},
+            {"title": "Parallel visual layout", "status": "BLOCKED"},
             {"title": "Decode pipeline", "status": "BLOCKED"},
-            {"title": "Measurements", "status": "BLOCKED"}
+            {"title": "Physical measurements", "status": "BLOCKED"}
           ]
         }
       ]
@@ -194,25 +212,25 @@
       "tasks": [
         {
           "id": "PROTO-001",
-          "title": "Browser sender",
-          "status": "PLANNED",
+          "title": "Sender implementation",
+          "status": "BLOCKED_BY_GATE",
           "progress": 0,
           "subtasks": [
-            {"title": "File selection", "status": "TODO"},
-            {"title": "Chunking", "status": "TODO"},
-            {"title": "Frame rendering", "status": "TODO"}
+            {"title": "File selection", "status": "BLOCKED"},
+            {"title": "Transport encoding", "status": "BLOCKED"},
+            {"title": "Visual frame rendering", "status": "BLOCKED"}
           ]
         },
         {
           "id": "PROTO-002",
-          "title": "Android receiver",
-          "status": "PLANNED",
+          "title": "Receiver implementation",
+          "status": "BLOCKED_BY_GATE",
           "progress": 0,
           "subtasks": [
-            {"title": "Camera capture", "status": "TODO"},
-            {"title": "Decode", "status": "TODO"},
-            {"title": "Reassembly", "status": "TODO"},
-            {"title": "Integrity check", "status": "TODO"}
+            {"title": "Camera capture", "status": "BLOCKED"},
+            {"title": "Decode", "status": "BLOCKED"},
+            {"title": "Reassembly", "status": "BLOCKED"},
+            {"title": "Integrity check", "status": "BLOCKED"}
           ]
         }
       ]
@@ -258,89 +276,108 @@
       "type": "Product",
       "status": "BASELINE",
       "note": "Problem framing, principles and product direction.",
-      "url": "https://github.com/jisuxingchen/optilink/blob/planning/sprint-0-product-discovery/docs/PRODUCT_VISION.md"
+      "url": "https://github.com/jisuxingchen/optilink/blob/main/docs/PRODUCT_VISION.md"
     },
     {
       "title": "Scenario Library",
       "type": "Discovery",
+      "status": "SCORING_V1",
+      "note": "12 candidate scenarios scored; top five selected for deeper workflow validation.",
+      "url": "https://github.com/jisuxingchen/optilink/blob/discovery/sprint-0-scenarios-benchmark/docs/SCENARIO_LIBRARY.md"
+    },
+    {
+      "title": "Benchmark Specification",
+      "type": "Feasibility",
+      "status": "DRAFT_FOR_G1",
+      "note": "Reproducible physical-test method and ≥100 KB/s G0 success criteria before benchmark code is written.",
+      "url": "https://github.com/jisuxingchen/optilink/blob/discovery/sprint-0-scenarios-benchmark/docs/BENCHMARK_SPEC.md"
+    },
+    {
+      "title": "Competitive Landscape",
+      "type": "Discovery",
       "status": "WORKING",
-      "note": "Candidate use cases and screening criteria; evidence still being expanded.",
-      "url": "https://github.com/jisuxingchen/optilink/blob/planning/sprint-0-product-discovery/docs/SCENARIO_LIBRARY.md"
+      "note": "Prior art, performance claims, licensing notes and differentiation hypotheses for G1.",
+      "url": "https://github.com/jisuxingchen/optilink/blob/discovery/sprint-0-scenarios-benchmark/docs/COMPETITIVE_LANDSCAPE.md"
     },
     {
       "title": "Product Requirements",
       "type": "Requirements",
       "status": "G0_APPROVED",
       "note": "Approved G0 requirements plus explicit G1 open decisions.",
-      "url": "https://github.com/jisuxingchen/optilink/blob/planning/sprint-0-product-discovery/docs/PRODUCT_REQUIREMENTS.md"
+      "url": "https://github.com/jisuxingchen/optilink/blob/main/docs/PRODUCT_REQUIREMENTS.md"
     },
     {
       "title": "Technical Options",
       "type": "Architecture",
       "status": "HYPOTHESES",
       "note": "Candidate sender, receiver and optical carrier options; none are frozen before G1.",
-      "url": "https://github.com/jisuxingchen/optilink/blob/planning/sprint-0-product-discovery/docs/TECHNICAL_OPTIONS.md"
+      "url": "https://github.com/jisuxingchen/optilink/blob/main/docs/TECHNICAL_OPTIONS.md"
     },
     {
       "title": "ADR-0001 Development Governance",
       "type": "ADR",
-      "status": "PROPOSED_IN_PR5",
+      "status": "ACCEPTED",
       "note": "Issue → branch → CI → Draft PR → owner review → merge governance model.",
-      "url": "https://github.com/jisuxingchen/optilink/blob/planning/sprint-0-product-discovery/docs/adr/ADR-0001-development-governance.md"
+      "url": "https://github.com/jisuxingchen/optilink/blob/main/docs/adr/ADR-0001-development-governance.md"
     }
   ],
   "health": [
     {
       "name": "Scope control",
       "status": "HEALTHY",
-      "detail": "G0 is explicit and later architecture remains gated by G1."
+      "detail": "G0 is explicit; G1 still blocks architecture-specific implementation."
     },
     {
-      "name": "Evidence quality",
+      "name": "Dashboard / visibility",
+      "status": "HEALTHY",
+      "detail": "GitHub Pages deployment is live at https://jisuxingchen.github.io/optilink/."
+    },
+    {
+      "name": "Technical feasibility",
+      "status": "IMPROVED",
+      "detail": "Multiple public implementations make ≥100 KB/s plausible, but OptiLink has not yet reproduced the result."
+    },
+    {
+      "name": "Product differentiation",
       "status": "WATCH",
-      "detail": "Scenario value and benchmark conditions still require evidence before implementation."
+      "detail": "Base optical file transfer is prior art; enterprise/industrial/OEM differentiation must be validated before product commitment."
     },
     {
       "name": "CI / repository hygiene",
       "status": "HEALTHY",
-      "detail": "Project validation and dashboard build are automated in GitHub Actions."
-    },
-    {
-      "name": "Schedule",
-      "status": "FORECAST_ONLY",
-      "detail": "Dates are planning forecasts, not commitments; gates can intentionally move later work."
+      "detail": "Project validation, dashboard build and Pages publishing are automated in GitHub Actions."
     }
   ],
   "activity": [
     {
       "date": "2026-09-05",
-      "title": "Gate G0 approved",
-      "detail": "First MVP hypothesis accepted by owner."
+      "title": "PR #5 owner-approved and merged",
+      "detail": "Sprint 0 governance, dashboard and CI baseline entered main via squash merge."
     },
     {
       "date": "2026-09-05",
-      "title": "Sprint 0 branch opened",
-      "detail": "planning/sprint-0-product-discovery created from initialized main."
+      "title": "Project dashboard published",
+      "detail": "GitHub Pages deployment completed successfully at https://jisuxingchen.github.io/optilink/."
     },
     {
       "date": "2026-09-05",
-      "title": "Issues #1–#4 created",
-      "detail": "Discovery, benchmark, G1 and dashboard work made visible in GitHub."
+      "title": "Discovery branch opened",
+      "detail": "discovery/sprint-0-scenarios-benchmark created from main."
     },
     {
       "date": "2026-09-05",
-      "title": "Draft PR #5 opened",
-      "detail": "Sprint 0 foundation is isolated from main pending review."
+      "title": "Public prior art materially changed the risk picture",
+      "detail": "Multiple projects already demonstrate screen→camera optical file transfer at useful speeds; differentiation is now an explicit G1 topic."
     },
     {
       "date": "2026-09-05",
-      "title": "CI baseline passed",
-      "detail": "Project validation and dashboard artifact build completed successfully."
+      "title": "Draft PR #8 opened",
+      "detail": "Scenario scoring, benchmark method and competitive landscape are isolated for continued Sprint 0 review."
     }
   ],
   "blockers": [
-    "No technical architecture is frozen before G1 approval.",
-    "Feasibility spikes that depend on a carrier/receiver baseline wait for G1."
+    "G1 is not approved: architecture-specific implementation remains blocked.",
+    "Physical benchmark device pair and baseline test conditions are not yet frozen."
   ],
   "terminology": [
     "ADR",
