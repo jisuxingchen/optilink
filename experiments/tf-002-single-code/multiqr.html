@@ -58,6 +58,7 @@
       <pre id="receiverStatus" class="status">camera not started</pre>
     </section>
   </main>
+  <script>document.body.dataset.role = new URLSearchParams(location.search).get('role') || 'both';</script>
   <script type="module" src="/src/multiqr-main.ts"></script>
 </body>
 </html>
