@@ -9,7 +9,8 @@ const execFileAsync = promisify(execFile);
 const port = Number(process.env.PORT || 5173);
 const host = process.env.HOST || '0.0.0.0';
 const labToken = process.env.OPTILINK_LAB_TOKEN || '';
-const labMode = process.env.OPTILINK_LAB_PAGE === 'fountain' ? 'fountain' : 'baseline';
+const requestedPage = process.env.OPTILINK_LAB_PAGE || 'baseline';
+const labMode = requestedPage === 'multiqr' ? 'multiqr' : requestedPage === 'fountain' ? 'fountain' : 'baseline';
 const labInstanceId = process.env.OPTILINK_LAB_INSTANCE_ID || '';
 const clients = new Map();
 let latestRun = null;
@@ -42,7 +43,9 @@ function maybeSetAuthCookie(req, res) {
 }
 
 function htmlEntryForPath(pathname) {
-  return pathname === '/fountain.html' ? 'fountain.html' : 'index.html';
+  if (pathname === '/multiqr.html') return 'multiqr.html';
+  if (pathname === '/fountain.html') return 'fountain.html';
+  return 'index.html';
 }
 
 async function serveHtml(req, res, pathname) {
@@ -70,7 +73,7 @@ const server = createServer((req, res) => {
     res.setHeader('cache-control', 'no-store');
     res.end(JSON.stringify({
       status: 'OK',
-      service: 'optilink-tf-002-lab',
+      service: 'optilink-auto-lab',
       port,
       protected: Boolean(labToken),
       mode: labMode,
@@ -123,8 +126,10 @@ function resultSummaryLines(run) {
   const receiverLabel = run.receiver?.configuredDevice || run.receiver?.device || 'moto razr 40 ultra';
   const receiverUa = run.receiver?.userAgent || 'n/a';
   const fountain = run.kind === 'benchmark-1mib-fountain';
+  const multiQr = run.kind === 'benchmark-1mib-4qr-fountain';
+  const heading = multiQr ? 'TF-003 4QR + Fountain' : fountain ? 'TF-002B Fountain' : 'TF-002';
   const common = [
-    `## ${fountain ? 'TF-002B Fountain' : 'TF-002'} automated lab result`, '',
+    `## ${heading} automated lab result`, '',
     `- Time: ${run.finishedAt || new Date().toISOString()}`,
     `- Kind: ${run.kind || 'legacy-calibration'}`,
     `- Evidence class: ${run.evidenceClass || 'legacy-functional-validation'}`,
@@ -132,6 +137,31 @@ function resultSummaryLines(run) {
     `- Receiver UA (captured on receiver page): ${receiverUa}`,
     `- Status: ${run.status}`,
   ];
+
+  if (multiQr) {
+    const result = run.result || {};
+    const config = run.config || {};
+    const display = run.displayBaseline || {};
+    const perRegion = Array.isArray(result.perRegion)
+      ? result.perRegion.map((metric, index) => `R${index + 1}: decoded ${metric.decoded ?? 0}, accepted ${metric.accepted ?? 0}`).join(' · ')
+      : 'n/a';
+    return common.concat([
+      `- Physical display refresh: ${display.physicalRefreshHz ?? run.sender?.physicalDisplayRefreshHz ?? 'n/a'} Hz`,
+      `- OptiLink visual update: ${display.targetOpticalVisualUpdateHz ?? config.targetHz ?? 'n/a'} Hz`,
+      `- Carrier: ${config.carrier ?? 'four-standard-qr'} · ${config.layout ?? '2x2-known-grid'} · ${config.blockSize ?? 'n/a'} B/source symbol · ${config.qrSize ?? 'n/a'} px each · ECC ${config.ecc ?? 'n/a'}`,
+      `- Theoretical gross payload ceiling: ${run.theoreticalGrossPayloadBytesPerSecond ?? 'n/a'} B/s`,
+      `- Payload: ${run.payload?.bytes ?? 'n/a'} bytes deterministic incompressible`,
+      `- Source blocks solved: ${result.solvedSourceBlocks ?? 'n/a'} / ${result.totalSourceBlocks ?? 'n/a'} (${Number.isFinite(result.completionRatio) ? (result.completionRatio * 100).toFixed(2) : 'n/a'}%)`,
+      `- Fountain symbols: accepted ${result.acceptedSymbols ?? 'n/a'} / displayed ${result.displayedSymbols ?? 'n/a'} · duplicate ${result.duplicateSymbolDecodes ?? 'n/a'} · redundant ${result.redundantSymbols ?? 'n/a'}`,
+      `- Known-grid scan: ${Number.isFinite(result.scanRoundsPerSecond) ? result.scanRoundsPerSecond.toFixed(2) : 'n/a'} rounds/s · ${perRegion}`,
+      `- Pending equations at finish: ${result.pendingEquations ?? 'n/a'}`,
+      `- SHA-256: ${result.hashOk ? 'PASS' : 'not verified'}`,
+      `- Sender-observed elapsed: ${Number.isFinite(result.senderObservedElapsedSeconds) ? result.senderObservedElapsedSeconds.toFixed(3) : 'n/a'} s`,
+      `- Lab end-to-end goodput: ${Number.isFinite(result.labEndToEndGoodputBytesPerSecond) ? result.labEndToEndGoodputBytesPerSecond.toFixed(2) : 'n/a'} B/s`,
+      `- Receiver-reported goodput: ${Number.isFinite(result.receiverReportedGoodputBytesPerSecond) ? result.receiverReportedGoodputBytesPerSecond.toFixed(2) : 'n/a'} B/s`,
+      `- Invalid/foreign: ${result.invalid ?? 'n/a'} · pre-manifest ignored: ${result.ignoredBeforeManifest ?? 'n/a'}`,
+    ]);
+  }
 
   if (fountain) {
     const result = run.result || {};
@@ -184,7 +214,7 @@ function resultSummaryLines(run) {
 async function tryPublishIssue(run) {
   if (process.env.OPTILINK_PUBLISH_GITHUB !== '1') return {published: false, reason: 'disabled'};
   const body = [...resultSummaryLines(run), '', '<details><summary>Machine-readable summary</summary>', '', '```json', JSON.stringify(run, null, 2).slice(0, 50000), '```', '</details>'].join('\n');
-  const issueNumber = run.kind === 'benchmark-1mib-fountain' ? '13' : '9';
+  const issueNumber = run.kind === 'benchmark-1mib-4qr-fountain' ? '10' : run.kind === 'benchmark-1mib-fountain' ? '13' : '9';
   try {
     await writeFile('results/issue-comment.md', body);
     await execFileAsync('gh', ['issue', 'comment', issueNumber, '--repo', 'jisuxingchen/optilink', '--body-file', 'results/issue-comment.md']);
@@ -227,12 +257,12 @@ wss.on('connection', (ws, req) => {
 });
 
 server.listen(port, host, () => {
-  console.log(`OptiLink TF-002 lab coordinator listening on http://${host}:${port}`);
+  console.log(`OptiLink Auto Lab coordinator listening on http://${host}:${port}`);
   console.log(`Lab mode: ${labMode}${labInstanceId ? ` · instance ${labInstanceId}` : ''}`);
   console.log(`Lab control protection: ${labToken ? 'token enabled' : 'disabled'}`);
   console.log('Health URL:   /api/lab/health');
-  console.log('Receiver URL: ?role=receiver');
-  console.log('Sender URL:   ?role=sender');
+  console.log('Baseline:     /?role=sender|receiver');
   console.log('Fountain:     /fountain.html?role=sender|receiver');
+  console.log('4QR:          /multiqr.html?role=sender|receiver');
   console.log('Latest result endpoint: /api/lab/latest');
 });
