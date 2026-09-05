@@ -9,6 +9,7 @@ required = [
     "docs/SCENARIO_LIBRARY.md",
     "docs/BENCHMARK_SPEC.md",
     "docs/COMPETITIVE_LANDSCAPE.md",
+    "docs/G1_DECISION_PACKET.md",
     "docs/PRODUCT_REQUIREMENTS.md",
     "docs/TECHNICAL_OPTIONS.md",
     "docs/GLOSSARY.md",
@@ -102,6 +103,11 @@ competitive = (ROOT / "docs/COMPETITIVE_LANDSCAPE.md").read_text(encoding="utf-8
 for marker in ["prior art", "third-party self-reported", "licens", "enterprise/industrial"]:
     if marker.lower() not in competitive.lower():
         raise SystemExit(f"Competitive landscape missing marker: {marker}")
+
+g1 = (ROOT / "docs/G1_DECISION_PACKET.md").read_text(encoding="utf-8")
+for marker in ["G1-D1", "G1-D2", "G1-D3", "G1-D4", "G1-D5", "G1-D6", "G1-D7", "NOT APPROVED", "Android"]:
+    if marker.lower() not in g1.lower():
+        raise SystemExit(f"G1 decision packet missing marker: {marker}")
 
 html = (ROOT / "dashboard/index.html").read_text(encoding="utf-8")
 for marker in ["./data/status.json", "Owner Review Center", "Roadmap Forecast", "GitHub Actions"]:
