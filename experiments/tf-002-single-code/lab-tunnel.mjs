@@ -1,4 +1,4 @@
-import {spawn} from 'node:child_process';
+import {spawn, execFileSync} from 'node:child_process';
 import {createWriteStream} from 'node:fs';
 import {access, chmod, mkdir} from 'node:fs/promises';
 import {homedir} from 'node:os';
@@ -33,6 +33,17 @@ async function ensureCloudflared() {
   return binary;
 }
 
+function cleanupStaleAutoLabProcesses() {
+  if (process.platform !== 'linux') return;
+  const commands = [
+    ['pkill', ['-f', 'node .*lab-server\\.mjs']],
+    ['pkill', ['-f', 'cloudflared .*tunnel .*--url http://127\\.0\\.0\\.1:']],
+  ];
+  for (const [command, args] of commands) {
+    try { execFileSync(command, args, {stdio: 'ignore'}); } catch {}
+  }
+}
+
 function portAvailable(port) {
   return new Promise(resolve => {
     const probe = createNetServer();
@@ -57,6 +68,9 @@ async function choosePort() {
   throw new Error(`No free local lab port found in ${start}-${start + 19}`);
 }
 
+console.log('Stopping stale OptiLink Auto Lab server/tunnel processes from earlier runs ...');
+cleanupStaleAutoLabProcesses();
+await new Promise(resolve => setTimeout(resolve, 350));
 const port = await choosePort();
 
 function waitForLocalHealth() {
@@ -110,14 +124,15 @@ function inspectTunnelOutput(text) {
   if (!match) return;
   printed = true;
   const basePath = page === 'fountain' ? '/fountain.html' : '/';
-  const sender = `${match}${basePath}?role=sender&token=${token}`;
-  const receiver = `${match}${basePath}?role=receiver&token=${token}`;
+  const sender = `${match}${basePath}?role=sender&token=${token}&run=${instanceId}`;
+  const receiver = `${match}${basePath}?role=receiver&token=${token}&run=${instanceId}`;
   console.log('\n============================================================');
   console.log(page === 'fountain' ? 'OptiLink Fountain Auto Lab is ready' : 'OptiLink Auto Lab is ready');
   console.log(`Mode     : ${page} · instance ${instanceId} · local port ${port}`);
   console.log(`Sender   : ${sender}`);
   console.log(`Receiver : ${receiver}`);
   console.log(`Health   : ${match}/api/lab/health`);
+  console.log('IMPORTANT: use ONLY the two fresh URLs above; earlier lab URLs have been stopped.');
   console.log('Keep this terminal running during the physical test.');
   console.log('The URL is temporary; lab control is protected by a random token.');
   console.log('============================================================\n');
