@@ -7,10 +7,43 @@ import {createServer as createViteServer} from 'vite';
 
 const execFileAsync = promisify(execFile);
 const port = Number(process.env.PORT || 5173);
-const host = '0.0.0.0';
+const host = process.env.HOST || '0.0.0.0';
+const labToken = process.env.OPTILINK_LAB_TOKEN || '';
 const clients = new Map();
 let latestRun = null;
 let vite;
+
+function parseCookies(req) {
+  const result = new Map();
+  for (const part of String(req.headers.cookie || '').split(';')) {
+    const index = part.indexOf('=');
+    if (index < 0) continue;
+    result.set(part.slice(0, index).trim(), decodeURIComponent(part.slice(index + 1).trim()));
+  }
+  return result;
+}
+
+function tokenFromUrl(req) {
+  try {
+    return new URL(req.url || '/', 'http://localhost').searchParams.get('token') || '';
+  } catch {
+    return '';
+  }
+}
+
+function requestAuthorized(req) {
+  if (!labToken) return true;
+  if (tokenFromUrl(req) === labToken) return true;
+  return parseCookies(req).get('optilink_lab_token') === labToken;
+}
+
+function maybeSetAuthCookie(req, res) {
+  if (!labToken || tokenFromUrl(req) !== labToken) return;
+  res.setHeader(
+    'set-cookie',
+    `optilink_lab_token=${encodeURIComponent(labToken)}; Path=/; HttpOnly; Secure; SameSite=Strict`,
+  );
+}
 
 async function serveIndex(req, res) {
   try {
@@ -35,9 +68,19 @@ const server = createServer((req, res) => {
   if (pathname === '/api/lab/health') {
     res.setHeader('content-type', 'application/json; charset=utf-8');
     res.setHeader('cache-control', 'no-store');
-    res.end(JSON.stringify({status: 'OK', service: 'optilink-tf-002-lab', port}, null, 2));
+    res.end(JSON.stringify({status: 'OK', service: 'optilink-tf-002-lab', port, protected: Boolean(labToken)}, null, 2));
     return;
   }
+
+  if (!requestAuthorized(req)) {
+    res.statusCode = 401;
+    res.setHeader('content-type', 'text/plain; charset=utf-8');
+    res.setHeader('cache-control', 'no-store');
+    res.end('OptiLink lab token required');
+    return;
+  }
+
+  maybeSetAuthCookie(req, res);
 
   if (pathname === '/api/lab/latest') {
     res.setHeader('content-type', 'application/json; charset=utf-8');
@@ -52,20 +95,14 @@ const server = createServer((req, res) => {
     return;
   }
 
-  // Let Vite handle module requests and static assets first. In middleware mode,
-  // HTML fallback is not reliable enough for this custom HTTP server, so when
-  // Vite calls next() we explicitly transform and serve index.html ourselves.
   vite.middlewares(req, res, () => void serveIndex(req, res));
 });
 
-// Codespaces exposes the lab through https://<codespace>-5173.app.github.dev.
-// The lab uses one custom HTTP/WebSocket server, so Vite HMR is intentionally
-// disabled. This prevents the extra random forwarded HMR port seen in Codespaces.
 vite = await createViteServer({
   server: {
     middlewareMode: true,
     hmr: false,
-    allowedHosts: ['.app.github.dev', 'localhost', '127.0.0.1'],
+    allowedHosts: ['.app.github.dev', '.trycloudflare.com', 'localhost', '127.0.0.1'],
   },
   appType: 'custom',
 });
@@ -117,7 +154,12 @@ async function tryPublishIssue(run) {
   }
 }
 
-wss.on('connection', ws => {
+wss.on('connection', (ws, req) => {
+  if (!requestAuthorized(req)) {
+    ws.close(1008, 'OptiLink lab token required');
+    return;
+  }
+
   clients.set(ws, {role: 'unknown'});
   safeSend(ws, {type: 'server', event: 'connected'});
 
@@ -149,6 +191,7 @@ wss.on('connection', ws => {
 
 server.listen(port, host, () => {
   console.log(`OptiLink TF-002 lab coordinator listening on http://${host}:${port}`);
+  console.log(`Lab control protection: ${labToken ? 'token enabled' : 'disabled'}`);
   console.log('Health URL:   /api/lab/health');
   console.log('Receiver URL: ?role=receiver');
   console.log('Sender URL:   ?role=sender');
