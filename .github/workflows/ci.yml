@@ -39,3 +39,27 @@ jobs:
         with:
           name: optilink-dashboard-${{ github.sha }}
           path: _site
+
+  tf-002-web-spike:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: experiments/tf-002-single-code
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install pinned spike dependencies
+        run: npm install --no-audit --no-fund
+      - name: Protocol tests
+        run: npm test
+      - name: Typecheck and build browser spike
+        run: npm run build
+      - name: Upload TF-002 static build
+        uses: actions/upload-artifact@v4
+        with:
+          name: optilink-tf-002-${{ github.sha }}
+          path: experiments/tf-002-single-code/dist
