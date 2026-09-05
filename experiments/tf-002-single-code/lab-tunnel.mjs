@@ -4,12 +4,13 @@ import {access, chmod, mkdir} from 'node:fs/promises';
 import {homedir} from 'node:os';
 import {join} from 'node:path';
 import {randomBytes} from 'node:crypto';
+import {createServer as createNetServer} from 'node:net';
 import {pipeline} from 'node:stream/promises';
 import {Readable} from 'node:stream';
 
-const port = Number(process.env.PORT || 8080);
 const token = process.env.OPTILINK_LAB_TOKEN || randomBytes(18).toString('hex');
 const page = process.env.OPTILINK_LAB_PAGE === 'fountain' ? 'fountain' : 'baseline';
+const instanceId = randomBytes(8).toString('hex');
 const cacheDir = join(homedir(), '.cache', 'optilink');
 const binary = join(cacheDir, 'cloudflared');
 
@@ -32,15 +33,44 @@ async function ensureCloudflared() {
   return binary;
 }
 
+function portAvailable(port) {
+  return new Promise(resolve => {
+    const probe = createNetServer();
+    probe.once('error', () => resolve(false));
+    probe.once('listening', () => probe.close(() => resolve(true)));
+    probe.listen(port, '127.0.0.1');
+  });
+}
+
+async function choosePort() {
+  if (process.env.PORT) {
+    const explicit = Number(process.env.PORT);
+    if (!Number.isInteger(explicit) || explicit < 1 || explicit > 65535) throw new Error(`Invalid PORT: ${process.env.PORT}`);
+    if (!await portAvailable(explicit)) throw new Error(`Requested PORT ${explicit} is already in use; stop the old lab or omit PORT so Auto Lab can choose a free port.`);
+    return explicit;
+  }
+
+  const start = page === 'fountain' ? 8081 : 8080;
+  for (let port = start; port < start + 20; port += 1) {
+    if (await portAvailable(port)) return port;
+  }
+  throw new Error(`No free local lab port found in ${start}-${start + 19}`);
+}
+
+const port = await choosePort();
+
 function waitForLocalHealth() {
   return new Promise((resolve, reject) => {
     const deadline = Date.now() + 15000;
     const check = async () => {
       try {
         const response = await fetch(`http://127.0.0.1:${port}/api/lab/health`);
-        if (response.ok) return resolve();
+        if (response.ok) {
+          const health = await response.json();
+          if (health.status === 'OK' && health.mode === page && health.instanceId === instanceId) return resolve();
+        }
       } catch {}
-      if (Date.now() > deadline) return reject(new Error('Local lab health check timed out'));
+      if (Date.now() > deadline) return reject(new Error(`Local ${page} lab health check timed out; expected instance ${instanceId} on port ${port}`));
       setTimeout(check, 250);
     };
     void check();
@@ -50,7 +80,15 @@ function waitForLocalHealth() {
 const cloudflared = await ensureCloudflared();
 const lab = spawn(process.execPath, ['lab-server.mjs'], {
   stdio: ['inherit', 'pipe', 'pipe'],
-  env: {...process.env, PORT: String(port), HOST: '127.0.0.1', OPTILINK_LAB_TOKEN: token, OPTILINK_PUBLISH_GITHUB: process.env.OPTILINK_PUBLISH_GITHUB ?? '1'},
+  env: {
+    ...process.env,
+    PORT: String(port),
+    HOST: '127.0.0.1',
+    OPTILINK_LAB_TOKEN: token,
+    OPTILINK_LAB_PAGE: page,
+    OPTILINK_LAB_INSTANCE_ID: instanceId,
+    OPTILINK_PUBLISH_GITHUB: process.env.OPTILINK_PUBLISH_GITHUB ?? '1',
+  },
 });
 
 lab.stdout.on('data', chunk => process.stdout.write(`[lab] ${chunk}`));
@@ -58,7 +96,7 @@ lab.stderr.on('data', chunk => process.stderr.write(`[lab] ${chunk}`));
 lab.on('exit', code => { if (code && code !== 0) console.error(`Lab server exited with code ${code}`); });
 
 await waitForLocalHealth();
-console.log(`Local lab healthy on 127.0.0.1:${port}`);
+console.log(`Local ${page} lab healthy on 127.0.0.1:${port} · instance ${instanceId}`);
 console.log(`Starting temporary HTTPS tunnel for ${page} mode ...`);
 
 const tunnel = spawn(cloudflared, ['tunnel', '--no-autoupdate', '--url', `http://127.0.0.1:${port}`], {stdio: ['inherit', 'pipe', 'pipe']});
@@ -76,6 +114,7 @@ function inspectTunnelOutput(text) {
   const receiver = `${match}${basePath}?role=receiver&token=${token}`;
   console.log('\n============================================================');
   console.log(page === 'fountain' ? 'OptiLink Fountain Auto Lab is ready' : 'OptiLink Auto Lab is ready');
+  console.log(`Mode     : ${page} · instance ${instanceId} · local port ${port}`);
   console.log(`Sender   : ${sender}`);
   console.log(`Receiver : ${receiver}`);
   console.log(`Health   : ${match}/api/lab/health`);
