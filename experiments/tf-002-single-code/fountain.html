@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OptiLink TF-002B Fountain Benchmark</title>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div>
+        <p class="eyebrow">OptiLink · TF-002B</p>
+        <h1>Fountain / rateless single-QR benchmark</h1>
+        <p class="lede">保持 60 Hz 物理屏幕、24 Hz OptiLink 更新和单黑白 QR 不变，只替换传输恢复算法。</p>
+      </div>
+      <div class="badge">FOUNTAIN EXPERIMENT</div>
+    </header>
+
+    <section class="notice">
+      <strong>Fixed comparison:</strong> 1 MiB deterministic incompressible · 300 B source block · 560 px · 24 Hz · ECC L · physical display 60 Hz.
+      <br />
+      <strong>Validity:</strong> 只有完整重建并通过 SHA-256 才记为 PASS；网络仍只用于实验控制和遥测，payload 只走屏幕 → 摄像头。
+    </section>
+
+    <section class="lab-panel">
+      <div>
+        <p class="eyebrow">ONE-CLICK PHYSICAL TEST</p>
+        <h2 id="roleTitle">正在识别角色…</h2>
+        <p id="roleText"></p>
+      </div>
+      <div class="lab-actions">
+        <button id="startButton" class="primary" type="button">Start Fountain benchmark</button>
+        <button id="stopButton" type="button" disabled>Stop</button>
+      </div>
+      <pre id="labStatus" class="status lab-status">connecting…</pre>
+    </section>
+
+    <section id="senderView" class="panel">
+      <div class="panel-head"><div><span class="step">A</span><h2>Sender / Fountain symbols</h2></div><span>Computer · 60 Hz display</span></div>
+      <div class="qr-stage"><canvas id="qrCanvas" width="560" height="560"></canvas></div>
+      <pre id="senderStatus" class="status">waiting for phone…</pre>
+    </section>
+
+    <section id="receiverView" class="panel">
+      <div class="panel-head"><div><span class="step">B</span><h2>Receiver / Peeling decoder</h2></div><span>moto razr 40 ultra</span></div>
+      <div class="camera-stage"><video id="camera" muted playsinline></video><div class="reticle"></div></div>
+      <pre id="receiverStatus" class="status">camera not started</pre>
+    </section>
+  </main>
+  <script type="module" src="/src/fountain-main.ts"></script>
+</body>
+</html>
