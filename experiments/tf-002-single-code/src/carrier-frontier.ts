@@ -1,4 +1,4 @@
-import {affineFromTriangles, homographyFromUnitSquare, mapHomography, type Homography, type Point, type Quad} from './optigrid-geometry.ts';
+import {affineFromTriangles, homographyFromUnitSquare, mapHomography, type Point, type Quad} from './optigrid-geometry.ts';
 import {
   decodeFrameCellsV1,
   encodeFrameCellsV1,
@@ -81,6 +81,7 @@ type CandidateResult = {
   acquisitionP95Ms: number;
   trackingValidationP95Ms: number;
   fastDecodeP95Ms: number;
+  sustainedDecodeP95Ms: number;
   senderRenderP95Ms: number;
   channelP95Ms: number;
   sustainedReceiverCapacityHz: number;
@@ -107,6 +108,7 @@ type RankingRow = {
   worstProjectedIngress: number;
   worstEstimatedOneMiBGoodput: number;
   worstFastDecodeP95Ms: number;
+  worstSustainedDecodeP95Ms: number;
   maxReacquisitions: number;
   scenarios: ScenarioName[];
   selectionScore: number;
@@ -584,7 +586,7 @@ function decodeTrackedPixelOnly(image: ImageData, matrixSize: number, state: Dec
   // It never receives sender payload bytes, sender cells, sequence metadata, or sender frame objects.
   let acquisitionMs: number | null = null;
   let reacquired = false;
-  let validation = state.lock ? validateLock(image, state.lock) : null;
+  let validation: {score: number; contrast: number; threshold: number} | null = null;
   const trackingValidationStarted = performance.now();
   if (state.lock) validation = validateLock(image, state.lock);
   const trackingValidationMs = performance.now() - trackingValidationStarted;
@@ -745,9 +747,12 @@ async function runCandidate(candidateConfig: Candidate, candidateIndex: number, 
   const acquisitionP95Ms = percentile(acquisitionTimes, 0.95);
   const trackingValidationP95Ms = percentile(trackingValidationTimes, 0.95);
   const fastDecodeP95Ms = percentile(fastDecodeTimes, 0.95);
+  // Sustained capacity must include both the tracking guard and the actual data-cell decode.
+  // Acquisition is a startup/recovery cost and is accounted for separately in the 1 MiB estimate.
+  const sustainedDecodeP95Ms = trackingValidationP95Ms + fastDecodeP95Ms;
   const senderRenderP95Ms = percentile(renderTimes, 0.95);
   const channelP95Ms = percentile(channelTimes, 0.95);
-  const sustainedReceiverCapacityHz = fastDecodeP95Ms > 0 ? 1000 / fastDecodeP95Ms : 0;
+  const sustainedReceiverCapacityHz = sustainedDecodeP95Ms > 0 ? 1000 / sustainedDecodeP95Ms : 0;
   const senderCapacityHz = senderRenderP95Ms > 0 ? 1000 / senderRenderP95Ms : candidateConfig.targetHz;
   const projectedEffectiveHz = Math.min(candidateConfig.targetHz, candidateConfig.cameraHz, senderCapacityHz, sustainedReceiverCapacityHz) * validRatio;
   const projectedPixelSimIngressBytesPerSecond = candidateConfig.payloadBytes * projectedEffectiveHz;
@@ -774,6 +779,7 @@ async function runCandidate(candidateConfig: Candidate, candidateIndex: number, 
     acquisitionP95Ms,
     trackingValidationP95Ms,
     fastDecodeP95Ms,
+    sustainedDecodeP95Ms,
     senderRenderP95Ms,
     channelP95Ms,
     sustainedReceiverCapacityHz,
@@ -810,6 +816,7 @@ function rankRows(rows: CandidateResult[]): RankingRow[] {
     const worstProjectedIngress = Math.min(...items.map(item => item.projectedPixelSimIngressBytesPerSecond));
     const worstEstimatedOneMiBGoodput = Math.min(...items.map(item => item.estimatedOneMiBGoodputBytesPerSecond));
     const worstFastDecodeP95Ms = Math.max(...items.map(item => item.fastDecodeP95Ms));
+    const worstSustainedDecodeP95Ms = Math.max(...items.map(item => item.sustainedDecodeP95Ms));
     const maxReacquisitions = Math.max(...items.map(item => item.reacquisitionCount));
     const scenarios = items.map(item => item.scenario);
     ranking.push({
@@ -823,6 +830,7 @@ function rankRows(rows: CandidateResult[]): RankingRow[] {
       worstProjectedIngress,
       worstEstimatedOneMiBGoodput,
       worstFastDecodeP95Ms,
+      worstSustainedDecodeP95Ms,
       maxReacquisitions,
       scenarios,
       selectionScore: worstEstimatedOneMiBGoodput * minValidRatio,
@@ -845,7 +853,7 @@ function appendRow(row: CandidateResult): void {
     `<td>${row.validFrames}/${row.attemptedFrames} (${(row.validRatio * 100).toFixed(0)}%)</td>`,
     `<td>${row.payloadBytesPerFrame}</td>`,
     `<td>${row.acquisitionP95Ms.toFixed(1)} ms</td>`,
-    `<td>${row.fastDecodeP95Ms.toFixed(2)} ms</td>`,
+    `<td>${row.sustainedDecodeP95Ms.toFixed(2)} ms</td>`,
     `<td>${row.sustainedReceiverCapacityHz.toFixed(1)}</td>`,
     `<td>${formatRate(row.projectedPixelSimIngressBytesPerSecond)}</td>`,
     `<td>${row.reacquisitionCount}</td>`,
@@ -867,7 +875,7 @@ function renderSummary(ranking: RankingRow[]): void {
     '',
     ...top.map((item, index) => [
       `#${index + 1} OptiGrid v1 ${item.matrixSize}×${item.matrixSize} · render ${item.renderPixels}px · target ${item.targetHz} Hz`,
-      `payload ${item.payloadBytesPerFrame} B/f · worst valid ${(item.minValidRatio * 100).toFixed(1)}% · worst fast p95 ${item.worstFastDecodeP95Ms.toFixed(2)} ms`,
+      `payload ${item.payloadBytesPerFrame} B/f · worst valid ${(item.minValidRatio * 100).toFixed(1)}% · worst tracked p95 ${item.worstSustainedDecodeP95Ms.toFixed(2)} ms`,
       `worst sustained ingress ${formatRate(item.worstProjectedIngress)} · estimated 1 MiB goodput ${formatRate(item.worstEstimatedOneMiBGoodput)} · max reacq ${item.maxReacquisitions}`,
       `100 KB/s margin ${(item.worstEstimatedOneMiBGoodput / TARGET_BYTES_PER_SECOND).toFixed(2)}×`,
     ].join('\n')),
