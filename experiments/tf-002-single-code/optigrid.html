@@ -26,7 +26,7 @@
     </header>
 
     <section class="notice">
-      <strong>自动扫描：</strong>64 → 80 → 96 → 120 → 160 cells；每档约 7 秒，固定 60 Hz 物理屏幕与 24 Hz OptiLink 更新。
+      <strong>自动扫描：</strong>点击一次 Start 后先进入 8 秒相机对齐预检，再自动测试 64 → 80 → 96 → 120 → 160 cells；每档约 7 秒，固定 60 Hz 物理屏幕与 24 Hz OptiLink 更新。
       <br />
       <strong>边界：</strong>WebSocket 只传控制参数和遥测；每帧 payload 仍只经屏幕 → 摄像头。此阶段是 carrier calibration，不是正式离线验收。
     </section>
@@ -47,15 +47,16 @@
     <section id="senderView" class="panel">
       <div class="panel-head"><div><span class="step">A</span><h2>Sender / direct binary matrix</h2></div><span>Computer · 60 Hz display</span></div>
       <div class="optigrid-stage"><canvas id="gridCanvas" width="960" height="960"></canvas></div>
-      <pre id="senderStatus" class="status">waiting for phone…</pre>
+      <pre id="senderStatus" class="status">alignment pattern ready · waiting for phone…</pre>
     </section>
 
     <section id="receiverView" class="panel">
       <div class="panel-head"><div><span class="step">B</span><h2>Receiver / direct cell sampler</h2></div><span>moto razr 40 ultra</span></div>
       <div class="optigrid-camera"><video id="camera" muted playsinline></video><div class="grid-reticle"></div></div>
-      <pre id="receiverStatus" class="status">camera not started</pre>
+      <pre id="receiverStatus" class="status">camera not started · click Start once; alignment happens before data collection</pre>
     </section>
   </main>
   <script type="module" src="/src/optigrid-main.ts"></script>
+  <script type="module" src="/src/optigrid-preflight.ts"></script>
 </body>
 </html>
