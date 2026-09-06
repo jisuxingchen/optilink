@@ -61,7 +61,8 @@ jobs:
           npm run build
           test -s dist/carrier-bench.html
           test -s dist/carrier-frontier.html
-      - name: Install headless Chromium for TF-005
+          test -s dist/tiled-carrier.html
+      - name: Install headless Chromium
         run: |
           npx playwright install --with-deps chromium >/tmp/playwright-install.log 2>&1 || {
             cat /tmp/playwright-install.log
@@ -69,6 +70,8 @@ jobs:
           }
       - name: Run TF-005 pixel-isolated carrier bench and tracking frontier
         run: npm run bench:headless
+      - name: Run TF-007 full-frame tiled pixel bench
+        run: npm run bench:tiled
       - name: Validate lab coordinator and tunnel launcher syntax
         run: |
           node --check lab-server.mjs
@@ -108,12 +111,14 @@ jobs:
           curl --fail --silent --cookie /tmp/lab-cookie.txt 'http://127.0.0.1:5180/fountain.html?role=sender' | grep -q 'Fountain / rateless single-QR benchmark'
           curl --fail --silent --cookie /tmp/lab-cookie.txt 'http://127.0.0.1:5180/optigrid.html?role=sender' | grep -q 'OptiGrid v0 · dense monochrome carrier calibration'
           curl --fail --silent --cookie /tmp/lab-cookie.txt 'http://127.0.0.1:5180/api/lab/latest' | grep -q 'NO_RUN'
-      - name: Upload TF-005 carrier and frontier results
+      - name: Upload TF-005 and TF-007 carrier results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: optilink-carrier-bench-${{ github.sha }}
-          path: experiments/tf-002-single-code/results/carrier-*.json
+          path: |
+            experiments/tf-002-single-code/results/carrier-*.json
+            experiments/tf-002-single-code/results/tiled-carrier-*.json
           if-no-files-found: warn
       - name: Upload browser spike build
         if: always()
