@@ -12,5 +12,6 @@
     "strict": true,
     "skipLibCheck": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/tiled-physical-v3-main.ts"]
 }
