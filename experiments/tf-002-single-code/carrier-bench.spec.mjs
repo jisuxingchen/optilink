@@ -39,6 +39,7 @@ function assertFrontierIsolation(result) {
   expect(result.isolation.senderFrameObjectsPassedToReceiver).toBe(false);
   expect(result.isolation.geometryStateDerivedFromReceiverPixelsOnly).toBe(true);
   expect(result.pipeline).toBe('acquisition -> tracking -> fast decode');
+  expect(result.sampling).toBe('subpixel bilinear 5-point majority');
 }
 
 function bestRatio(result, carrier, scenario) {
@@ -51,7 +52,14 @@ test('TF-005 quick bench preserves pixel isolation and finds a stable custom car
   const result = await collect(page, 'quick');
   assertIsolation(result);
 
+  // Standard QR is a calibration baseline, not the TF-005 winner. The pixel
+  // channel intentionally includes rasterization/resampling, so it only needs
+  // to remain measurably decodable rather than artificially perfect.
   expect(bestRatio(result, 'standard-qr', 'clean'), 'QR baseline should remain decodable from camera pixels').toBeGreaterThanOrEqual(0.5);
+
+  // Custom-carrier development is allowed to proceed only when a candidate is
+  // deterministic in the clean channel. v1 must also survive the mild channel
+  // before it can be selected for a future physical test.
   expect(bestRatio(result, 'optigrid-v0', 'clean'), 'v0 must have at least one deterministic clean configuration').toBeGreaterThanOrEqual(0.99);
   expect(bestRatio(result, 'optigrid-v1', 'clean'), 'v1 must have at least one deterministic clean configuration').toBeGreaterThanOrEqual(0.99);
   expect(bestRatio(result, 'optigrid-v1', 'mild'), 'v1 must survive the mild pixel channel').toBeGreaterThanOrEqual(0.99);
@@ -83,4 +91,14 @@ test('TF-005 frontier sweep maps 120-240 and 24-60 Hz before phone testing', asy
   expect(result.rows.some(row => row.targetHz === 60), 'frontier must include 60 Hz').toBe(true);
   expect(result.rows.some(row => row.renderPixels === 720) && result.rows.some(row => row.renderPixels === 960), 'frontier must compare sender raster sizes').toBe(true);
   expect(result.rows.some(row => row.validRatio >= 0.99 && row.trackedFrames >= 4), 'frontier must retain at least one stable tracked point').toBe(true);
+});
+
+test('TF-005 high-density soak keeps robust >100 KB/s pixel-sim candidates stable', async ({page}) => {
+  const result = await collectFrontier(page, 'soak');
+  assertFrontierIsolation(result);
+  expect(result.rows.length, 'soak must cover 160/200/240 across clean/mild/stress').toBe(9);
+  expect(result.rows.every(row => row.attemptedFrames === 48), 'every soak row must exercise 48 independently-seeded frames').toBe(true);
+  expect(result.rows.reduce((sum, row) => sum + row.oracleMismatches, 0), 'soak must never silently decode wrong payload').toBe(0);
+  expect(result.stableAtOrAbove100KBps.some(row => row.matrixSize === 160 && row.targetHz === 60), '160x160 @60 must retain >100 KB/s simulated margin through soak').toBe(true);
+  expect(result.stableAtOrAbove100KBps.some(row => row.matrixSize === 200 && row.targetHz === 60), '200x200 @60 must retain >100 KB/s simulated margin through soak').toBe(true);
 });
