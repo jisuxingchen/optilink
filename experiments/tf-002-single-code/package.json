@@ -8,8 +8,9 @@
     "lab": "node lab-server.mjs",
     "lab:tunnel": "node lab-tunnel.mjs",
     "lab:tunnel:fountain": "OPTILINK_LAB_PAGE=fountain node lab-tunnel.mjs",
+    "lab:tunnel:optigrid": "OPTILINK_LAB_PAGE=optigrid node lab-tunnel.mjs",
     "build": "tsc --noEmit && vite build",
-    "test": "node --test src/protocol.test.ts"
+    "test": "node --test src/*.test.ts"
   },
   "dependencies": {
     "@zxing/browser": "0.2.1",

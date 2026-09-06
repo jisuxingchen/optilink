@@ -9,7 +9,8 @@ import {pipeline} from 'node:stream/promises';
 import {Readable} from 'node:stream';
 
 const token = process.env.OPTILINK_LAB_TOKEN || randomBytes(18).toString('hex');
-const page = process.env.OPTILINK_LAB_PAGE === 'fountain' ? 'fountain' : 'baseline';
+const requestedPage = process.env.OPTILINK_LAB_PAGE || 'baseline';
+const page = ['baseline', 'fountain', 'optigrid'].includes(requestedPage) ? requestedPage : 'baseline';
 const instanceId = randomBytes(8).toString('hex');
 const cacheDir = join(homedir(), '.cache', 'optilink');
 const binary = join(cacheDir, 'cloudflared');
@@ -60,12 +61,27 @@ async function choosePort() {
     if (!await portAvailable(explicit)) throw new Error(`Requested PORT ${explicit} is already in use; stop the old lab or omit PORT so Auto Lab can choose a free port.`);
     return explicit;
   }
-
-  const start = page === 'fountain' ? 8081 : 8080;
-  for (let port = start; port < start + 20; port += 1) {
-    if (await portAvailable(port)) return port;
-  }
+  const start = page === 'optigrid' ? 8083 : page === 'fountain' ? 8081 : 8080;
+  for (let port = start; port < start + 20; port += 1) if (await portAvailable(port)) return port;
   throw new Error(`No free local lab port found in ${start}-${start + 19}`);
+}
+
+function pageRoute() {
+  if (page === 'fountain') return '/fountain.html';
+  if (page === 'optigrid') return '/optigrid.html';
+  return '/';
+}
+
+function expectedMarker() {
+  if (page === 'fountain') return 'Fountain / rateless single-QR benchmark';
+  if (page === 'optigrid') return 'OptiGrid v0 · dense monochrome carrier calibration';
+  return 'Single-code optical baseline';
+}
+
+function readyLabel() {
+  if (page === 'fountain') return 'OptiLink Fountain Auto Lab is ready';
+  if (page === 'optigrid') return 'OptiLink OptiGrid Auto Lab is ready';
+  return 'OptiLink Auto Lab is ready';
 }
 
 console.log('Stopping stale OptiLink Auto Lab server/tunnel processes from earlier runs ...');
@@ -92,8 +108,8 @@ function waitForLocalHealth() {
 }
 
 async function verifyLocalPageMode() {
-  const route = page === 'fountain' ? '/fountain.html' : '/';
-  const expected = page === 'fountain' ? 'Fountain / rateless single-QR benchmark' : 'Single-code optical baseline';
+  const route = pageRoute();
+  const expected = expectedMarker();
   const url = new URL(`http://127.0.0.1:${port}${route}`);
   url.searchParams.set('role', 'sender');
   url.searchParams.set('token', token);
@@ -101,9 +117,7 @@ async function verifyLocalPageMode() {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`Local ${page} page check failed: HTTP ${response.status}`);
   const html = await response.text();
-  if (!html.includes(expected)) {
-    throw new Error(`Local ${page} page check failed: expected marker "${expected}" was not served. Tunnel will not start.`);
-  }
+  if (!html.includes(expected)) throw new Error(`Local ${page} page check failed: expected marker "${expected}" was not served. Tunnel will not start.`);
   console.log(`Verified local HTML entry: ${page} (${expected})`);
 }
 
@@ -140,11 +154,11 @@ function inspectTunnelOutput(text) {
   const match = text.match(urlPattern)?.[0];
   if (!match) return;
   printed = true;
-  const basePath = page === 'fountain' ? '/fountain.html' : '/';
+  const basePath = pageRoute();
   const sender = `${match}${basePath}?role=sender&token=${token}&run=${instanceId}`;
   const receiver = `${match}${basePath}?role=receiver&token=${token}&run=${instanceId}`;
   console.log('\n============================================================');
-  console.log(page === 'fountain' ? 'OptiLink Fountain Auto Lab is ready' : 'OptiLink Auto Lab is ready');
+  console.log(readyLabel());
   console.log(`Mode     : ${page} · instance ${instanceId} · local port ${port}`);
   console.log(`Sender   : ${sender}`);
   console.log(`Receiver : ${receiver}`);
@@ -167,6 +181,5 @@ function shutdown() {
   tunnel.kill('SIGTERM');
   lab.kill('SIGTERM');
 }
-
 process.on('SIGINT', () => { shutdown(); process.exit(130); });
 process.on('SIGTERM', () => { shutdown(); process.exit(143); });

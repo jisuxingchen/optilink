@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OptiLink TF-004 OptiGrid v0</title>
+  <style>
+    .optigrid-stage{display:flex;align-items:center;justify-content:center;background:#111827;padding:12px;border-radius:18px;overflow:hidden}
+    #gridCanvas{display:block;width:min(86vh,92vw,960px);height:min(86vh,92vw,960px);background:#fff;image-rendering:pixelated}
+    .optigrid-camera{position:relative;max-width:760px;margin:auto;background:#0b0f19;border-radius:18px;overflow:hidden}
+    .optigrid-camera video{display:block;width:100%;max-height:76vh;object-fit:contain;background:#000}
+    .grid-reticle{position:absolute;left:50%;top:50%;width:90%;aspect-ratio:1;transform:translate(-50%,-50%);border:3px solid rgba(57,210,192,.95);box-shadow:0 0 0 9999px rgba(0,0,0,.22);pointer-events:none}
+    .grid-reticle:before,.grid-reticle:after{content:"";position:absolute;background:rgba(57,210,192,.65)}
+    .grid-reticle:before{left:50%;top:0;bottom:0;width:1px}.grid-reticle:after{top:50%;left:0;right:0;height:1px}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div>
+        <p class="eyebrow">OptiLink · TF-004</p>
+        <h1>OptiGrid v0 · dense monochrome carrier calibration</h1>
+        <p class="lede">不再使用 QR 解码器。一个大型黑白矩阵直接映射二进制数据，手机从已知中央方形 ROI 采样 cell，并用边框/角标、CRC32 和确定性 payload 判断有效帧。</p>
+      </div>
+      <div class="badge">CUSTOM CARRIER SPIKE</div>
+    </header>
+
+    <section class="notice">
+      <strong>自动扫描：</strong>点击一次 Start 后先进入 8 秒相机对齐预检，再自动测试 64 → 80 → 96 → 120 → 160 cells；每档约 7 秒，固定 60 Hz 物理屏幕与 24 Hz OptiLink 更新。
+      <br />
+      <strong>边界：</strong>WebSocket 只传控制参数和遥测；每帧 payload 仍只经屏幕 → 摄像头。此阶段是 carrier calibration，不是正式离线验收。
+    </section>
+
+    <section class="lab-panel">
+      <div>
+        <p class="eyebrow">ONE-CLICK CARRIER CALIBRATION</p>
+        <h2 id="roleTitle">正在识别角色…</h2>
+        <p id="roleText"></p>
+      </div>
+      <div class="lab-actions">
+        <button id="startButton" class="primary" type="button">Start OptiGrid calibration</button>
+        <button id="stopButton" type="button" disabled>Stop</button>
+      </div>
+      <pre id="labStatus" class="status lab-status">connecting…</pre>
+    </section>
+
+    <section id="senderView" class="panel">
+      <div class="panel-head"><div><span class="step">A</span><h2>Sender / direct binary matrix</h2></div><span>Computer · 60 Hz display</span></div>
+      <div class="optigrid-stage"><canvas id="gridCanvas" width="960" height="960"></canvas></div>
+      <pre id="senderStatus" class="status">alignment pattern ready · waiting for phone…</pre>
+    </section>
+
+    <section id="receiverView" class="panel">
+      <div class="panel-head"><div><span class="step">B</span><h2>Receiver / direct cell sampler</h2></div><span>moto razr 40 ultra</span></div>
+      <div class="optigrid-camera"><video id="camera" muted playsinline></video><div class="grid-reticle"></div></div>
+      <pre id="receiverStatus" class="status">camera not started · click Start once; alignment happens before data collection</pre>
+    </section>
+  </main>
+  <script type="module" src="/src/optigrid-main.ts"></script>
+  <script type="module" src="/src/optigrid-preflight.ts"></script>
+</body>
+</html>
