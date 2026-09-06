@@ -13,6 +13,7 @@ export default defineConfig({
         carrierBench: entry('./carrier-bench.html'),
         carrierFrontier: entry('./carrier-frontier.html'),
         tiledCarrier: entry('./tiled-carrier.html'),
+        tiledTemporal: entry('./tiled-temporal.html'),
       },
     },
   },
