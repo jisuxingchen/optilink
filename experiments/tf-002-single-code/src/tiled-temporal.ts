@@ -20,9 +20,9 @@ type TemporalResult = {
 };
 
 const WIDTH=1920, HEIGHT=1080, CAMERA_HZ=60, TILE_COUNT=3;
-// Combined gate: substantially stronger spatial degradation than the first temporal
-// experiment, while shrinking the whole projected desktop slightly so failures are
-// caused by optical degradation rather than trivial edge clipping.
+// Deliberately severe synthetic diagnostic. This profile is intentionally not
+// calibrated to the moto razr physical path: it preserves acquisition-collapse
+// evidence instead of being tuned until a >100 KB/s point appears.
 const SPATIAL={scale:0.88,angleDeg:5.5,shear:0.03,blurPx:1.0,noiseAlpha:0.075,shiftX:12,shiftY:-8};
 const senderCanvas=get<HTMLCanvasElement>('senderCanvas');
 const receiverCanvas=get<HTMLCanvasElement>('receiverCanvas');
