@@ -31,6 +31,16 @@ test('TF-007 quick gate exercises full-frame independent tiled decode', async ({
   expect(result.rows.some(row => row.tileCount >= 2 && row.validRatio >= 0.99 && row.trackedTiles > 0), 'at least one multi-tile point must acquire and then reuse pixel-derived locks').toBe(true);
 });
 
+test('TF-007 broad sweep maps 1-4 tiles, 80/96 cells and 24-60 Hz', async ({page}) => {
+  const result = await collect(page, 'full');
+  assertIsolation(result);
+  expect(result.rows.length).toBe(96);
+  for (const tiles of [1, 2, 3, 4]) expect(result.rows.some(row => row.tileCount === tiles), `missing ${tiles}-tile rows`).toBe(true);
+  for (const matrix of [80, 96]) expect(result.rows.some(row => row.matrixSize === matrix), `missing ${matrix} matrix rows`).toBe(true);
+  for (const hz of [24, 30, 45, 60]) expect(result.rows.some(row => row.targetHz === hz), `missing ${hz} Hz rows`).toBe(true);
+  expect(result.rows.some(row => row.scenario === 'stress')).toBe(true);
+});
+
 test('TF-007 multi-seed soak measures >100 KB/s-capable layouts without assuming they pass', async ({page}) => {
   const result = await collect(page, 'soak');
   assertIsolation(result);
