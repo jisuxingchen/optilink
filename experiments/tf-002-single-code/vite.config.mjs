@@ -12,6 +12,7 @@ export default defineConfig({
         optigrid: entry('./optigrid.html'),
         carrierBench: entry('./carrier-bench.html'),
         carrierFrontier: entry('./carrier-frontier.html'),
+        tiledCarrier: entry('./tiled-carrier.html'),
       },
     },
   },
