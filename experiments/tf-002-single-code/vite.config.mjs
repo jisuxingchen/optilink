@@ -15,6 +15,7 @@ export default defineConfig({
         tiledCarrier: entry('./tiled-carrier.html'),
         tiledTemporal: entry('./tiled-temporal.html'),
         tiledPhysical: entry('./tiled-physical.html'),
+        tiledPhysicalSelftest: entry('./tiled-physical-selftest.html'),
       },
     },
   },
