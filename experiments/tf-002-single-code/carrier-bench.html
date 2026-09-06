@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OptiLink TF-005 Carrier Simulation Bench</title>
+  <style>
+    :root { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #17212b; background: #f5f7fa; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main { width: min(1500px, 96vw); margin: 24px auto 48px; }
+    header { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; margin-bottom: 18px; }
+    h1 { margin: 0 0 8px; font-size: 30px; }
+    h2 { margin: 0 0 10px; font-size: 18px; }
+    p { margin: 6px 0; line-height: 1.5; }
+    .badge { border: 1px solid #aab7c4; border-radius: 999px; padding: 6px 10px; font-size: 12px; background: white; }
+    .notice { background: #fff9dd; border: 1px solid #e8d88a; border-radius: 12px; padding: 13px 16px; margin-bottom: 16px; line-height: 1.5; }
+    .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; background: white; border: 1px solid #d8e0e8; border-radius: 12px; padding: 12px; margin-bottom: 16px; }
+    button, select { border: 1px solid #9caabd; border-radius: 8px; background: white; padding: 9px 12px; font: inherit; }
+    button.primary { background: #17212b; color: white; border-color: #17212b; cursor: pointer; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-bottom: 16px; }
+    .panel { background: white; border: 1px solid #d8e0e8; border-radius: 12px; padding: 14px; min-width: 0; }
+    .stage { display: grid; place-items: center; min-height: 360px; background: #eef2f5; border-radius: 10px; overflow: hidden; }
+    canvas { display: block; max-width: 100%; max-height: 520px; image-rendering: auto; background: white; }
+    pre { margin: 10px 0 0; padding: 10px; border-radius: 8px; background: #0f1720; color: #d8e5ef; overflow: auto; font-size: 12px; min-height: 90px; }
+    .summary { background: white; border: 1px solid #d8e0e8; border-radius: 12px; padding: 14px; margin-bottom: 16px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; background: white; }
+    th, td { border-bottom: 1px solid #e2e8ef; padding: 7px 8px; text-align: right; white-space: nowrap; }
+    th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
+    tbody tr:nth-child(odd) { background: #fafbfd; }
+    .table-wrap { max-height: 560px; overflow: auto; border: 1px solid #d8e0e8; border-radius: 12px; }
+    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } header { flex-direction: column; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>TF-005 · Optical Carrier Simulation Bench</h1>
+      <p>同一网页内 Sender → 像素化光学通道 → Receiver，批量比较标准 QR、OptiGrid v0、OptiGrid v1。</p>
+    </div>
+    <span class="badge">engineering simulation · not physical acceptance</span>
+  </header>
+
+  <section class="notice">
+    <strong>有效性边界：</strong>Receiver 不允许读取 Sender 的原始 payload、cells 或协议对象。Receiver 的唯一输入是光学通道生成的 <code>ImageData</code> 像素帧；正确性由独立 benchmark oracle 在解码后比较。
+  </section>
+
+  <section class="controls">
+    <label>套件
+      <select id="suiteMode">
+        <option value="quick">Quick（CI / 快速筛选）</option>
+        <option value="full">Full（大量参数扫描）</option>
+      </select>
+    </label>
+    <button id="runSuite" class="primary">Run carrier sweep</button>
+    <button id="stopSuite">Stop</button>
+    <span id="progress">idle</span>
+  </section>
+
+  <section class="grid">
+    <article class="panel">
+      <h2>Sender · rendered carrier pixels</h2>
+      <div class="stage"><canvas id="senderCanvas" width="720" height="720"></canvas></div>
+      <pre id="senderStatus">waiting</pre>
+    </article>
+    <article class="panel">
+      <h2>Receiver · camera-image simulation</h2>
+      <div class="stage"><canvas id="receiverCanvas" width="720" height="720"></canvas></div>
+      <pre id="receiverStatus">pixel input only</pre>
+    </article>
+  </section>
+
+  <section class="summary">
+    <h2>自动选择</h2>
+    <pre id="summary">no result yet</pre>
+  </section>
+
+  <section class="table-wrap">
+    <table>
+      <thead>
+      <tr>
+        <th>carrier</th><th>scenario</th><th>matrix/payload</th><th>render px</th><th>camera px</th><th>target Hz</th><th>valid</th><th>payload B/f</th><th>decode p95 ms</th><th>projected ingress</th><th>reserved/finder</th>
+      </tr>
+      </thead>
+      <tbody id="resultsBody"></tbody>
+    </table>
+  </section>
+</main>
+<script type="module" src="/src/carrier-bench.ts"></script>
+</body>
+</html>
