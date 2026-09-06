@@ -14,6 +14,7 @@ export default defineConfig({
         carrierFrontier: entry('./carrier-frontier.html'),
         tiledCarrier: entry('./tiled-carrier.html'),
         tiledTemporal: entry('./tiled-temporal.html'),
+        tiledPhysical: entry('./tiled-physical.html'),
       },
     },
   },
