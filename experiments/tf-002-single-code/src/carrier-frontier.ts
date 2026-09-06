@@ -8,7 +8,7 @@ import {
 } from './optigrid-v1.ts';
 
 type ScenarioName = 'clean' | 'mild' | 'stress';
-type SuiteName = 'quick' | 'frontier';
+type SuiteName = 'quick' | 'frontier' | 'soak';
 
 type Scenario = {
   name: ScenarioName;
@@ -695,6 +695,15 @@ function buildPlan(suite: SuiteName): Candidate[] {
     return plan;
   }
 
+  if (suite === 'soak') {
+    for (const scenario of scenarios) {
+      for (const matrixSize of [160, 200, 240]) {
+        plan.push(candidate(matrixSize, 960, 60, scenario, 48));
+      }
+    }
+    return plan;
+  }
+
   for (const scenario of scenarios) {
     for (const matrixSize of [120, 140, 160, 180, 200, 220, 240]) {
       for (const renderPixels of [720, 960]) {
@@ -908,6 +917,7 @@ function renderSummary(ranking: RankingRow[]): void {
   const lines = [
     'Receiver isolation: pixel ImageData only; tracking state is derived from receiver pixels only.',
     'Sampler: subpixel bilinear 5-point majority; acquisition refines geometry to 0.25 px.',
+    `suite: ${frontierResult.suite}`,
     `stable groups across clean+mild+stress (>=95%): ${stable.length}/${ranking.length}`,
     `stable simulated 1 MiB >=100 KB/s groups: ${stableAtOrAbove100.length}`,
     '',
@@ -961,11 +971,14 @@ async function runSuite(suite: SuiteName): Promise<void> {
   }
 }
 
-runButton.addEventListener('click', () => void runSuite(suiteMode.value === 'frontier' ? 'frontier' : 'quick'));
+runButton.addEventListener('click', () => {
+  const selected = suiteMode.value;
+  void runSuite(selected === 'frontier' || selected === 'soak' ? selected : 'quick');
+});
 stopButton.addEventListener('click', () => { abortRequested = true; });
 
 const autorun = new URLSearchParams(location.search).get('autorun');
-if (autorun === 'quick' || autorun === 'frontier') {
+if (autorun === 'quick' || autorun === 'frontier' || autorun === 'soak') {
   suiteMode.value = autorun;
   setTimeout(() => void runSuite(autorun), 0);
 }
