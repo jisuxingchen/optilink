@@ -13,7 +13,7 @@ const instanceId = randomBytes(8).toString('hex');
 const cacheDir = join(homedir(), '.cache', 'optilink');
 const binary = join(cacheDir, 'cloudflared');
 const pageRoute = '/optigrid-v1-physical.html';
-const expectedMarker = 'OptiGrid v1 · physical high-density gate';
+const expectedMarker = 'OptiGrid v1 · projective physical sweep';
 
 function cloudflaredDownloadUrl() {
   if (process.platform !== 'linux') throw new Error(`Unsupported platform for automatic cloudflared install: ${process.platform}`);
