@@ -39,8 +39,9 @@ type LockPlan = {
   threshold: number;
   score: number;
   contrast: number;
-  dataPixelOffsets: Int32Array;
-  reservedPixelOffsets: Int32Array;
+  dataSamplePoints: Float32Array;
+  samplesPerCell: number;
+  reservedSamplePoints: Float32Array;
   reservedExpected: Uint8Array;
 };
 
@@ -128,6 +129,7 @@ type FrontierResult = {
     benchmarkOracleSeparatedFromReceiver: true;
   };
   pipeline: 'acquisition -> tracking -> fast decode';
+  sampling: 'subpixel bilinear 5-point majority';
   rows: CandidateResult[];
   ranking: RankingRow[];
   selected: RankingRow[];
@@ -140,6 +142,13 @@ const MILD: Scenario = {name: 'mild', fillRatio: 0.73, angleDeg: 4, perspective:
 const STRESS: Scenario = {name: 'stress', fillRatio: 0.68, angleDeg: 8, perspective: 0.10, shear: 0.055, blurPx: 0.75, noise: 5};
 const ONE_MIB = 1024 * 1024;
 const TARGET_BYTES_PER_SECOND = 100_000;
+const DATA_SAMPLE_OFFSETS: ReadonlyArray<readonly [number, number]> = [
+  [0, 0],
+  [-0.18, 0],
+  [0.18, 0],
+  [0, -0.18],
+  [0, 0.18],
+];
 
 const senderCanvas = get<HTMLCanvasElement>('senderCanvas');
 const receiverCanvas = get<HTMLCanvasElement>('receiverCanvas');
@@ -175,6 +184,7 @@ function emptyResult(suite: SuiteName): FrontierResult {
       benchmarkOracleSeparatedFromReceiver: true,
     },
     pipeline: 'acquisition -> tracking -> fast decode',
+    sampling: 'subpixel bilinear 5-point majority',
     rows: [],
     ranking: [],
     selected: [],
@@ -214,10 +224,23 @@ function luma(data: Uint8ClampedArray, offset: number): number {
   return data[offset] * 0.2126 + data[offset + 1] * 0.7152 + data[offset + 2] * 0.0722;
 }
 
-function clampPixelOffset(image: ImageData, x: number, y: number): number {
-  const px = Math.max(0, Math.min(image.width - 1, Math.round(x)));
-  const py = Math.max(0, Math.min(image.height - 1, Math.round(y)));
-  return (py * image.width + px) * 4;
+function sampleLumaBilinear(image: ImageData, x: number, y: number): number {
+  const px = Math.max(0, Math.min(image.width - 1, x));
+  const py = Math.max(0, Math.min(image.height - 1, y));
+  const x0 = Math.floor(px);
+  const y0 = Math.floor(py);
+  const x1 = Math.min(image.width - 1, x0 + 1);
+  const y1 = Math.min(image.height - 1, y0 + 1);
+  const tx = px - x0;
+  const ty = py - y0;
+  const stride = image.width * 4;
+  const o00 = y0 * stride + x0 * 4;
+  const o10 = y0 * stride + x1 * 4;
+  const o01 = y1 * stride + x0 * 4;
+  const o11 = y1 * stride + x1 * 4;
+  const top = luma(image.data, o00) * (1 - tx) + luma(image.data, o10) * tx;
+  const bottom = luma(image.data, o01) * (1 - tx) + luma(image.data, o11) * tx;
+  return top * (1 - ty) + bottom * ty;
 }
 
 function drawCells(canvas: HTMLCanvasElement, cells: Uint8Array, matrixSize: number, pixels: number): void {
@@ -453,7 +476,7 @@ function evaluateQuad(image: ImageData, quad: Quad, matrixSize: number, stride =
   for (let i = 0; i < samples.length; i += 1) {
     const sample = samples[i];
     const point = mapHomography(h, (sample.column + 0.5) / matrixSize, (sample.row + 0.5) / matrixSize);
-    const value = luma(image.data, clampPixelOffset(image, point.x, point.y));
+    const value = sampleLumaBilinear(image, point.x, point.y);
     measured[i] = value;
     if (sample.expected) { blackSum += value; blackCount += 1; }
     else { whiteSum += value; whiteCount += 1; }
@@ -479,8 +502,10 @@ function refineQuad(image: ImageData, initial: Quad, matrixSize: number): {quad:
   if (!first) return null;
   let best = {quad: initial, ...first};
   const corners: Array<keyof Quad> = ['tl', 'tr', 'br', 'bl'];
-  const baseStep = Math.max(1, image.width / 140);
-  for (const step of [baseStep * 2, baseStep, Math.max(0.75, baseStep / 2)]) {
+  const baseStep = Math.max(1.5, image.width / 180);
+  const steps = [baseStep * 2, baseStep, baseStep / 2, baseStep / 4, 0.5, 0.25]
+    .filter((step, index, values) => index === values.findIndex(value => Math.abs(value - step) < 0.01));
+  for (const step of steps) {
     for (let pass = 0; pass < 2; pass += 1) {
       let improved = false;
       for (const corner of corners) {
@@ -502,7 +527,7 @@ function refineQuad(image: ImageData, initial: Quad, matrixSize: number): {quad:
       if (!improved) break;
     }
   }
-  const final = evaluateQuad(image, best.quad, matrixSize, 5);
+  const final = evaluateQuad(image, best.quad, matrixSize, 3);
   return final ? {quad: best.quad, ...final} : best;
 }
 
@@ -510,26 +535,31 @@ function buildLockPlan(image: ImageData, quad: Quad, matrixSize: number, thresho
   const h = homographyFromUnitSquare(quad);
   if (!h) return null;
   const inner = matrixSize - OPTIGRID_V1_BORDER * 2;
-  const dataPixelOffsets = new Int32Array(inner * inner);
-  let dataIndex = 0;
+  const samplesPerCell = DATA_SAMPLE_OFFSETS.length;
+  const dataSamplePoints = new Float32Array(inner * inner * samplesPerCell * 2);
+  let pointIndex = 0;
   for (let row = OPTIGRID_V1_BORDER; row < matrixSize - OPTIGRID_V1_BORDER; row += 1) {
     for (let column = OPTIGRID_V1_BORDER; column < matrixSize - OPTIGRID_V1_BORDER; column += 1) {
-      const point = mapHomography(h, (column + 0.5) / matrixSize, (row + 0.5) / matrixSize);
-      dataPixelOffsets[dataIndex] = clampPixelOffset(image, point.x, point.y);
-      dataIndex += 1;
+      for (const [dx, dy] of DATA_SAMPLE_OFFSETS) {
+        const point = mapHomography(h, (column + 0.5 + dx) / matrixSize, (row + 0.5 + dy) / matrixSize);
+        dataSamplePoints[pointIndex] = point.x;
+        dataSamplePoints[pointIndex + 1] = point.y;
+        pointIndex += 2;
+      }
     }
   }
 
   const samples = reservedSamples(matrixSize, 3);
-  const reservedPixelOffsets = new Int32Array(samples.length);
+  const reservedSamplePoints = new Float32Array(samples.length * 2);
   const reservedExpected = new Uint8Array(samples.length);
   for (let i = 0; i < samples.length; i += 1) {
     const sample = samples[i];
     const point = mapHomography(h, (sample.column + 0.5) / matrixSize, (sample.row + 0.5) / matrixSize);
-    reservedPixelOffsets[i] = clampPixelOffset(image, point.x, point.y);
+    reservedSamplePoints[i * 2] = point.x;
+    reservedSamplePoints[i * 2 + 1] = point.y;
     reservedExpected[i] = sample.expected;
   }
-  return {quad, threshold, score, contrast, dataPixelOffsets, reservedPixelOffsets, reservedExpected};
+  return {quad, threshold, score, contrast, dataSamplePoints, samplesPerCell, reservedSamplePoints, reservedExpected};
 }
 
 function acquireLock(image: ImageData, matrixSize: number): LockPlan | null {
@@ -545,9 +575,9 @@ function validateLock(image: ImageData, lock: LockPlan): {score: number; contras
   let blackCount = 0;
   let whiteSum = 0;
   let whiteCount = 0;
-  const measured = new Float64Array(lock.reservedPixelOffsets.length);
-  for (let i = 0; i < lock.reservedPixelOffsets.length; i += 1) {
-    const value = luma(image.data, lock.reservedPixelOffsets[i]);
+  const measured = new Float64Array(lock.reservedExpected.length);
+  for (let i = 0; i < lock.reservedExpected.length; i += 1) {
+    const value = sampleLumaBilinear(image, lock.reservedSamplePoints[i * 2], lock.reservedSamplePoints[i * 2 + 1]);
     measured[i] = value;
     if (lock.reservedExpected[i]) { blackSum += value; blackCount += 1; }
     else { whiteSum += value; whiteCount += 1; }
@@ -558,11 +588,11 @@ function validateLock(image: ImageData, lock: LockPlan): {score: number; contras
   const threshold = (blackMean + whiteMean) / 2;
   const contrast = whiteMean - blackMean;
   let matches = 0;
-  for (let i = 0; i < lock.reservedPixelOffsets.length; i += 1) {
+  for (let i = 0; i < lock.reservedExpected.length; i += 1) {
     if ((measured[i] < threshold ? 1 : 0) === lock.reservedExpected[i]) matches += 1;
   }
   return {
-    score: lock.reservedPixelOffsets.length ? matches / lock.reservedPixelOffsets.length : 0,
+    score: lock.reservedExpected.length ? matches / lock.reservedExpected.length : 0,
     contrast,
     threshold,
   };
@@ -570,12 +600,18 @@ function validateLock(image: ImageData, lock: LockPlan): {score: number; contras
 
 function sampleLockedDataCells(image: ImageData, lock: LockPlan, matrixSize: number, threshold: number): Uint8Array {
   const cells = new Uint8Array(matrixSize * matrixSize);
-  let sampleIndex = 0;
+  let pointIndex = 0;
+  const majority = Math.floor(lock.samplesPerCell / 2) + 1;
   for (let row = OPTIGRID_V1_BORDER; row < matrixSize - OPTIGRID_V1_BORDER; row += 1) {
     const rowOffset = row * matrixSize;
     for (let column = OPTIGRID_V1_BORDER; column < matrixSize - OPTIGRID_V1_BORDER; column += 1) {
-      cells[rowOffset + column] = luma(image.data, lock.dataPixelOffsets[sampleIndex]) < threshold ? 1 : 0;
-      sampleIndex += 1;
+      let darkVotes = 0;
+      for (let sample = 0; sample < lock.samplesPerCell; sample += 1) {
+        const value = sampleLumaBilinear(image, lock.dataSamplePoints[pointIndex], lock.dataSamplePoints[pointIndex + 1]);
+        if (value < threshold) darkVotes += 1;
+        pointIndex += 2;
+      }
+      cells[rowOffset + column] = darkVotes >= majority ? 1 : 0;
     }
   }
   return cells;
@@ -683,6 +719,7 @@ function updateLiveStatus(candidateConfig: Candidate, frame: number, attempt: De
 
   receiverStatus.textContent = [
     'receiver input: ImageData pixels only',
+    'sampler: subpixel bilinear 5-point majority',
     `camera simulation: ${candidateConfig.cameraPixels}×${candidateConfig.cameraPixels}`,
     `scenario: ${candidateConfig.scenario.name} · angle ${candidateConfig.scenario.angleDeg}° · perspective ${candidateConfig.scenario.perspective.toFixed(2)} · blur ${candidateConfig.scenario.blurPx}px`,
     `lock: ${state.lock ? 'LOCKED' : 'SEARCHING'} · acquisitions ${state.acquisitions} · reacquisitions ${state.reacquisitions} · tracked ${state.trackingFrames}`,
@@ -870,6 +907,7 @@ function renderSummary(ranking: RankingRow[]): void {
   const top = frontierResult.selected;
   const lines = [
     'Receiver isolation: pixel ImageData only; tracking state is derived from receiver pixels only.',
+    'Sampler: subpixel bilinear 5-point majority; acquisition refines geometry to 0.25 px.',
     `stable groups across clean+mild+stress (>=95%): ${stable.length}/${ranking.length}`,
     `stable simulated 1 MiB >=100 KB/s groups: ${stableAtOrAbove100.length}`,
     '',
