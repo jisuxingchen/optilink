@@ -70,8 +70,6 @@ jobs:
           }
       - name: Run TF-005 pixel-isolated carrier bench and tracking frontier
         run: npm run bench:headless
-      - name: Run TF-007 full-frame tiled pixel bench
-        run: npm run bench:tiled
       - name: Validate lab coordinator and tunnel launcher syntax
         run: |
           node --check lab-server.mjs
@@ -111,14 +109,12 @@ jobs:
           curl --fail --silent --cookie /tmp/lab-cookie.txt 'http://127.0.0.1:5180/fountain.html?role=sender' | grep -q 'Fountain / rateless single-QR benchmark'
           curl --fail --silent --cookie /tmp/lab-cookie.txt 'http://127.0.0.1:5180/optigrid.html?role=sender' | grep -q 'OptiGrid v0 · dense monochrome carrier calibration'
           curl --fail --silent --cookie /tmp/lab-cookie.txt 'http://127.0.0.1:5180/api/lab/latest' | grep -q 'NO_RUN'
-      - name: Upload TF-005 and TF-007 carrier results
+      - name: Upload TF-005 carrier results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: optilink-carrier-bench-${{ github.sha }}
-          path: |
-            experiments/tf-002-single-code/results/carrier-*.json
-            experiments/tf-002-single-code/results/tiled-carrier-*.json
+          path: experiments/tf-002-single-code/results/carrier-*.json
           if-no-files-found: warn
       - name: Upload browser spike build
         if: always()
@@ -126,4 +122,38 @@ jobs:
         with:
           name: optilink-browser-spikes-${{ github.sha }}
           path: experiments/tf-002-single-code/dist
+          if-no-files-found: warn
+
+  tf-007-tiled-bench:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: experiments/tf-002-single-code
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install pinned spike dependencies
+        run: npm install --no-audit --no-fund
+      - name: Typecheck and build TF-007 page
+        run: |
+          npm run build
+          test -s dist/tiled-carrier.html
+      - name: Install headless Chromium
+        run: |
+          npx playwright install --with-deps chromium >/tmp/playwright-install-tf007.log 2>&1 || {
+            cat /tmp/playwright-install-tf007.log
+            exit 1
+          }
+      - name: Run TF-007 full-frame tiled pixel bench
+        run: npm run bench:tiled
+      - name: Upload TF-007 tiled results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: optilink-tiled-carrier-${{ github.sha }}
+          path: experiments/tf-002-single-code/results/tiled-carrier-*.json
           if-no-files-found: warn
