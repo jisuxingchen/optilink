@@ -62,7 +62,11 @@ jobs:
           test -s dist/carrier-bench.html
           test -s dist/carrier-frontier.html
       - name: Install headless Chromium for TF-005
-        run: npx playwright install --with-deps chromium
+        run: |
+          npx playwright install --with-deps chromium >/tmp/playwright-install.log 2>&1 || {
+            cat /tmp/playwright-install.log
+            exit 1
+          }
       - name: Run TF-005 pixel-isolated carrier bench and tracking frontier
         run: npm run bench:headless
       - name: Validate lab coordinator and tunnel launcher syntax
