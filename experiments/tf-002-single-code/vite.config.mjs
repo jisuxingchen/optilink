@@ -11,6 +11,7 @@ export default defineConfig({
         fountain: entry('./fountain.html'),
         optigrid: entry('./optigrid.html'),
         carrierBench: entry('./carrier-bench.html'),
+        carrierFrontier: entry('./carrier-frontier.html'),
       },
     },
   },
