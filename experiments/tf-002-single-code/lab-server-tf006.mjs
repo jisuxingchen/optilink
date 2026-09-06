@@ -93,7 +93,7 @@ async function persistResult(run) {
 
 function summary(run) {
   const candidateLines = (run.candidates || []).map(candidate =>
-    `- ${candidate.matrixSize}×${candidate.matrixSize}: raw unique optical ingress ${Number(candidate.uniquePayloadBytesPerSecond || 0).toFixed(2)} B/s · valid ${(Number(candidate.validRatio || 0) * 100).toFixed(1)}% · unique ${candidate.uniqueFrames ?? 0}/${candidate.attempts ?? 0} scans · total decode p95 ${Number(candidate.totalDecodeP95Ms || 0).toFixed(1)} ms · reacq ${candidate.reacquisitionCount ?? 0}`
+    `- ${candidate.matrixSize}×${candidate.matrixSize}${candidate.targetHz ? ` @ ${candidate.targetHz} Hz` : ''}: raw unique optical ingress ${Number(candidate.uniquePayloadBytesPerSecond || 0).toFixed(2)} B/s · valid ${(Number(candidate.validRatio || 0) * 100).toFixed(1)}% · unique ${candidate.uniqueFrames ?? 0}/${candidate.attempts ?? 0} scans · pilot ${(Number(candidate.averageReservedScore || 0) * 100).toFixed(1)}% · total decode p95 ${Number(candidate.totalDecodeP95Ms || 0).toFixed(1)} ms · reacq ${candidate.reacquisitionCount ?? 0}`
   );
   const best = run.best || null;
   return [
@@ -103,10 +103,10 @@ function summary(run) {
     `- Evidence class: ${run.evidenceClass || 'n/a'}`,
     `- Status: ${run.status || 'n/a'}`,
     `- Receiver: ${run.receiver?.configuredDevice || 'n/a'} · camera ${run.receiver?.cameraVideo?.width || 0}×${run.receiver?.cameraVideo?.height || 0}`,
-    `- Physical display: ${run.displayBaseline?.physicalRefreshHz ?? 'n/a'} Hz · target optical update ${run.displayBaseline?.targetOpticalVisualUpdateHz ?? 'n/a'} Hz`,
+    `- Physical display: ${run.displayBaseline?.physicalRefreshHz ?? 'n/a'} Hz · target optical update ${run.displayBaseline?.targetOpticalVisualUpdateHz ?? 'n/a'}`,
     `- Carrier: ${run.carrier?.name || 'OptiGrid v1'} · ${run.carrier?.receiverPipeline || 'n/a'}`,
     ...candidateLines,
-    `- Auto-selected: ${best ? `${best.matrixSize}×${best.matrixSize} · ${Number(best.uniquePayloadBytesPerSecond || 0).toFixed(2)} B/s raw unique optical ingress` : 'none'}`,
+    `- Auto-selected: ${best ? `${best.matrixSize}×${best.matrixSize}${best.targetHz ? ` @ ${best.targetHz} Hz` : ''} · ${Number(best.uniquePayloadBytesPerSecond || 0).toFixed(2)} B/s raw unique optical ingress` : 'none'}`,
     '- Boundary: this is a short network-assisted physical carrier gate, not final file Net Goodput and not official offline acceptance.',
     '- Control plane: WebSocket carries control/telemetry only; frame payload bytes remain screen→camera optical.',
   ];
