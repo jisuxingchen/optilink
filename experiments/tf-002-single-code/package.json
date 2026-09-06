@@ -10,7 +10,8 @@
     "lab:tunnel:fountain": "OPTILINK_LAB_PAGE=fountain node lab-tunnel.mjs",
     "lab:tunnel:optigrid": "OPTILINK_LAB_PAGE=optigrid node lab-tunnel.mjs",
     "build": "tsc --noEmit && vite build",
-    "test": "node --test src/*.test.ts"
+    "test": "node --test src/*.test.ts",
+    "bench:headless": "playwright test carrier-bench.spec.mjs --config=playwright.config.mjs --reporter=line"
   },
   "dependencies": {
     "@zxing/browser": "0.2.1",
@@ -18,6 +19,7 @@
     "ws": "8.18.3"
   },
   "devDependencies": {
+    "@playwright/test": "1.55.0",
     "@types/qrcode": "1.5.6",
     "typescript": "7.0.2",
     "vite": "8.2.2"
