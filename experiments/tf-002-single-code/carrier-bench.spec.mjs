@@ -7,8 +7,7 @@ async function collect(page, mode) {
   const result = await page.evaluate(() => window.__carrierBenchResult);
   await mkdir('results', {recursive: true});
   await writeFile(`results/carrier-bench-${mode}.json`, JSON.stringify(result, null, 2));
-  console.log(`TF-005 ${mode} rows:`, JSON.stringify(result.rows, null, 2));
-  console.log(`TF-005 ${mode} selected:`, JSON.stringify(result.selected, null, 2));
+  console.log(`TF-005 ${mode} summary:`, JSON.stringify({rowCount: result.rows.length, selected: result.selected}, null, 2));
   return result;
 }
 
@@ -18,8 +17,11 @@ async function collectFrontier(page, mode) {
   const result = await page.evaluate(() => window.__carrierFrontierResult);
   await mkdir('results', {recursive: true});
   await writeFile(`results/carrier-frontier-${mode}.json`, JSON.stringify(result, null, 2));
-  console.log(`TF-005 frontier ${mode} selected:`, JSON.stringify(result.selected, null, 2));
-  console.log(`TF-005 frontier ${mode} >=100KB/s:`, JSON.stringify(result.stableAtOrAbove100KBps, null, 2));
+  console.log(`TF-005 frontier ${mode} summary:`, JSON.stringify({
+    rowCount: result.rows.length,
+    selected: result.selected,
+    stableAtOrAbove100KBps: result.stableAtOrAbove100KBps,
+  }, null, 2));
   return result;
 }
 
@@ -49,14 +51,7 @@ test('TF-005 quick bench preserves pixel isolation and finds a stable custom car
   const result = await collect(page, 'quick');
   assertIsolation(result);
 
-  // Standard QR is a calibration baseline, not the TF-005 winner. The pixel
-  // channel intentionally includes rasterization/resampling, so it only needs
-  // to remain measurably decodable rather than artificially perfect.
   expect(bestRatio(result, 'standard-qr', 'clean'), 'QR baseline should remain decodable from camera pixels').toBeGreaterThanOrEqual(0.5);
-
-  // Custom-carrier development is allowed to proceed only when a candidate is
-  // deterministic in the clean channel. v1 must also survive the mild channel
-  // before it can be selected for a future physical test.
   expect(bestRatio(result, 'optigrid-v0', 'clean'), 'v0 must have at least one deterministic clean configuration').toBeGreaterThanOrEqual(0.99);
   expect(bestRatio(result, 'optigrid-v1', 'clean'), 'v1 must have at least one deterministic clean configuration').toBeGreaterThanOrEqual(0.99);
   expect(bestRatio(result, 'optigrid-v1', 'mild'), 'v1 must survive the mild pixel channel').toBeGreaterThanOrEqual(0.99);
