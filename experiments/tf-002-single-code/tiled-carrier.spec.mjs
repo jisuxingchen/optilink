@@ -49,3 +49,17 @@ test('TF-007 multi-seed soak measures >100 KB/s-capable layouts without assuming
   expect(result.rows.some(row => row.theoreticalGrossBytesPerSecond > 100000), 'soak must include monochrome layouts with >100 KB/s gross capacity').toBe(true);
   expect(result.rows.some(row => row.tileCount >= 3), 'soak must exercise spatial parallelism beyond two tiles').toBe(true);
 });
+
+test('TF-007 physical v2 orientation model decodes portrait and inverted camera rasters from pixels', async ({page}) => {
+  await page.goto('/tiled-physical-selftest.html');
+  await page.waitForFunction(() => window.__TF007_PHYSICAL_SELFTEST__?.done === true, null, {timeout: 120_000});
+  const result = await page.evaluate(() => window.__TF007_PHYSICAL_SELFTEST__);
+  console.log('TF-007 physical pipeline self-test:', JSON.stringify(result, null, 2));
+  expect(result.pass).toBe(true);
+  expect(result.results).toHaveLength(4);
+  for (const scenario of result.results) {
+    expect(scenario.trainingPass, scenario.scenario).toBe(true);
+    expect(scenario.trainingErrors, scenario.scenario).toEqual([0, 0, 0]);
+    expect(scenario.dynamic.map(row => [row.matrix, row.pass]), scenario.scenario).toEqual([[80, true], [96, true], [112, true], [120, true]]);
+  }
+});
