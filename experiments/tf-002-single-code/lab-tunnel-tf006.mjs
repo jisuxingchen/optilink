@@ -13,7 +13,7 @@ const instanceId = randomBytes(8).toString('hex');
 const cacheDir = join(homedir(), '.cache', 'optilink');
 const binary = join(cacheDir, 'cloudflared');
 const pageRoute = '/optigrid-v1-physical.html';
-const expectedMarker = 'OptiGrid v1 · projective physical sweep';
+const expectedMarker = 'OptiGrid v1 · native-pixel mesh frontier';
 
 function cloudflaredDownloadUrl() {
   if (process.platform !== 'linux') throw new Error(`Unsupported platform for automatic cloudflared install: ${process.platform}`);
@@ -121,7 +121,7 @@ function inspectTunnelOutput(text) {
   const sender = `${match}${pageRoute}?role=sender&token=${token}&run=${instanceId}`;
   const receiver = `${match}${pageRoute}?role=receiver&token=${token}&run=${instanceId}`;
   console.log('\n============================================================');
-  console.log('OptiLink TF-006 Physical Auto Lab is ready');
+  console.log('OptiLink TF-006B Native-Pixel Mesh Lab is ready');
   console.log(`Instance : ${instanceId} · local port ${port}`);
   console.log(`Sender   : ${sender}`);
   console.log(`Receiver : ${receiver}`);
