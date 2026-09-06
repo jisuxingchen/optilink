@@ -40,6 +40,46 @@ jobs:
           name: optilink-dashboard-${{ github.sha }}
           path: _site
 
+  tf-007-physical-lab:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: experiments/tf-002-single-code
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install pinned spike dependencies
+        run: npm install --no-audit --no-fund
+      - name: Build physical lab and validate launcher syntax
+        run: |
+          npm run build
+          test -s dist/tiled-physical.html
+          node --check lab-server.mjs
+          node --check lab-tunnel.mjs
+      - name: Smoke-test TF-007 physical lab and token boundary
+        run: |
+          PORT=5185 OPTILINK_LAB_TOKEN=ci-secret OPTILINK_LAB_PAGE=tiled OPTILINK_LAB_INSTANCE_ID=ci-tf007 node lab-server.mjs > /tmp/tf007-physical-lab.log 2>&1 &
+          LAB_PID=$!
+          trap 'kill $LAB_PID || true' EXIT
+          for i in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:5185/api/lab/health > /tmp/tf007-health.json; then
+              break
+            fi
+            sleep 0.25
+          done
+          grep -q '"status": "OK"' /tmp/tf007-health.json
+          grep -q '"protected": true' /tmp/tf007-health.json
+          grep -q '"mode": "tiled"' /tmp/tf007-health.json
+          grep -q '"instanceId": "ci-tf007"' /tmp/tf007-health.json
+          test "$(curl --silent --output /tmp/tf007-no-token.txt --write-out '%{http_code}' 'http://127.0.0.1:5185/tiled-physical.html?role=sender')" = "401"
+          curl --fail --silent --cookie-jar /tmp/tf007-cookie.txt 'http://127.0.0.1:5185/tiled-physical.html?role=sender&token=ci-secret' | grep -q 'OptiLink · TF-007 physical gate'
+          curl --fail --silent --cookie /tmp/tf007-cookie.txt 'http://127.0.0.1:5185/tiled-physical.html?role=receiver' | grep -q 'Start physical calibration'
+          curl --fail --silent --cookie /tmp/tf007-cookie.txt 'http://127.0.0.1:5185/api/lab/latest' | grep -q 'NO_RUN'
+
   tf-002-web-spike:
     runs-on: ubuntu-latest
     defaults:
