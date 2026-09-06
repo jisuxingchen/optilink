@@ -12,7 +12,8 @@
     "build": "tsc --noEmit && vite build",
     "test": "node --test src/*.test.ts",
     "bench:headless": "playwright test carrier-bench.spec.mjs --config=playwright.config.mjs --reporter=line",
-    "bench:tiled": "playwright test tiled-carrier.spec.mjs --config=playwright.config.mjs --reporter=line"
+    "bench:tiled": "playwright test tiled-carrier.spec.mjs --config=playwright.config.mjs --reporter=line",
+    "bench:temporal": "playwright test tiled-temporal.spec.mjs --config=playwright.config.mjs --reporter=line"
   },
   "dependencies": {
     "@zxing/browser": "0.2.1",
