@@ -127,7 +127,7 @@ jobs:
           grep -q '"instanceId": "ci-instance"' /tmp/tf006-health.json
           test "$(curl --silent --output /tmp/tf006-no-token.txt --write-out '%{http_code}' 'http://127.0.0.1:5184/optigrid-v1-physical.html?role=sender')" = "401"
           curl --fail --silent --cookie-jar /tmp/tf006-cookie.txt 'http://127.0.0.1:5184/optigrid-v1-physical.html?role=sender&token=tf006-ci' | grep -q 'OptiGrid v1 · projective physical sweep'
-          curl --fail --silent --cookie /tmp/tf006-cookie.txt 'http://127.0.0.1:5184/optigrid-v1-physical.html?role=receiver' | grep -q 'ONE-CLICK PHYSICAL SWEEP'
+          curl --fail --silent --cookie /tmp/tf006-cookie.txt 'http://127.0.0.1:5184/optigrid-v1-physical.html?role=receiver' | grep -q 'ONE-CLICK SPATIAL + TEMPORAL FRONTIER'
           curl --fail --silent --cookie /tmp/tf006-cookie.txt 'http://127.0.0.1:5184/api/lab/latest' | grep -q 'NO_RUN'
       - name: Upload TF-005 carrier and frontier results
         if: always()
