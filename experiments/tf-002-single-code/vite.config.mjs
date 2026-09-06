@@ -10,6 +10,7 @@ export default defineConfig({
         baseline: entry('./index.html'),
         fountain: entry('./fountain.html'),
         optigrid: entry('./optigrid.html'),
+        optigridV1Physical: entry('./optigrid-v1-physical.html'),
         carrierBench: entry('./carrier-bench.html'),
         carrierFrontier: entry('./carrier-frontier.html'),
       },

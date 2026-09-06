@@ -61,6 +61,7 @@ jobs:
           npm run build
           test -s dist/carrier-bench.html
           test -s dist/carrier-frontier.html
+          test -s dist/optigrid-v1-physical.html
       - name: Install headless Chromium for TF-005
         run: |
           npx playwright install --with-deps chromium >/tmp/playwright-install.log 2>&1 || {
@@ -73,6 +74,8 @@ jobs:
         run: |
           node --check lab-server.mjs
           node --check lab-tunnel.mjs
+          node --check lab-server-tf006.mjs
+          node --check lab-tunnel-tf006.mjs
       - name: Smoke-test lab HTTP routes
         run: |
           node lab-server.mjs > /tmp/optilink-lab.log 2>&1 &
@@ -108,6 +111,24 @@ jobs:
           curl --fail --silent --cookie /tmp/lab-cookie.txt 'http://127.0.0.1:5180/fountain.html?role=sender' | grep -q 'Fountain / rateless single-QR benchmark'
           curl --fail --silent --cookie /tmp/lab-cookie.txt 'http://127.0.0.1:5180/optigrid.html?role=sender' | grep -q 'OptiGrid v0 · dense monochrome carrier calibration'
           curl --fail --silent --cookie /tmp/lab-cookie.txt 'http://127.0.0.1:5180/api/lab/latest' | grep -q 'NO_RUN'
+      - name: Smoke-test TF-006 one-click physical lab
+        run: |
+          PORT=5184 OPTILINK_LAB_TOKEN=tf006-ci OPTILINK_LAB_INSTANCE_ID=ci-instance OPTILINK_PUBLISH_GITHUB=0 node lab-server-tf006.mjs > /tmp/tf006-lab.log 2>&1 &
+          LAB_PID=$!
+          trap 'kill $LAB_PID || true' EXIT
+          for i in {1..20}; do
+            if curl --fail --silent http://127.0.0.1:5184/api/lab/health > /tmp/tf006-health.json; then
+              break
+            fi
+            sleep 0.5
+          done
+          grep -q '"status": "OK"' /tmp/tf006-health.json
+          grep -q '"mode": "optigrid-v1-physical"' /tmp/tf006-health.json
+          grep -q '"instanceId": "ci-instance"' /tmp/tf006-health.json
+          test "$(curl --silent --output /tmp/tf006-no-token.txt --write-out '%{http_code}' 'http://127.0.0.1:5184/optigrid-v1-physical.html?role=sender')" = "401"
+          curl --fail --silent --cookie-jar /tmp/tf006-cookie.txt 'http://127.0.0.1:5184/optigrid-v1-physical.html?role=sender&token=tf006-ci' | grep -q 'OptiGrid v1 · native-pixel mesh frontier'
+          curl --fail --silent --cookie /tmp/tf006-cookie.txt 'http://127.0.0.1:5184/optigrid-v1-physical.html?role=receiver' | grep -q 'ONE-CLICK NATIVE-PIXEL + MESH FRONTIER'
+          curl --fail --silent --cookie /tmp/tf006-cookie.txt 'http://127.0.0.1:5184/api/lab/latest' | grep -q 'NO_RUN'
       - name: Upload TF-005 carrier and frontier results
         if: always()
         uses: actions/upload-artifact@v4

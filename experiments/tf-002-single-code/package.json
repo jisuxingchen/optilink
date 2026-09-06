@@ -9,6 +9,7 @@
     "lab:tunnel": "node lab-tunnel.mjs",
     "lab:tunnel:fountain": "OPTILINK_LAB_PAGE=fountain node lab-tunnel.mjs",
     "lab:tunnel:optigrid": "OPTILINK_LAB_PAGE=optigrid node lab-tunnel.mjs",
+    "lab:tunnel:tf006": "node lab-tunnel-tf006.mjs",
     "build": "tsc --noEmit && vite build",
     "test": "node --test src/*.test.ts",
     "bench:headless": "playwright test carrier-bench.spec.mjs --config=playwright.config.mjs --reporter=line"
