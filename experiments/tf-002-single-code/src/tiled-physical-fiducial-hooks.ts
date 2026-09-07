@@ -1,17 +1,13 @@
-import {TF007_FIDUCIAL_MARGIN_PX,TF007_FIDUCIAL_RING_PX} from './tiled-orientation-fiducial.ts';
+import {TF007_FIDUCIAL_MARKER_PX,TF007_FIDUCIAL_OFFSET_Y_PX} from './tiled-orientation-fiducial.ts';
 import {getPhysicalAcquisitionDiagnostics,resetPhysicalAcquisitionDiagnostics} from './tiled-training-solver.ts';
 
 let installed=false;
 let selftestMatrix=0;
 
-function drawFiducial(ctx:CanvasRenderingContext2D,left:number,top:number,width:number,height:number):void{
-  const m=TF007_FIDUCIAL_MARGIN_PX,r=TF007_FIDUCIAL_RING_PX;
-  ctx.save();ctx.fillStyle='#000';
-  ctx.fillRect(left-m,top-m,width+2*m,r);
-  ctx.fillRect(left-m,top+height+m-r,width+2*m,r);
-  ctx.fillRect(left-m,top-m,r,height+2*m);
-  ctx.fillRect(left+width+m-r,top-m,r,height+2*m);
-  ctx.restore();
+function drawFiducialMarker(ctx:CanvasRenderingContext2D,left:number,top:number,width:number,height:number):void{
+  const size=TF007_FIDUCIAL_MARKER_PX;
+  const cx=left+width/2,cy=top+height/2+TF007_FIDUCIAL_OFFSET_Y_PX;
+  ctx.save();ctx.fillStyle='#000';ctx.fillRect(cx-size/2,cy-size/2,size,size);ctx.restore();
 }
 
 function installDrawHook(enableSelftestRealism:boolean):void{
@@ -33,7 +29,7 @@ function installDrawHook(enableSelftestRealism:boolean):void{
       const left=Number(args[1]),top=Number(args[2]),width=Number(args[3]),height=Number(args[4]);
       if(Number.isFinite(width)&&Number.isFinite(height)&&width>=400&&height>=400&&width<=620&&height<=620){
         if(destId==='sender')selftestMatrix=source.width||0;
-        drawFiducial(this,left,top,width,height);
+        drawFiducialMarker(this,left,top,width,height);
       }
     }
     return result;
@@ -53,7 +49,7 @@ function installWebSocketHook():void{
         if(message?.type==='state'&&message?.event==='tf007v3-receiver-ready')resetPhysicalAcquisitionDiagnostics();
         if(message?.type==='state'&&message?.event==='tf007v3-calibration-result'&&message.value&&typeof message.value==='object'){
           const history=getPhysicalAcquisitionDiagnostics();
-          message.value.locatorDiagnostics=history.at(-1)||null;
+          message.value.locatorDiagnostics=history.length?history[history.length-1]:null;
           if(String(message.id||'').includes('-orientation-')){
             message.value.locatorDiagnosticHistory=history.slice(-4);
             message.value.orientationResolved=Boolean(message.value.success);
@@ -64,7 +60,7 @@ function installWebSocketHook():void{
           }
           data=JSON.stringify(message);
         }else if(message?.type==='lab-result'&&message.run?.schema==='optilink.tf007.tiled.physical.v3'){
-          message.run.acquisitionHardening={profile:'macro-fiducial-v1',fiducialMarginPx:TF007_FIDUCIAL_MARGIN_PX,fiducialRingPx:TF007_FIDUCIAL_RING_PX,exactPreambleStillAuthoritative:true};
+          message.run.acquisitionHardening={profile:'macro-marker-triplet-v2',markerPx:TF007_FIDUCIAL_MARKER_PX,markerOffsetYPx:TF007_FIDUCIAL_OFFSET_Y_PX,exactPreambleStillAuthoritative:true};
           data=JSON.stringify(message);
         }
       }catch{}
@@ -74,8 +70,20 @@ function installWebSocketHook():void{
   proto.__tf007DiagnosticPatched=true;
 }
 
+function installSelftestEvidenceHook():void{
+  const key='__TF007_PHYSICAL_SELFTEST__';
+  let stored:any;
+  try{
+    Object.defineProperty(window,key,{configurable:true,get(){return stored;},set(value){
+      if(value&&typeof value==='object'&&value.done)value.acquisitionDiagnostics=getPhysicalAcquisitionDiagnostics();
+      stored=value;
+    }});
+  }catch{}
+}
+
 export function installPhysicalAcquisitionHardening(options:{selftestRealism?:boolean}={}):void{
   if(installed)return;installed=true;
   installDrawHook(Boolean(options.selftestRealism));
   installWebSocketHook();
+  if(options.selftestRealism)installSelftestEvidenceHook();
 }
