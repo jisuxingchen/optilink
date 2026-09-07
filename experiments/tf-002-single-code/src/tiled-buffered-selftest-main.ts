@@ -4,7 +4,7 @@ import {samplePackedCells, sampleSparseFingerprint} from './packed-cell-sampler.
 import {StableFingerprintGate} from './stable-fingerprint-gate.ts';
 import {decodePackedOptiGridV1} from './deferred-optigrid-decoder.ts';
 import {buildTf007fCandidatePlan} from './tf-007f-candidate-plan.ts';
-import type {PackedCellObservation} from './packed-cell-buffer.ts';
+import {binaryCellsFromPacked, type PackedCellObservation} from './packed-cell-buffer.ts';
 
 const FRAME_WIDTH = 1920;
 const FRAME_HEIGHT = 1080;
@@ -13,9 +13,9 @@ const SAMPLE_HEIGHT = 720;
 const TILE_COUNT = 3;
 const TILE_CENTERS = [330, 960, 1590] as const;
 const TILE_RENDER_PIXELS = 540;
-const MATRIX = 176;
 const SYMBOLS = 12;
 const RELOCK_EVERY_CAPTURES = 6;
+const DIAGNOSTIC_MATRICES = [160, 176] as const;
 
 const sender = document.getElementById('sender') as HTMLCanvasElement;
 const status = document.getElementById('status') as HTMLPreElement;
@@ -58,12 +58,12 @@ function drawTile(cells: Uint8Array, matrixSize: number): void {
   ctx.putImageData(image, 0, 0);
 }
 
-function render(cellsByTile: Uint8Array[]): void {
+function render(cellsByTile: Uint8Array[], matrixSize: number): void {
   senderContext.fillStyle = '#eceff1';
   senderContext.fillRect(0, 0, FRAME_WIDTH, FRAME_HEIGHT);
   senderContext.imageSmoothingEnabled = false;
   for (let tile = 0; tile < TILE_COUNT; tile += 1) {
-    drawTile(cellsByTile[tile], MATRIX);
+    drawTile(cellsByTile[tile], matrixSize);
     const left = TILE_CENTERS[tile] - TILE_RENDER_PIXELS / 2;
     const top = FRAME_HEIGHT / 2 - TILE_RENDER_PIXELS / 2;
     senderContext.fillStyle = '#fff';
@@ -84,24 +84,24 @@ function lane(tile: number) {
   return {x: tile * SAMPLE_WIDTH / TILE_COUNT, y: 0, width: SAMPLE_WIDTH / TILE_COUNT, height: SAMPLE_HEIGHT};
 }
 
-function trainingCells(tile: number): Uint8Array {
-  const sequence = (0x54000000 | ((MATRIX & 0xff) << 8) | tile) >>> 0;
-  const bytes = payloadCapacityForMatrixV1(MATRIX);
-  return encodeFrameCellsV1(MATRIX, sequence, payloadFor(sequence, bytes, tile));
+function trainingCells(matrixSize: number, tile: number): Uint8Array {
+  const sequence = (0x54000000 | ((matrixSize & 0xff) << 8) | tile) >>> 0;
+  const bytes = payloadCapacityForMatrixV1(matrixSize);
+  return encodeFrameCellsV1(matrixSize, sequence, payloadFor(sequence, bytes, tile));
 }
 
-function dynamicCells(symbol: number, transient = false): Uint8Array[] {
-  const bytes = payloadCapacityForMatrixV1(MATRIX);
+function dynamicCells(matrixSize: number, symbol: number, transient = false): Uint8Array[] {
+  const bytes = payloadCapacityForMatrixV1(matrixSize);
   return Array.from({length: TILE_COUNT}, (_, tile) => {
     const sequence = transient
       ? (0x70000000 + symbol * 16 + tile) >>> 0
       : (((symbol + 1) * 16 + tile + 1) >>> 0);
-    return encodeFrameCellsV1(MATRIX, sequence, payloadFor(sequence, bytes, tile));
+    return encodeFrameCellsV1(matrixSize, sequence, payloadFor(sequence, bytes, tile));
   });
 }
 
-function concatFingerprints(image: ImageData, locks: PixelLock[]): Uint8Array {
-  const parts = locks.map(lock => sampleSparseFingerprint(image, MATRIX, lock, 96));
+function concatFingerprints(image: ImageData, matrixSize: number, locks: PixelLock[]): Uint8Array {
+  const parts = locks.map(lock => sampleSparseFingerprint(image, matrixSize, lock, 96));
   const total = parts.reduce((sum, part) => sum + part.length, 0);
   const output = new Uint8Array(total);
   let offset = 0;
@@ -109,19 +109,64 @@ function concatFingerprints(image: ImageData, locks: PixelLock[]): Uint8Array {
   return output;
 }
 
-type Capture = {tiles: PackedCellObservation[]};
+function countCellErrors(actual: Uint8Array, expected: Uint8Array): number {
+  let errors = 0;
+  const length = Math.min(actual.length, expected.length);
+  for (let i = 0; i < length; i += 1) if (actual[i] !== expected[i]) errors += 1;
+  return errors + Math.abs(actual.length - expected.length);
+}
 
-async function run() {
-  const started = performance.now();
-  const preambles = [trainingCells(0), trainingCells(1), trainingCells(2)];
-  render(preambles);
+function packedBitDiagnostic(observation: PackedCellObservation, expected: Uint8Array) {
+  const byThreshold = ([1, 2, 3] as const).map(threshold => ({
+    threshold,
+    errors: countCellErrors(binaryCellsFromPacked(observation, threshold), expected),
+  }));
+  return {
+    byThreshold,
+    minimumErrors: Math.min(...byThreshold.map(item => item.errors)),
+  };
+}
+
+type Capture = {symbol: number; tiles: PackedCellObservation[]};
+
+type MatrixResult = {
+  pass: boolean;
+  matrixSize: number;
+  opticalSymbolHz: 15;
+  displayRefreshHz: 60;
+  holdRefreshes: 4;
+  trainingErrors: number[];
+  sparseFrames: number;
+  fullSamples: number;
+  captures: number;
+  transitionCaptures: number;
+  relockAttempts: number;
+  relockFailures: number;
+  decodedTiles: number;
+  decodedSymbols: number;
+  oracleMismatches: number;
+  captureMs: number;
+  deferredDecodeMs: number;
+  theoreticalGrossBytesPerSecond: number;
+  payloadBytesPerTile: number;
+  failedTileDiagnostics: Array<{
+    symbol: number;
+    tile: number;
+    minimumErrors: number;
+    byThreshold: Array<{threshold: 1 | 2 | 3; errors: number}>;
+  }>;
+};
+
+async function runMatrix(matrixSize: number): Promise<MatrixResult> {
+  const preambles = [trainingCells(matrixSize, 0), trainingCells(matrixSize, 1), trainingCells(matrixSize, 2)];
+  render(preambles, matrixSize);
   const trainingImage = cameraImage();
   const locks: PixelLock[] = [];
   const trainingErrors: number[] = [];
   for (let tile = 0; tile < TILE_COUNT; tile += 1) {
-    const lock = acquireKnownTrainingLock(trainingImage, MATRIX, preambles[tile], lane(tile));
-    if (!lock) throw new Error(`training lock failed for tile ${tile}`);
-    const errors = countKnownErrors(trainingImage, MATRIX, preambles[tile], lock).errors;
+    const lock = acquireKnownTrainingLock(trainingImage, matrixSize, preambles[tile], lane(tile));
+    if (!lock) throw new Error(`training lock failed for ${matrixSize} tile ${tile}`);
+    const errors = countKnownErrors(trainingImage, matrixSize, preambles[tile], lock).errors;
     locks.push(lock);
     trainingErrors.push(errors);
   }
@@ -136,25 +181,25 @@ async function run() {
   const captureStarted = performance.now();
 
   for (let symbol = 0; symbol < SYMBOLS; symbol += 1) {
-    render(dynamicCells(symbol, true));
+    render(dynamicCells(matrixSize, symbol, true), matrixSize);
     {
       const image = cameraImage();
       sparseFrames += 1;
-      const decision = gate.consider(concatFingerprints(image, locks));
+      const decision = gate.consider(concatFingerprints(image, matrixSize, locks));
       if (decision.capture) transitionCaptures += 1;
     }
 
-    render(dynamicCells(symbol, false));
+    render(dynamicCells(matrixSize, symbol, false), matrixSize);
     for (let repeat = 0; repeat < 3; repeat += 1) {
       const image = cameraImage();
       sparseFrames += 1;
-      const decision = gate.consider(concatFingerprints(image, locks));
+      const decision = gate.consider(concatFingerprints(image, matrixSize, locks));
       if (!decision.capture) continue;
 
       const shouldRelock = captures.length === 0 || captures.length % RELOCK_EVERY_CAPTURES === 0;
       if (shouldRelock) {
         relockAttempts += 1;
-        const tracked = locks.map(lock => trackReservedLock(image, MATRIX, lock));
+        const tracked = locks.map(lock => trackReservedLock(image, matrixSize, lock));
         if (tracked.some(item => !item)) {
           relockFailures += 1;
           continue;
@@ -162,9 +207,9 @@ async function run() {
         for (let tile = 0; tile < TILE_COUNT; tile += 1) locks[tile] = tracked[tile]!;
       }
 
-      const tiles = locks.map(lock => samplePackedCells(image, MATRIX, lock));
-      if (tiles.some(item => !item)) throw new Error('packed cell sample failed');
-      captures.push({tiles: tiles as PackedCellObservation[]});
+      const tiles = locks.map(lock => samplePackedCells(image, matrixSize, lock));
+      if (tiles.some(item => !item)) throw new Error(`packed cell sample failed for ${matrixSize}`);
+      captures.push({symbol, tiles: tiles as PackedCellObservation[]});
       fullSamples += 1;
     }
   }
@@ -174,11 +219,17 @@ async function run() {
   let decodedTiles = 0;
   let decodedSymbols = 0;
   let oracleMismatches = 0;
+  const failedTileDiagnostics: MatrixResult['failedTileDiagnostics'] = [];
   for (const capture of captures) {
+    const expectedCells = dynamicCells(matrixSize, capture.symbol, false);
     let complete = 0;
     capture.tiles.forEach((observation, tile) => {
-      const result = decodePackedOptiGridV1(observation, MATRIX);
-      if (!result.decoded) return;
+      const result = decodePackedOptiGridV1(observation, matrixSize);
+      if (!result.decoded) {
+        const diagnostic = packedBitDiagnostic(observation, expectedCells[tile]);
+        failedTileDiagnostics.push({symbol: capture.symbol, tile, ...diagnostic});
+        return;
+      }
       decodedTiles += 1;
       const expected = payloadFor(result.decoded.sequence, result.decoded.payload.length, tile);
       if (!sameBytes(result.decoded.payload, expected)) oracleMismatches += 1;
@@ -187,19 +238,19 @@ async function run() {
     if (complete === TILE_COUNT) decodedSymbols += 1;
   }
   const deferredDecodeMs = performance.now() - decodeStarted;
-  const plan = buildTf007fCandidatePlan(60);
-  const candidate176 = plan.find(item => item.matrixSize === 176 && item.actualSymbolHz === 15)!;
-  const result = {
-    done: true,
-    pass: trainingErrors.every(value => value === 0)
-      && captures.length === SYMBOLS
-      && transitionCaptures === 0
-      && relockFailures === 0
-      && decodedTiles === SYMBOLS * TILE_COUNT
-      && decodedSymbols === SYMBOLS
-      && oracleMismatches === 0,
-    evidenceClass: 'pixel-domain-buffered-transport-simulation',
-    matrixSize: MATRIX,
+  const candidate = buildTf007fCandidatePlan(60).find(item => item.matrixSize === matrixSize && item.actualSymbolHz === 15);
+  if (!candidate) throw new Error(`missing TF-007F candidate ${matrixSize}@15`);
+  const pass = trainingErrors.every(value => value === 0)
+    && captures.length === SYMBOLS
+    && transitionCaptures === 0
+    && relockFailures === 0
+    && decodedTiles === SYMBOLS * TILE_COUNT
+    && decodedSymbols === SYMBOLS
+    && oracleMismatches === 0;
+
+  return {
+    pass,
+    matrixSize,
     opticalSymbolHz: 15,
     displayRefreshHz: 60,
     holdRefreshes: 4,
@@ -215,10 +266,27 @@ async function run() {
     oracleMismatches,
     captureMs,
     deferredDecodeMs,
+    theoreticalGrossBytesPerSecond: candidate.theoreticalGrossBytesPerSecond,
+    payloadBytesPerTile: candidate.payloadBytesPerTile,
+    failedTileDiagnostics,
+  };
+}
+
+async function run() {
+  const started = performance.now();
+  const frontier: MatrixResult[] = [];
+  for (const matrixSize of DIAGNOSTIC_MATRICES) frontier.push(await runMatrix(matrixSize));
+  const control160 = frontier.find(item => item.matrixSize === 160)!;
+  const stress176 = frontier.find(item => item.matrixSize === 176)!;
+  const result = {
+    done: true,
+    ...stress176,
+    pass: stress176.pass,
+    evidenceClass: 'pixel-domain-buffered-transport-simulation',
+    frontier,
+    control160Pass: control160.pass,
     totalBenchMs: performance.now() - started,
-    theoreticalGrossBytesPerSecond: candidate176.theoreticalGrossBytesPerSecond,
-    payloadBytesPerTile: candidate176.payloadBytesPerTile,
-    note: 'Simulation only; no physical raw ingress or Net Goodput claim.',
+    note: 'Simulation only. 160 is a diagnostic control above 100 KB/s theoretical gross; the existing strict 176 gate remains authoritative. No physical raw ingress or Net Goodput claim.',
   };
   status.textContent = JSON.stringify(result, null, 2);
   (window as any).__TF007F_BUFFERED_SELFTEST__ = result;
