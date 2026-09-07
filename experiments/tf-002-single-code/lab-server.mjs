@@ -4,6 +4,7 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {WebSocketServer, WebSocket} from 'ws';
 import {createServer as createViteServer} from 'vite';
+import {allowTiledLabResult, allowTiledRelay} from './tiled-control-policy.mjs';
 
 const execFileAsync = promisify(execFile);
 const port = Number(process.env.PORT || 5173);
@@ -105,6 +106,17 @@ function safeSend(ws, payload) {
 }
 function broadcast(payload, except) {
   for (const ws of clients.keys()) if (ws !== except) safeSend(ws, payload);
+}
+function broadcastTiled(payload, except, sourceRole) {
+  const targetRole = sourceRole === 'tf007v3-tiled-sender'
+    ? 'tf007v3-tiled-receiver'
+    : sourceRole === 'tf007v3-tiled-receiver'
+      ? 'tf007v3-tiled-sender'
+      : null;
+  if (!targetRole) return;
+  for (const [ws, meta] of clients.entries()) {
+    if (ws !== except && meta.role === targetRole) safeSend(ws, payload);
+  }
 }
 async function persistResult(run) {
   latestRun = run;
@@ -229,10 +241,22 @@ wss.on('connection', (ws, req) => {
       return;
     }
     if (message.type === 'telemetry' || message.type === 'command' || message.type === 'state') {
+      if (labMode === 'tiled') {
+        if (!allowTiledRelay(meta.role, message)) {
+          safeSend(ws, {type: 'server', event: 'policy-rejected', reason: 'TF-007 tiled control-plane boundary'});
+          return;
+        }
+        broadcastTiled(message, ws, meta.role);
+        return;
+      }
       broadcast(message, ws);
       return;
     }
     if (message.type === 'lab-result') {
+      if (labMode === 'tiled' && !allowTiledLabResult(meta.role, message)) {
+        safeSend(ws, {type: 'server', event: 'policy-rejected', reason: 'TF-007 tiled result boundary'});
+        return;
+      }
       const run = {...message.run, receivedAt: new Date().toISOString()};
       await persistResult(run);
       const publish = await tryPublishIssue(run);
