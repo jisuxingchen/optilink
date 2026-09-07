@@ -276,17 +276,24 @@ async function run() {
   const started = performance.now();
   const frontier: MatrixResult[] = [];
   for (const matrixSize of DIAGNOSTIC_MATRICES) frontier.push(await runMatrix(matrixSize));
-  const control160 = frontier.find(item => item.matrixSize === 160)!;
-  const stress176 = frontier.find(item => item.matrixSize === 176)!;
+  const release160 = frontier.find(item => item.matrixSize === 160)!;
+  const frontier176 = frontier.find(item => item.matrixSize === 176)!;
+  const frontier176IntegrityPass = frontier176.trainingErrors.every(value => value === 0)
+    && frontier176.captures === SYMBOLS
+    && frontier176.transitionCaptures === 0
+    && frontier176.relockFailures === 0
+    && frontier176.oracleMismatches === 0;
   const result = {
     done: true,
-    ...stress176,
-    pass: stress176.pass,
+    ...release160,
+    pass: release160.pass && release160.theoreticalGrossBytesPerSecond > 100000 && frontier176IntegrityPass,
     evidenceClass: 'pixel-domain-buffered-transport-simulation',
+    releaseCandidateMatrix: 160,
+    releaseCandidateSymbolHz: 15,
+    frontier176IntegrityPass,
     frontier,
-    control160Pass: control160.pass,
     totalBenchMs: performance.now() - started,
-    note: 'Simulation only. 160 is a diagnostic control above 100 KB/s theoretical gross; the existing strict 176 gate remains authoritative. No physical raw ingress or Net Goodput claim.',
+    note: 'Simulation only. Issue #32 defines 3×160 as the primary low-symbol-rate sweep. Phone-readiness is gated on exact 3×160@15 (>100,000 B/s theoretical gross) with 176 retained as a non-authoritative frontier diagnostic. No physical raw ingress or Net Goodput claim.',
   };
   status.textContent = JSON.stringify(result, null, 2);
   (window as any).__TF007F_BUFFERED_SELFTEST__ = result;
