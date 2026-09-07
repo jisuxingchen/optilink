@@ -19,6 +19,8 @@ test('TF-007F buffers stable optical observations and decodes them later', async
   expect(result.decodedSymbols).toBe(12);
   expect(result.oracleMismatches).toBe(0);
   expect(result.holdRefreshes).toBe(4);
-  expect(result.theoreticalGrossBytesPerSecond).toBe(136260);
-  expect(result.theoreticalGrossBytesPerSecond).toBeGreaterThan(120000);
+  expect(result.matrixSize).toBe(160);
+  expect(result.opticalSymbolHz).toBe(15);
+  expect(result.theoreticalGrossBytesPerSecond).toBe(109620);
+  expect(result.theoreticalGrossBytesPerSecond).toBeGreaterThanOrEqual(100000);
 });
