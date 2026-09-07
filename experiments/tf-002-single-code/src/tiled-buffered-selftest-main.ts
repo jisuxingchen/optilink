@@ -1,5 +1,5 @@
 import {encodeFrameCellsV1, payloadCapacityForMatrixV1} from './optigrid-v1.ts';
-import {acquireKnownTrainingLock, countKnownErrors, type PixelLock} from './tiled-training-solver.ts';
+import {acquireKnownTrainingLock, countKnownErrors, trackReservedLock, type PixelLock} from './tiled-training-solver.ts';
 import {samplePackedCells, sampleSparseFingerprint} from './packed-cell-sampler.ts';
 import {StableFingerprintGate} from './stable-fingerprint-gate.ts';
 import {decodePackedOptiGridV1} from './deferred-optigrid-decoder.ts';
@@ -15,6 +15,7 @@ const TILE_CENTERS = [330, 960, 1590] as const;
 const TILE_RENDER_PIXELS = 540;
 const MATRIX = 176;
 const SYMBOLS = 12;
+const RELOCK_EVERY_CAPTURES = 6;
 
 const sender = document.getElementById('sender') as HTMLCanvasElement;
 const status = document.getElementById('status') as HTMLPreElement;
@@ -130,10 +131,11 @@ async function run() {
   let transitionCaptures = 0;
   let sparseFrames = 0;
   let fullSamples = 0;
+  let relockAttempts = 0;
+  let relockFailures = 0;
   const captureStarted = performance.now();
 
   for (let symbol = 0; symbol < SYMBOLS; symbol += 1) {
-    // One unstable/transition observation. It must never be promoted to a full capture.
     render(dynamicCells(symbol, true));
     {
       const image = cameraImage();
@@ -142,13 +144,24 @@ async function run() {
       if (decision.capture) transitionCaptures += 1;
     }
 
-    // Held symbol: three camera observations of the same optical state.
     render(dynamicCells(symbol, false));
     for (let repeat = 0; repeat < 3; repeat += 1) {
       const image = cameraImage();
       sparseFrames += 1;
       const decision = gate.consider(concatFingerprints(image, locks));
       if (!decision.capture) continue;
+
+      const shouldRelock = captures.length === 0 || captures.length % RELOCK_EVERY_CAPTURES === 0;
+      if (shouldRelock) {
+        relockAttempts += 1;
+        const tracked = locks.map(lock => trackReservedLock(image, MATRIX, lock));
+        if (tracked.some(item => !item)) {
+          relockFailures += 1;
+          continue;
+        }
+        for (let tile = 0; tile < TILE_COUNT; tile += 1) locks[tile] = tracked[tile]!;
+      }
+
       const tiles = locks.map(lock => samplePackedCells(image, MATRIX, lock));
       if (tiles.some(item => !item)) throw new Error('packed cell sample failed');
       captures.push({tiles: tiles as PackedCellObservation[]});
@@ -181,6 +194,7 @@ async function run() {
     pass: trainingErrors.every(value => value === 0)
       && captures.length === SYMBOLS
       && transitionCaptures === 0
+      && relockFailures === 0
       && decodedTiles === SYMBOLS * TILE_COUNT
       && decodedSymbols === SYMBOLS
       && oracleMismatches === 0,
@@ -194,6 +208,8 @@ async function run() {
     fullSamples,
     captures: captures.length,
     transitionCaptures,
+    relockAttempts,
+    relockFailures,
     decodedTiles,
     decodedSymbols,
     oracleMismatches,
