@@ -7,7 +7,7 @@ test('TF-007F buffers stable optical observations and decodes them later', async
   const result = await page.evaluate(() => window.__TF007F_BUFFERED_SELFTEST__);
   console.log(JSON.stringify(result, null, 2));
   mkdirSync('results',{recursive:true});
-  writeFileSync('results/tf-007f-buffered-selftest.json',JSON.stringify(result,null,2));
+  writeFileSync('results/tiled-carrier-buffered-selftest.json',JSON.stringify(result,null,2));
 
   expect(result.pass).toBe(true);
   expect(result.evidenceClass).toBe('pixel-domain-buffered-transport-simulation');
