@@ -10,8 +10,9 @@ const FRAME_W=1280,FRAME_H=720,SENDER_W=1920,SENDER_H=1080,TILE_Y=540;
 const TILE_X=[330,960,1590] as const;
 const canvas=document.getElementById('locatorFrame') as HTMLCanvasElement;
 const status=document.getElementById('locatorStatus') as HTMLElement;
-const ctx=canvas.getContext('2d',{alpha:false,willReadFrequently:true});
-if(!ctx)throw new Error('locator canvas unavailable');
+const rawCtx=canvas.getContext('2d',{alpha:false,willReadFrequently:true});
+if(!rawCtx)throw new Error('locator canvas unavailable');
+const ctx:CanvasRenderingContext2D=rawCtx;
 
 type Scenario={name:string;scale:number;offsetX:number;offsetY:number;angleDeg:number;shearX:number;shearY:number;blur:number;contrast:number;brightness:number;noise:number;background:string;glare:number};
 type Point={x:number;y:number};
