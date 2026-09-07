@@ -1,6 +1,6 @@
 import * as legacy from './tiled-training-solver-legacy.ts';
 import {acquireKnownTrainingLock as acquireCore} from './tiled-training-solver-core.ts';
-import {locateOrientationFiducials,type FiducialLocatorDiagnostic} from './tiled-orientation-fiducial.ts';
+import {locateOrientationFiducials,TF007_FIDUCIAL_HALO_PX,TF007_FIDUCIAL_MARKER_PX,TF007_FIDUCIAL_OFFSET_Y_PX,type FiducialLocatorDiagnostic} from './tiled-orientation-fiducial.ts';
 import {homographyFromUnitSquare,mapHomography,quadInside,type Quad} from './optigrid-geometry.ts';
 import {reservedCellValueV1} from './optigrid-v1.ts';
 import type {PixelLock,Rect,TrainingRegionDiagnostic} from './tiled-training-solver-legacy.ts';
@@ -54,10 +54,12 @@ function quadSide(quad:Quad){
   const edges=[Math.hypot(quad.tr.x-quad.tl.x,quad.tr.y-quad.tl.y),Math.hypot(quad.br.x-quad.bl.x,quad.br.y-quad.bl.y),Math.hypot(quad.bl.x-quad.tl.x,quad.bl.y-quad.tl.y),Math.hypot(quad.br.x-quad.tr.x,quad.br.y-quad.tr.y)];
   return edges.reduce((a,b)=>a+b,0)/edges.length;
 }
-function quadAxisAngle(quad:Quad){
-  const dx=((quad.tr.x-quad.tl.x)+(quad.br.x-quad.bl.x))/2,dy=((quad.tr.y-quad.tl.y)+(quad.br.y-quad.bl.y))/2;
-  return Math.atan2(dy,dx);
+function quadAxis(quad:Quad){
+  const dx=((quad.tr.x-quad.tl.x)+(quad.br.x-quad.bl.x))/2,dy=((quad.tr.y-quad.tl.y)+(quad.br.y-quad.bl.y))/2,len=Math.max(1,Math.hypot(dx,dy));
+  return{x:dx/len,y:dy/len};
 }
+function quadAxisAngle(quad:Quad){const axis=quadAxis(quad);return Math.atan2(axis.y,axis.x);}
+function downwardNormal(axis:{x:number;y:number}){let normal={x:-axis.y,y:axis.x};if(normal.y<0)normal={x:-normal.x,y:-normal.y};return normal;}
 function normalizeAngle(value:number){while(value>Math.PI)value-=Math.PI*2;while(value<-Math.PI)value+=Math.PI*2;return value;}
 function translateLock(lock:PixelLock,dx:number,dy:number):PixelLock{
   const out=cloneLock(lock);for(const key of['tl','tr','br','bl'] as const){out.quad[key].x+=dx;out.quad[key].y+=dy;}return out;
@@ -92,10 +94,29 @@ function betterTracked(candidate:PixelLock|null,best:PixelLock|null){
 }
 function qualifiesTracked(lock:PixelLock|null){return Boolean(lock&&lock.score>=.68&&lock.contrast>=12);}
 
-// Dynamic frames arrive after a static same-density preamble. A hand-held camera can move a
-// few normalized pixels between those frames, which cell-phase search alone cannot absorb.
-// Track whole-quad translation first, then finish with sub-cell phase refinement. The no-motion
-// fast path is one reserved evaluation so stable frames stay cheap.
+function markerContrast(image:ImageData,cx:number,cy:number,coreSide:number,haloSide:number){
+  const coreRadius=coreSide*.22,haloRadius=haloSide*.38;let core=0,coreCount=0,halo=0,haloCount=0;
+  for(const dx of[-coreRadius,0,coreRadius])for(const dy of[-coreRadius,0,coreRadius]){core+=legacy.sampleLuma(image,cx+dx,cy+dy);coreCount++;}
+  for(const [dx,dy] of [[-haloRadius,-haloRadius],[0,-haloRadius],[haloRadius,-haloRadius],[-haloRadius,0],[haloRadius,0],[-haloRadius,haloRadius],[0,haloRadius],[haloRadius,haloRadius]]){halo+=legacy.sampleLuma(image,cx+dx,cy+dy);haloCount++;}
+  return halo/Math.max(1,haloCount)-core/Math.max(1,coreCount);
+}
+
+// Each dynamic tile keeps a large black marker inside a white isolation halo. Search only a
+// small window around the marker predicted by the previous tile lock; this gives an unambiguous
+// whole-pixel motion anchor without paying for a full-frame locator on every camera frame.
+function markerGuidedLock(image:ImageData,start:PixelLock):PixelLock|null{
+  const center=quadCenter(start.quad),side=quadSide(start.quad),axis=quadAxis(start.quad),normal=downwardNormal(axis);
+  const expectedMarker={x:center.x+normal.x*(TF007_FIDUCIAL_OFFSET_Y_PX/540)*side,y:center.y+normal.y*(TF007_FIDUCIAL_OFFSET_Y_PX/540)*side};
+  const coreSide=Math.max(6,side*TF007_FIDUCIAL_MARKER_PX/540),haloSide=Math.max(coreSide+4,side*TF007_FIDUCIAL_HALO_PX/540),radius=Math.max(10,Math.min(30,side*.14)),coarse=Math.max(2,Math.min(5,coreSide/6));
+  let best={x:expectedMarker.x,y:expectedMarker.y,contrast:markerContrast(image,expectedMarker.x,expectedMarker.y,coreSide,haloSide)};
+  for(let dy=-radius;dy<=radius;dy+=coarse)for(let dx=-radius;dx<=radius;dx+=coarse){const x=expectedMarker.x+dx,y=expectedMarker.y+dy,contrast=markerContrast(image,x,y,coreSide,haloSide);if(contrast>best.contrast)best={x,y,contrast};}
+  const coarseBest={...best};for(let dy=-coarse;dy<=coarse;dy+=1)for(let dx=-coarse;dx<=coarse;dx+=1){const x=coarseBest.x+dx,y=coarseBest.y+dy,contrast=markerContrast(image,x,y,coreSide,haloSide);if(contrast>best.contrast)best={x,y,contrast};}
+  if(best.contrast<18)return null;return translateLock(start,best.x-expectedMarker.x,best.y-expectedMarker.y);
+}
+
+// Dynamic frames arrive after a static same-density preamble. Once the marker has anchored the
+// whole-pixel shift, reserved cells finish sub-cell phase alignment. A broader translation search
+// remains as a fallback when the local marker is obscured.
 function trackLocalGeometry(image:ImageData,matrix:number,start:PixelLock):PixelLock|null{
   let best=evaluateReserved(image,matrix,start);if(best&&best.score>=.94&&best.contrast>=12)return best;
   for(const step of[6,3,1.5,.75]){
@@ -123,13 +144,15 @@ function fiducialAdaptedLock(start:PixelLock,triplet:NonNullable<FiducialLocator
 }
 
 export function trackReservedLock(image:ImageData,matrix:number,trainingLock:PixelLock):PixelLock|null{
-  const local=trackLocalGeometry(image,matrix,trainingLock);
-  // High-confidence local geometry needs no full-frame scan. Lower-confidence/failed tracking
-  // falls back to the macro fiducials, then is re-qualified by the unchanged reserved-cell gate.
-  if(local&&local.score>=.90)return local;
-  const triplet=diagnosticFor(image).fiducial.triplet;if(!triplet)return local;
-  const adapted=fiducialAdaptedLock(local||trainingLock,triplet),recovered=adapted?trackLocalGeometry(image,matrix,adapted):null;
-  const best=betterTracked(recovered,local);return qualifiesTracked(best)?best:null;
+  const stable=evaluateReserved(image,matrix,trainingLock);if(stable&&stable.score>=.97&&stable.contrast>=12)return stable;
+  const guided=markerGuidedLock(image,trainingLock),guidedTracked=guided?trackLocalGeometry(image,matrix,guided):null;
+  if(guidedTracked&&guidedTracked.score>=.90)return guidedTracked;
+  const local=trackLocalGeometry(image,matrix,trainingLock);if(local&&local.score>=.90)return local;
+  // Last resort: use the global three-marker geometry. The result is still qualified by the
+  // unchanged reserved-cell gate; macro localization alone never produces a valid lock.
+  const triplet=diagnosticFor(image).fiducial.triplet;if(!triplet)return betterTracked(guidedTracked,local);
+  const seed=guidedTracked||local||trainingLock,adapted=fiducialAdaptedLock(seed,triplet),recovered=adapted?trackLocalGeometry(image,matrix,adapted):null;
+  const best=betterTracked(recovered,betterTracked(guidedTracked,local));return qualifiesTracked(best)?best:null;
 }
 
 export function acquireKnownTrainingLock(image:ImageData,matrix:number,cells:Uint8Array,rect:Rect):PixelLock|null{
