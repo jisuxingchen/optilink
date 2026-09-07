@@ -15,6 +15,7 @@ export default defineConfig({
         tiledCarrier: entry('./tiled-carrier.html'),
         tiledTemporal: entry('./tiled-temporal.html'),
         tiledPhysical: entry('./tiled-physical.html'),
+        tiledPhysicalV5: entry('./tiled-physical-v5.html'),
         tiledPhysicalSelftest: entry('./tiled-physical-selftest.html'),
         tiledLocatorSelftest: entry('./tiled-locator-selftest.html'),
         tiledBufferedSelftest: entry('./tiled-buffered-selftest.html'),
