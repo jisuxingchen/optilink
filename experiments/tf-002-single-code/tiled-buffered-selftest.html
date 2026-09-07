@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OptiLink TF-007F Buffered Transport Selftest</title>
+  <style>
+    body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin: 20px; background: #f4f5f7; color: #111; }
+    canvas { width: 960px; max-width: 100%; border: 1px solid #999; background: #eceff1; }
+    pre { white-space: pre-wrap; background: white; padding: 12px; border: 1px solid #ccc; }
+  </style>
+</head>
+<body>
+  <h1>TF-007F · Buffered optical transport selftest</h1>
+  <p>Pixel-domain simulation only. No physical throughput or Net Goodput claim.</p>
+  <canvas id="sender" width="1920" height="1080"></canvas>
+  <pre id="status">running…</pre>
+  <script type="module" src="/src/tiled-buffered-selftest-bootstrap.ts"></script>
+</body>
+</html>
