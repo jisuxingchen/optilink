@@ -12,7 +12,7 @@ export type FiducialLocatorDiagnostic = {
   luma:{p02:number;p10:number;p50:number;p85:number;p98:number;dynamicRange:number;darkThreshold:number;inclusiveThreshold:number};
   thresholdMode:'conservative'|'inclusive'|null;
   componentCount:number; components:FiducialComponent[];
-  conservativeComponentCount:number; inclusiveComponentCount:number;
+  conservativeComponentCount:number; inclusiveComponentCount:number|null; inclusiveEvaluated:boolean;
   triplet:null|{
     support:'triplet'|'outer-pair'; observedMarkerCount:2|3;
     markers:FiducialPoint[]; points:FiducialPoint[]; spacing:number; spacingError:number; ySpread:number; sizeSpread:number;
@@ -124,12 +124,14 @@ export function locateOrientationFiducials(image:ImageData):FiducialLocatorDiagn
   const p02=quantile(values,.02),p10=quantile(values,.10),p50=quantile(values,.50),p85=quantile(values,.85),p98=quantile(values,.98),dynamicRange=p98-p02;
   const darkThreshold=Math.min(p50-5,p02+Math.max(18,Math.min(74,dynamicRange*.28)));
   const inclusiveThreshold=Math.min(p85-Math.max(10,dynamicRange*.08),p02+Math.max(32,Math.min(112,dynamicRange*.50)));
-  const conservativeComponents=detectMarkerComponents(image,darkThreshold,step),inclusiveComponents=inclusiveThreshold>darkThreshold+4?detectMarkerComponents(image,inclusiveThreshold,step):conservativeComponents;
-  const conservativeCandidate=chooseCandidate(image,conservativeComponents),inclusiveCandidate=chooseCandidate(image,inclusiveComponents);
+  const conservativeComponents=detectMarkerComponents(image,darkThreshold,step),conservativeCandidate=chooseCandidate(image,conservativeComponents);
+  const inclusiveEvaluated=inclusiveThreshold>darkThreshold+4&&(!conservativeCandidate||conservativeComponents.length<3||conservativeCandidate.score>1.55);
+  const inclusiveComponents=inclusiveEvaluated?detectMarkerComponents(image,inclusiveThreshold,step):null;
+  const inclusiveCandidate=inclusiveComponents?chooseCandidate(image,inclusiveComponents):null;
   let thresholdMode:'conservative'|'inclusive'|null=null,components=conservativeComponents,triplet:Candidate|null=conservativeCandidate;
-  if(inclusiveCandidate&&(!triplet||inclusiveCandidate.score+.12<triplet.score)){thresholdMode='inclusive';components=inclusiveComponents;triplet=inclusiveCandidate;}
+  if(inclusiveCandidate&&(!triplet||inclusiveCandidate.score+.12<triplet.score)){thresholdMode='inclusive';components=inclusiveComponents!;triplet=inclusiveCandidate;}
   else if(triplet)thresholdMode='conservative';
-  else if(inclusiveCandidate){thresholdMode='inclusive';components=inclusiveComponents;triplet=inclusiveCandidate;}
+  else if(inclusiveCandidate){thresholdMode='inclusive';components=inclusiveComponents!;triplet=inclusiveCandidate;}
   return{method:'macro-marker-triplet-v4',width:image.width,height:image.height,sampleStep:step,luma:{p02,p10,p50,p85,p98,dynamicRange,darkThreshold,inclusiveThreshold},thresholdMode,
-    componentCount:components.length,components:components.slice(0,14),conservativeComponentCount:conservativeComponents.length,inclusiveComponentCount:inclusiveComponents.length,triplet};
+    componentCount:components.length,components:components.slice(0,14),conservativeComponentCount:conservativeComponents.length,inclusiveComponentCount:inclusiveComponents?.length??null,inclusiveEvaluated,triplet};
 }
