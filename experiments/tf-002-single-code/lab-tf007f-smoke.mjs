@@ -12,12 +12,15 @@ try{
   await waitHealth();
   const denied=await fetch(`http://127.0.0.1:${port}/tiled-physical-v5.html?role=sender`);if(denied.status!==401)throw new Error(`expected 401 without token, got ${denied.status}`);
   const page=await fetch(`http://127.0.0.1:${port}/tiled-physical-v5.html?role=sender&token=${token}`);const html=await page.text();if(!page.ok||!html.includes('TF-007F buffered physical gate'))throw new Error('v5 sender HTML smoke failed');
-  const sender=await openSocket(),receiver=await openSocket();
-  sender.send(JSON.stringify({type:'hello',role:'tf007f-tiled-sender'}));receiver.send(JSON.stringify({type:'hello',role:'tf007f-tiled-receiver'}));
-  await sleep(50);
+
+  // Receiver can become ready before Sender opens. Coordinator must replay readiness to late Sender.
+  const receiver=await openSocket();receiver.send(JSON.stringify({type:'hello',role:'tf007f-tiled-receiver'}));await sleep(30);
+  receiver.send(JSON.stringify({type:'state',event:'tf007f-receiver-ready',receiver:{configuredDevice:'ci-camera'}}));await sleep(30);
+  const sender=await openSocket();const replayed=waitMessage(sender,m=>m?.type==='state'&&m?.event==='tf007f-receiver-ready');sender.send(JSON.stringify({type:'hello',role:'tf007f-tiled-sender'}));const ready=await replayed;if(ready.receiver?.configuredDevice!=='ci-camera')throw new Error('receiver-ready replay mismatch');
+
   const config={id:'tf007f-176-15-ci1',matrixSize:176,symbolHz:15,displayRefreshHz:60,holdRefreshes:4,durationMs:10000,payloadBytes:3028,tileCount:3,control:false};
   const relayed=waitMessage(receiver,m=>m?.type==='command'&&m?.action==='tf007f-candidate-config');sender.send(JSON.stringify({type:'command',action:'tf007f-candidate-config',id:config.id,config}));const message=await relayed;if(message.config?.matrixSize!==176)throw new Error('candidate config relay mismatch');
   const rejected=waitMessage(sender,m=>m?.type==='server'&&m?.event==='policy-rejected');sender.send(JSON.stringify({type:'command',action:'tf007f-candidate-config',id:config.id,config,payload:[1,2,3]}));await rejected;
   sender.close();receiver.close();
-  console.log('TF-007F lab smoke PASS: token, v5 route, role pairing, control relay and payload rejection');
+  console.log('TF-007F lab smoke PASS: token, v5 route, late-sender readiness replay, control relay and payload rejection');
 }finally{child.kill('SIGTERM');}
