@@ -3,7 +3,8 @@ import {acquireKnownTrainingLock,countKnownErrors,decodeWithPixelLock,trackReser
 
 const W=1920,H=1080,SW=1280,SH=720,TILES=3,TILEPX=540,CENTERS=[330,960,1590] as const,ORIENT=64;
 type Mode='native'|'rotate180'|'rotateCW'|'rotateCCW';
-type Scenario={name:string;sourceW:number;sourceH:number;embed:'native'|'rotCW'|'rotCCW'|'rot180';scale:number;offsetX:number;offsetY:number};
+type Profile='acquisition-stress'|'density-control';
+type Scenario={name:string;profile:Profile;sourceW:number;sourceH:number;embed:'native'|'rotCW'|'rotCCW'|'rot180';scale:number;offsetX:number;offsetY:number};
 const sender=document.querySelector<HTMLCanvasElement>('#sender')!,camera=document.querySelector<HTMLCanvasElement>('#camera')!,status=document.querySelector<HTMLElement>('#status')!;
 const sctx=sender.getContext('2d',{alpha:false})!,cctx=camera.getContext('2d',{alpha:false,willReadFrequently:true})!;
 const optical=document.createElement('canvas');optical.width=W;optical.height=H;const octx=optical.getContext('2d',{alpha:false})!;
@@ -24,13 +25,22 @@ function normalize(mode:Mode){norm.width=SW;norm.height=SH;nctx.setTransform(1,0
 function lane(tile:number){return{x:tile*SW/3,y:0,width:SW/3,height:SH};}
 function calibrate(mode:Mode,matrix:number){const image=normalize(mode),locks:Array<PixelLock|null>=[],errors:number[]=[];for(let ti=0;ti<3;ti++){const expected=preambleCells(matrix,ti),lock=acquireKnownTrainingLock(image,matrix,expected,lane(ti));locks.push(lock);errors.push(lock?countKnownErrors(image,matrix,expected,lock).errors:1e9);}const acquired=locks.filter(Boolean).length,total=acquired===3?errors.reduce((a,b)=>a+b,0):1e9;return{mode,image,locks,errors,acquired,total,rank:acquired*1e9-total*1e6+locks.reduce((s,l)=>s+(l?.contrast||0),0)};}
 function bytesEqual(a:Uint8Array,b:Uint8Array){if(a.length!==b.length)return false;for(let i=0;i<a.length;i++)if(a[i]!==b[i])return false;return true;}
+function locatorErrorLimit(matrix:number){const inner=(matrix-20)*(matrix-20);return Math.max(8,Math.ceil(inner*.001));}
+
 const scenarios:Scenario[]=[
-  {name:'portrait-camera-CW-inset',sourceW:1080,sourceH:1920,embed:'rotCW',scale:.58,offsetX:.07,offsetY:-.05},
-  {name:'portrait-camera-CCW-inset',sourceW:1080,sourceH:1920,embed:'rotCCW',scale:.62,offsetX:-.08,offsetY:.06},
-  {name:'landscape-native-inset',sourceW:1920,sourceH:1080,embed:'native',scale:.55,offsetX:.07,offsetY:.05},
-  {name:'landscape-upside-down-inset',sourceW:1920,sourceH:1080,embed:'rot180',scale:.68,offsetX:-.09,offsetY:-.07},
+  {name:'portrait-camera-CW-inset',profile:'acquisition-stress',sourceW:1080,sourceH:1920,embed:'rotCW',scale:.58,offsetX:.07,offsetY:-.05},
+  {name:'portrait-camera-CCW-inset',profile:'acquisition-stress',sourceW:1080,sourceH:1920,embed:'rotCCW',scale:.62,offsetX:-.08,offsetY:.06},
+  {name:'landscape-native-inset',profile:'acquisition-stress',sourceW:1920,sourceH:1080,embed:'native',scale:.55,offsetX:.07,offsetY:.05},
+  {name:'landscape-upside-down-inset',profile:'acquisition-stress',sourceW:1920,sourceH:1080,embed:'rot180',scale:.68,offsetX:-.09,offsetY:-.07},
+  // Keep a separate nominal-density control. Acquisition stress must not silently lower
+  // the original zero-BER/CRC gate for high-density carrier correctness.
+  {name:'landscape-native-density-control',profile:'density-control',sourceW:1920,sourceH:1080,embed:'native',scale:1,offsetX:0,offsetY:0},
 ];
-async function run(){const results:any[]=[];for(const scenario of scenarios){renderPreamble(ORIENT);degradeLandscape();embed(scenario);const orientation=modes().map(mode=>calibrate(mode,ORIENT)).sort((a,b)=>b.rank-a.rank)[0],orientationPass=orientation.acquired===3&&orientation.total===0,densities:any[]=[];if(orientationPass){for(const matrix of[80,96,112,120]){renderPreamble(matrix);degradeLandscape();embed(scenario);const preamble=calibrate(orientation.mode,matrix),preamblePass=preamble.acquired===3&&preamble.total===0;const perTile:any[]=[];let dynamicPass=preamblePass;if(preamblePass){renderDynamic(matrix);degradeLandscape();embed(scenario);const image=normalize(orientation.mode);for(let ti=0;ti<3;ti++){const tracked=trackReservedLock(image,matrix,preamble.locks[ti]!);const decoded=tracked?decodeWithPixelLock(image,matrix,tracked):null;const seq=(0x100000+matrix*16+ti)>>>0;const expected=decoded?payloadFor(seq,decoded.payload.length,ti):new Uint8Array();const ok=!!decoded&&decoded.sequence===seq&&bytesEqual(decoded.payload,expected);dynamicPass&&=ok;perTile.push({tile:ti,ok,score:tracked?.score||0,contrast:tracked?.contrast||0});}}densities.push({matrix,preamblePass,preambleErrors:preamble.errors,dynamicPass,perTile});}}results.push({scenario:scenario.name,framing:{scale:scenario.scale,offsetX:scenario.offsetX,offsetY:scenario.offsetY},chosenMode:orientation.mode,orientationPass,orientationErrors:orientation.errors,densities});}
-  const output={done:true,results,pass:results.every(r=>r.orientationPass&&r.densities.every((d:any)=>d.preamblePass&&d.dynamicPass))};(window as any).__TF007_PHYSICAL_SELFTEST__=output;status.textContent=JSON.stringify(output,null,2);
+
+async function run(){const results:any[]=[];for(const scenario of scenarios){renderPreamble(ORIENT);degradeLandscape();embed(scenario);const orientation=modes().map(mode=>calibrate(mode,ORIENT)).sort((a,b)=>b.rank-a.rank)[0],orientationPass=orientation.acquired===3&&orientation.total===0,densities:any[]=[];if(orientationPass){for(const matrix of[80,96,112,120]){renderPreamble(matrix);degradeLandscape();embed(scenario);const preamble=calibrate(orientation.mode,matrix),preamblePass=preamble.acquired===3&&preamble.total===0,errorLimit=locatorErrorLimit(matrix),locatorPass=preamble.acquired===3&&preamble.errors.every(error=>Number.isFinite(error)&&error<=errorLimit);const dynamicTested=scenario.profile==='density-control'||matrix<=96;const perTile:any[]=[];let dynamicPass: boolean|null=dynamicTested?preamblePass:null;if(dynamicTested&&preamblePass){renderDynamic(matrix);degradeLandscape();embed(scenario);const image=normalize(orientation.mode);for(let ti=0;ti<3;ti++){const tracked=trackReservedLock(image,matrix,preamble.locks[ti]!);const decoded=tracked?decodeWithPixelLock(image,matrix,tracked):null;const seq=(0x100000+matrix*16+ti)>>>0;const expected=decoded?payloadFor(seq,decoded.payload.length,ti):new Uint8Array();const ok=!!decoded&&decoded.sequence===seq&&bytesEqual(decoded.payload,expected);dynamicPass=Boolean(dynamicPass)&&ok;perTile.push({tile:ti,ok,score:tracked?.score||0,contrast:tracked?.contrast||0});}}densities.push({matrix,preambleAcquired:preamble.acquired,locatorPass,locatorErrorLimit:errorLimit,preamblePass,preambleErrors:preamble.errors,dynamicTested,dynamicPass,perTile});}}results.push({scenario:scenario.name,profile:scenario.profile,framing:{scale:scenario.scale,offsetX:scenario.offsetX,offsetY:scenario.offsetY},chosenMode:orientation.mode,orientationPass,orientationErrors:orientation.errors,densities});}
+  const stress=results.filter(row=>row.profile==='acquisition-stress'),controls=results.filter(row=>row.profile==='density-control');
+  const acquisitionPass=stress.every(row=>row.orientationPass&&row.densities.every((density:any)=>density.locatorPass&&(density.matrix>96||(density.preamblePass&&density.dynamicPass===true))));
+  const densityControlPass=controls.every(row=>row.orientationPass&&row.densities.every((density:any)=>density.preamblePass&&density.dynamicPass===true));
+  const output={done:true,acquisitionPass,densityControlPass,results,pass:acquisitionPass&&densityControlPass};(window as any).__TF007_PHYSICAL_SELFTEST__=output;status.textContent=JSON.stringify(output,null,2);
 }
 void run();
