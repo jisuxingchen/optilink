@@ -16,6 +16,7 @@ export default defineConfig({
         tiledTemporal: entry('./tiled-temporal.html'),
         tiledPhysical: entry('./tiled-physical.html'),
         tiledPhysicalSelftest: entry('./tiled-physical-selftest.html'),
+        tiledLocatorSelftest: entry('./tiled-locator-selftest.html'),
       },
     },
   },
