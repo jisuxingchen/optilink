@@ -19,6 +19,8 @@ function clampRect(rect:Rect,width:number,height:number):Rect{
   const x=Math.max(0,rect.x),y=Math.max(0,rect.y),right=Math.min(width,rect.x+rect.width),bottom=Math.min(height,rect.y+rect.height);
   return{x,y,width:Math.max(1,right-x),height:Math.max(1,bottom-y)};
 }
+function center(component:TextureComponent){return{x:component.x+component.width/2,y:component.y+component.height/2};}
+function side(component:TextureComponent){return Math.max(component.width,component.height);}
 
 function findTextureComponents(image:ImageData):TextureComponent[]{
   const block=Math.max(6,Math.floor(image.width/160)),cols=Math.floor(image.width/block),rows=Math.floor(image.height/block);
@@ -49,43 +51,53 @@ function findTextureComponents(image:ImageData):TextureComponent[]{
         if(dilated[ni]&&!seen[ni]){seen[ni]=1;queue.push(ni);}
       }
     }
-    const width=(maxC-minC+1)*block,height=(maxR-minR+1)*block,aspect=width/height,side=Math.max(width,height);
-    if(count<18||aspect<.45||aspect>2.2||side<image.height*.07||side>image.height*.75)continue;
+    const width=(maxC-minC+1)*block,height=(maxR-minR+1)*block,aspect=width/height,componentSide=Math.max(width,height);
+    if(count<18||aspect<.45||aspect>2.2||componentSide<image.height*.07||componentSide>image.height*.75)continue;
     components.push({x:minC*block,y:minR*block,width,height,count,strength});
   }
   return components.sort((a,b)=>(b.count+b.strength/180)-(a.count+a.strength/180));
 }
 
-function localRect(component:TextureComponent,factor:number,image:ImageData):Rect{
-  const cx=component.x+component.width/2,cy=component.y+component.height/2,side=Math.max(component.width,component.height)*factor;
-  return clampRect({x:cx-side/2,y:cy-side/2,width:side,height:side},image.width,image.height);
+function bestHorizontalTriplet(image:ImageData,components:TextureComponent[]):TextureComponent[]|null{
+  const pool=components.slice(0,10),candidates:Array<{items:TextureComponent[];score:number}>=[];
+  for(let i=0;i<pool.length;i++)for(let j=i+1;j<pool.length;j++)for(let k=j+1;k<pool.length;k++){
+    const items=[pool[i],pool[j],pool[k]].sort((a,b)=>center(a).x-center(b).x),p=items.map(center),d1=p[1].x-p[0].x,d2=p[2].x-p[1].x,spacing=(d1+d2)/2;
+    if(d1<image.width*.08||d2<image.width*.08||spacing>image.width*.42)continue;
+    const spacingError=Math.abs(d1-d2)/Math.max(1,spacing),ySpread=(Math.max(...p.map(v=>v.y))-Math.min(...p.map(v=>v.y)))/Math.max(1,spacing);
+    const sizes=items.map(side),meanSize=sizes.reduce((a,b)=>a+b,0)/3,sizeSpread=(Math.max(...sizes)-Math.min(...sizes))/Math.max(1,meanSize);
+    if(spacingError>.38||ySpread>.55||sizeSpread>.65)continue;
+    const strengthBonus=Math.min(1,items.reduce((sum,item)=>sum+item.count+item.strength/180,0)/900);
+    candidates.push({items,score:spacingError*6+ySpread*3+sizeSpread*2-strengthBonus*.35});
+  }
+  candidates.sort((a,b)=>a.score-b.score);return candidates[0]?.items||null;
+}
+
+function geometryLocalRect(image:ImageData,component:TextureComponent,estimatedTileSide:number,coreScale:number):Rect{
+  const p=center(component),windowSide=estimatedTileSide/coreScale;
+  return clampRect({x:p.x-windowSide/2,y:p.y-windowSide/2,width:windowSide,height:windowSide},image.width,image.height);
 }
 
 export function acquireKnownTrainingLock(image:ImageData,matrix:number,cells:Uint8Array,rect:Rect):PixelLock|null{
   const direct=acquireCore(image,matrix,cells,rect);
   if(direct){const check=countKnownErrors(image,matrix,cells,direct);if(check.errors===0)return direct;}
 
-  const expectedX=rect.x+rect.width/2,expectedY=rect.y+rect.height/2,components=findTextureComponents(image);
-  const ranked=[...components].sort((a,b)=>{
-    const acx=a.x+a.width/2,acy=a.y+a.height/2,bcx=b.x+b.width/2,bcy=b.y+b.height/2;
-    const ad=Math.abs(acx-expectedX)*.45+Math.abs(acy-expectedY)*.18-Math.min(a.count,300)*.35;
-    const bd=Math.abs(bcx-expectedX)*.45+Math.abs(bcy-expectedY)*.18-Math.min(b.count,300)*.35;
-    return ad-bd;
-  }).slice(0,4);
+  const triplet=bestHorizontalTriplet(image,findTextureComponents(image));
+  if(!triplet)return direct;
+  const tileIndex=Math.max(0,Math.min(2,Math.floor((rect.x+rect.width/2)/image.width*3))),points=triplet.map(center);
+  const spacing=((points[1].x-points[0].x)+(points[2].x-points[1].x))/2;
+  // Protocol layout is fixed: sender center spacing is 630 px and tile side is 540 px.
+  // Recover projected tile size from detected center spacing instead of trusting the
+  // texture component's own bounding box, which can represent only the 44x44 inner area.
+  const estimatedTileSide=spacing*(540/630);
 
   let best:PixelLock|null=direct,bestRate=Infinity,bestContrast=0;
   if(direct){const check=countKnownErrors(image,matrix,cells,direct);bestRate=check.bits?check.errors/check.bits:Infinity;bestContrast=check.contrast;}
-  // A texture component can correspond either to the complete grid or mostly to the
-  // high-frequency inner data area. Try progressively larger isolated windows. The
-  // largest factor covers the 64x64 inner/full ratio: 64/(64-20) ~= 1.455, with margin.
-  for(const component of ranked){
-    for(const factor of[1.15,1.35,1.55,1.75]){
-      const lock=acquireCore(image,matrix,cells,localRect(component,factor,image));
-      if(!lock)continue;const check=countKnownErrors(image,matrix,cells,lock),rate=check.bits?check.errors/check.bits:Infinity;
-      if(check.errors===0)return{...lock,score:check.score,contrast:check.contrast,bitErrors:check.errors,bits:check.bits};
-      if(rate<bestRate-1e-9||(Math.abs(rate-bestRate)<1e-9&&check.contrast>bestContrast)){
-        best={...lock,score:check.score,contrast:check.contrast,bitErrors:check.errors,bits:check.bits};bestRate=rate;bestContrast=check.contrast;
-      }
+  for(const coreScale of[.86,.80,.74]){
+    const lock=acquireCore(image,matrix,cells,geometryLocalRect(image,triplet[tileIndex],estimatedTileSide,coreScale));
+    if(!lock)continue;const check=countKnownErrors(image,matrix,cells,lock),rate=check.bits?check.errors/check.bits:Infinity;
+    if(check.errors===0)return{...lock,score:check.score,contrast:check.contrast,bitErrors:check.errors,bits:check.bits};
+    if(rate<bestRate-1e-9||(Math.abs(rate-bestRate)<1e-9&&check.contrast>bestContrast)){
+      best={...lock,score:check.score,contrast:check.contrast,bitErrors:check.errors,bits:check.bits};bestRate=rate;bestContrast=check.contrast;
     }
   }
   return best;
