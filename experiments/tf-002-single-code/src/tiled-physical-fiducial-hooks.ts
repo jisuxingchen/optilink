@@ -35,7 +35,7 @@ function installWebSocketHook():void{
         if(String(message.id||'').includes('-orientation-')){message.value.locatorDiagnosticHistory=history.slice(-4);message.value.orientationResolved=Boolean(message.value.success);if(!message.value.success&&message.value.orientationMode){message.value.attemptedOrientationMode=message.value.orientationMode;message.value.orientationMode=null;}}
         data=JSON.stringify(message);
       }else if(message?.type==='lab-result'&&message.run?.schema==='optilink.tf007.tiled.physical.v3'){
-        message.run.acquisitionHardening={profile:'macro-marker-triplet-v3',markerPx:TF007_FIDUCIAL_MARKER_PX,haloPx:TF007_FIDUCIAL_HALO_PX,markerOffsetYPx:TF007_FIDUCIAL_OFFSET_Y_PX,exactPreambleStillAuthoritative:true};data=JSON.stringify(message);
+        message.run.acquisitionHardening={profile:'macro-marker-triplet-v4',markerPx:TF007_FIDUCIAL_MARKER_PX,haloPx:TF007_FIDUCIAL_HALO_PX,markerOffsetYPx:TF007_FIDUCIAL_OFFSET_Y_PX,dualThreshold:true,outerPairFallback:true,exactPreambleStillAuthoritative:true};data=JSON.stringify(message);
       }
     }catch{}
     return original.call(this,data);
