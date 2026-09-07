@@ -4,6 +4,9 @@ import {sampleLuma, type PixelLock} from './tiled-training-solver.ts';
 import {packTwoBitLevels, type PackedCellObservation} from './packed-cell-buffer.ts';
 
 const positionCache = new Map<string, Array<{row: number; column: number}>>();
+const AMBIGUOUS_LOW = 0.28;
+const AMBIGUOUS_HIGH = 0.72;
+const SUBCELL_OFFSET = 0.18;
 
 function fingerprintPositions(matrixSize: number, count: number): Array<{row: number; column: number}> {
   const key = `${matrixSize}:${count}`;
@@ -25,10 +28,50 @@ function fingerprintPositions(matrixSize: number, count: number): Array<{row: nu
   return result;
 }
 
-function pointForCell(lock: PixelLock, matrixSize: number, row: number, column: number) {
-  const h = homographyFromUnitSquare(lock.quad);
-  if (!h) return null;
-  return mapHomography(h, (column + 0.5 + lock.phaseX) / matrixSize, (row + 0.5 + lock.phaseY) / matrixSize);
+function normalizedLuma(luma: number, lock: PixelLock): number {
+  const span = Math.max(8, lock.contrast);
+  const black = lock.threshold - span / 2;
+  return Math.max(0, Math.min(1, (luma - black) / span));
+}
+
+function robustCellLuma(
+  image: ImageData,
+  h: NonNullable<ReturnType<typeof homographyFromUnitSquare>>,
+  matrixSize: number,
+  lock: PixelLock,
+  row: number,
+  column: number,
+): number {
+  const center = mapHomography(
+    h,
+    (column + 0.5 + lock.phaseX) / matrixSize,
+    (row + 0.5 + lock.phaseY) / matrixSize,
+  );
+  const centerLuma = sampleLuma(image, center.x, center.y);
+  const normalized = normalizedLuma(centerLuma, lock);
+
+  // Most cells are decisively black or white and stay on the one-sample fast path.
+  // At high density (~2 camera pixels/cell), only threshold-adjacent cells pay for
+  // four cell-interior taps. Their median suppresses sub-pixel resampling/edge
+  // contamination without borrowing any payload oracle or neighbouring-cell value.
+  if (normalized <= AMBIGUOUS_LOW || normalized >= AMBIGUOUS_HIGH) return centerLuma;
+
+  const values = [centerLuma];
+  for (const [dx, dy] of [
+    [-SUBCELL_OFFSET, 0],
+    [SUBCELL_OFFSET, 0],
+    [0, -SUBCELL_OFFSET],
+    [0, SUBCELL_OFFSET],
+  ] as const) {
+    const point = mapHomography(
+      h,
+      (column + 0.5 + lock.phaseX + dx) / matrixSize,
+      (row + 0.5 + lock.phaseY + dy) / matrixSize,
+    );
+    values.push(sampleLuma(image, point.x, point.y));
+  }
+  values.sort((a, b) => a - b);
+  return values[2];
 }
 
 export function sampleSparseFingerprint(image: ImageData, matrixSize: number, lock: PixelLock, count = 96): Uint8Array {
@@ -45,9 +88,7 @@ export function sampleSparseFingerprint(image: ImageData, matrixSize: number, lo
 }
 
 export function quantizeLumaTwoBit(luma: number, lock: PixelLock): 0 | 1 | 2 | 3 {
-  const span = Math.max(8, lock.contrast);
-  const black = lock.threshold - span / 2;
-  const normalized = Math.max(0, Math.min(1, (luma - black) / span));
+  const normalized = normalizedLuma(luma, lock);
   return Math.max(0, Math.min(3, Math.round(normalized * 3))) as 0 | 1 | 2 | 3;
 }
 
@@ -57,8 +98,10 @@ export function samplePackedCells(image: ImageData, matrixSize: number, lock: Pi
   const levels = new Uint8Array(matrixSize * matrixSize);
   for (let row = 0; row < matrixSize; row += 1) {
     for (let column = 0; column < matrixSize; column += 1) {
-      const point = mapHomography(h, (column + 0.5 + lock.phaseX) / matrixSize, (row + 0.5 + lock.phaseY) / matrixSize);
-      levels[row * matrixSize + column] = quantizeLumaTwoBit(sampleLuma(image, point.x, point.y), lock);
+      levels[row * matrixSize + column] = quantizeLumaTwoBit(
+        robustCellLuma(image, h, matrixSize, lock, row, column),
+        lock,
+      );
     }
   }
   return packTwoBitLevels(levels);
