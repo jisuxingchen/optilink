@@ -10,7 +10,7 @@ function makeDiagnosticImage(){
   return{width:W,height:H,data} as ImageData;
 }
 
-test('TF-007 acquisition diagnostic reports optical contrast and dark bounds',()=>{
+test('TF-007 acquisition diagnostic catches a small high-contrast tile inside a large lane',()=>{
   const image=makeDiagnosticImage(),diag=diagnoseTrainingRegion(image,lane(0));
   assert.ok(diag.dynamicRange>100,`dynamicRange=${diag.dynamicRange}`);
   assert.ok(diag.darkPixelCount>100,`darkPixelCount=${diag.darkPixelCount}`);
