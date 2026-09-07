@@ -1,3 +1,5 @@
+import {homographyFromUnitSquare,mapHomography,type Quad} from './optigrid-geometry.ts';
+import {OPTIGRID_V1_BORDER,reservedCellValueV1} from './optigrid-v1.ts';
 import {
   acquireKnownTrainingLock as acquireCore,
   countKnownErrors,
@@ -15,6 +17,10 @@ export type {PixelLock,Rect,TrainingRegionDiagnostic};
 
 type TextureComponent={x:number;y:number;width:number;height:number;count:number;strength:number};
 type RatedLock={lock:PixelLock;errors:number;bits:number;score:number;contrast:number};
+type ReservedSample={row:number;column:number;expected:0|1};
+
+const tripletCache=new WeakMap<ImageData,TextureComponent[]|null>();
+const reservedCache=new Map<number,ReservedSample[]>();
 
 function clampRect(rect:Rect,width:number,height:number):Rect{
   const x=Math.max(0,rect.x),y=Math.max(0,rect.y),right=Math.min(width,rect.x+rect.width),bottom=Math.min(height,rect.y+rect.height);
@@ -23,6 +29,9 @@ function clampRect(rect:Rect,width:number,height:number):Rect{
 function center(component:TextureComponent){return{x:component.x+component.width/2,y:component.y+component.height/2};}
 function side(component:TextureComponent){return Math.max(component.width,component.height);}
 function quantile(sorted:number[],fraction:number){if(!sorted.length)return 0;return sorted[Math.min(sorted.length-1,Math.max(0,Math.floor((sorted.length-1)*fraction)))];}
+function cloneLock(lock:PixelLock):PixelLock{return{...lock,quad:{tl:{...lock.quad.tl},tr:{...lock.quad.tr},br:{...lock.quad.br},bl:{...lock.quad.bl}}};}
+function quadCenter(quad:Quad){return{x:(quad.tl.x+quad.tr.x+quad.br.x+quad.bl.x)/4,y:(quad.tl.y+quad.tr.y+quad.br.y+quad.bl.y)/4};}
+function quadSide(quad:Quad){const edges=[Math.hypot(quad.tr.x-quad.tl.x,quad.tr.y-quad.tl.y),Math.hypot(quad.br.x-quad.bl.x,quad.br.y-quad.bl.y),Math.hypot(quad.bl.x-quad.tl.x,quad.bl.y-quad.tl.y),Math.hypot(quad.br.x-quad.tr.x,quad.br.y-quad.tr.y)];return edges.reduce((a,b)=>a+b,0)/edges.length;}
 
 // Diagnostics intentionally use P01-P99 for dynamic range. A physically small tile can
 // contribute less than 5% of a broad lane, so P05-P95 can collapse to the background and
@@ -88,26 +97,51 @@ function bestHorizontalTriplet(image:ImageData,components:TextureComponent[]):Te
   }
   candidates.sort((a,b)=>a.score-b.score);return candidates[0]?.items||null;
 }
+function tripletFor(image:ImageData){if(tripletCache.has(image))return tripletCache.get(image)||null;const value=bestHorizontalTriplet(image,findTextureComponents(image));tripletCache.set(image,value);return value;}
 
 function geometryLocalRect(image:ImageData,component:TextureComponent,estimatedTileSide:number,coreScale:number):Rect{
   const p=center(component),windowSide=estimatedTileSide/coreScale;
   return clampRect({x:p.x-windowSide/2,y:p.y-windowSide/2,width:windowSide,height:windowSide},image.width,image.height);
 }
-function rateLock(image:ImageData,matrix:number,cells:Uint8Array,lock:PixelLock):RatedLock{
-  const check=countKnownErrors(image,matrix,cells,lock);return{lock:{...lock,score:check.score,contrast:check.contrast,bitErrors:check.errors,bits:check.bits},errors:check.errors,bits:check.bits,score:check.score,contrast:check.contrast};
+function knownEval(image:ImageData,matrix:number,cells:Uint8Array,lock:PixelLock):RatedLock{
+  const h=homographyFromUnitSquare(lock.quad);if(!h)return{lock,errors:Number.MAX_SAFE_INTEGER,bits:0,score:0,contrast:0};
+  let blackSum=0,blackCount=0,whiteSum=0,whiteCount=0;const values:number[]=[],expected:number[]=[];
+  for(let row=OPTIGRID_V1_BORDER;row<matrix-OPTIGRID_V1_BORDER;row++)for(let column=OPTIGRID_V1_BORDER;column<matrix-OPTIGRID_V1_BORDER;column++){
+    const e=cells[row*matrix+column],p=mapHomography(h,(column+.5+lock.phaseX)/matrix,(row+.5+lock.phaseY)/matrix),v=sampleLuma(image,p.x,p.y);values.push(v);expected.push(e);if(e){blackSum+=v;blackCount++;}else{whiteSum+=v;whiteCount++;}
+  }
+  if(!blackCount||!whiteCount)return{lock,errors:Number.MAX_SAFE_INTEGER,bits:0,score:0,contrast:0};
+  const black=blackSum/blackCount,white=whiteSum/whiteCount,contrast=white-black,threshold=(black+white)/2;let errors=0;
+  for(let i=0;i<values.length;i++)if((values[i]<threshold?1:0)!==expected[i])errors++;
+  const bits=values.length,score=bits?(bits-errors)/bits:0;return{lock:{...lock,threshold,score,contrast,bitErrors:errors,bits},errors,bits,score,contrast};
 }
 function better(a:RatedLock,b:RatedLock|null){if(!b)return true;if(a.errors!==b.errors)return a.errors<b.errors;if(Math.abs(a.contrast-b.contrast)>.25)return a.contrast>b.contrast;return a.score>b.score;}
-function cloneLock(lock:PixelLock):PixelLock{return{...lock,quad:{tl:{...lock.quad.tl},tr:{...lock.quad.tr},br:{...lock.quad.br},bl:{...lock.quad.bl}}};}
+function transformQuad(lock:PixelLock,dx:number,dy:number,scale:number,angle:number){
+  const out=cloneLock(lock),c=quadCenter(lock.quad),cos=Math.cos(angle),sin=Math.sin(angle);
+  for(const key of['tl','tr','br','bl'] as const){const p=lock.quad[key],x=(p.x-c.x)*scale,y=(p.y-c.y)*scale;out.quad[key].x=c.x+x*cos-y*sin+dx;out.quad[key].y=c.y+x*sin+y*cos+dy;}return out;
+}
 function microRefineKnown(image:ImageData,matrix:number,cells:Uint8Array,start:PixelLock):PixelLock{
-  let best=rateLock(image,matrix,cells,start);if(best.errors===0||best.errors>256)return best.lock;
-  for(const step of[.5,.25,.125]){
+  let best=knownEval(image,matrix,cells,start);if(best.errors===0||best.errors>256)return best.lock;
+  const sidePx=Math.max(1,quadSide(best.lock.quad));
+  // High-density residuals are often coherent sub-pixel transforms. Test whole-quad
+  // translation/scale/rotation before corner-wise edits so one corner does not have to move
+  // through a temporarily worse state to reach the correct geometry.
+  for(const step of[.75,.375,.1875,.09375]){
+    const origin=best.lock,scaleDelta=step/sidePx,angleDelta=step/sidePx;
+    const candidates:Array<[number,number,number,number]>=[
+      [step,0,1,0],[-step,0,1,0],[0,step,1,0],[0,-step,1,0],
+      [step,step,1,0],[step,-step,1,0],[-step,step,1,0],[-step,-step,1,0],
+      [0,0,1+scaleDelta,0],[0,0,1-scaleDelta,0],[0,0,1,angleDelta],[0,0,1,-angleDelta],
+    ];
+    for(const [dx,dy,scale,angle] of candidates){const rated=knownEval(image,matrix,cells,transformQuad(origin,dx,dy,scale,angle));if(better(rated,best))best=rated;if(best.errors===0)return best.lock;}
+  }
+  for(const step of[.5,.25,.125,.0625]){
     for(const corner of['tl','tr','br','bl'] as const)for(const axis of['x','y'] as const)for(const dir of[-1,1]){
-      const lock=cloneLock(best.lock);lock.quad[corner][axis]+=step*dir;const candidate=rateLock(image,matrix,cells,lock);if(better(candidate,best))best=candidate;if(best.errors===0)return best.lock;
+      const lock=cloneLock(best.lock);lock.quad[corner][axis]+=step*dir;const candidate=knownEval(image,matrix,cells,lock);if(better(candidate,best))best=candidate;if(best.errors===0)return best.lock;
     }
   }
-  for(const radius of[.03,.015,.0075]){
+  for(const radius of[.03,.015,.0075,.00375]){
     const origin=best.lock;for(const dx of[-radius,0,radius])for(const dy of[-radius,0,radius]){
-      const lock=cloneLock(origin);lock.phaseX=origin.phaseX+dx;lock.phaseY=origin.phaseY+dy;const candidate=rateLock(image,matrix,cells,lock);if(better(candidate,best))best=candidate;if(best.errors===0)return best.lock;
+      const lock=cloneLock(origin);lock.phaseX=origin.phaseX+dx;lock.phaseY=origin.phaseY+dy;const candidate=knownEval(image,matrix,cells,lock);if(better(candidate,best))best=candidate;if(best.errors===0)return best.lock;
     }
   }
   return best.lock;
@@ -116,34 +150,37 @@ function microRefineKnown(image:ImageData,matrix:number,cells:Uint8Array,start:P
 export function acquireKnownTrainingLock(image:ImageData,matrix:number,cells:Uint8Array,rect:Rect):PixelLock|null{
   // Prefer the explicit three-tile locator. This avoids paying for, and being polluted by,
   // a broad fixed-lane fallback when the monitor occupies only part of the camera frame.
-  const triplet=bestHorizontalTriplet(image,findTextureComponents(image));
-  let best:RatedLock|null=null;
+  const triplet=tripletFor(image);let best:RatedLock|null=null;
   if(triplet){
     const tileIndex=Math.max(0,Math.min(2,Math.floor((rect.x+rect.width/2)/image.width*3))),points=triplet.map(center);
     const spacing=((points[1].x-points[0].x)+(points[2].x-points[1].x))/2;
-    // Protocol layout is fixed: sender center spacing is 630 px and tile side is 540 px.
     const estimatedTileSide=spacing*(540/630);
-    // Match the local core's own coarse scale grid exactly so the geometric seed does not
-    // start between hypotheses; micro-refinement then handles sub-pixel residuals.
     for(const coreScale of[.82,.88,.76]){
       const lock=acquireCore(image,matrix,cells,geometryLocalRect(image,triplet[tileIndex],estimatedTileSide,coreScale));
-      if(!lock)continue;const refined=microRefineKnown(image,matrix,cells,lock),rated=rateLock(image,matrix,cells,refined);
+      if(!lock)continue;const rated=knownEval(image,matrix,cells,microRefineKnown(image,matrix,cells,lock));
       if(rated.errors===0)return rated.lock;if(better(rated,best))best=rated;
+      // Do not pay for two more full searches when the first structured lock is already
+      // within a couple of bits; the micro-refiner is the intended high-density finisher.
+      if(rated.errors<=2)break;
     }
     if(best)return best.lock;
   }
-
-  // Legacy/tightly framed fallback only when the structured locator cannot produce a lock.
   const direct=acquireCore(image,matrix,cells,rect);if(!direct)return null;return microRefineKnown(image,matrix,cells,direct);
 }
 
+function reservedSamples(matrix:number){const cached=reservedCache.get(matrix);if(cached)return cached;const out:ReservedSample[]=[];for(let row=0;row<matrix;row++)for(let column=0;column<matrix;column++){
+  const value=reservedCellValueV1(row,column,matrix);if(value===null)continue;const finder=(row<9||row>=matrix-9)&&(column<9||column>=matrix-9);if(!finder&&((row*7+column*11)%5!==0))continue;out.push({row,column,expected:value as 0|1});
+}reservedCache.set(matrix,out);return out;}
+function reservedAtExactPhase(image:ImageData,matrix:number,trainingLock:PixelLock):PixelLock|null{
+  const h=homographyFromUnitSquare(trainingLock.quad);if(!h)return null;const samples=reservedSamples(matrix);let blackSum=0,blackCount=0,whiteSum=0,whiteCount=0;const values:number[]=[];
+  for(const item of samples){const p=mapHomography(h,(item.column+.5+trainingLock.phaseX)/matrix,(item.row+.5+trainingLock.phaseY)/matrix),v=sampleLuma(image,p.x,p.y);values.push(v);if(item.expected){blackSum+=v;blackCount++;}else{whiteSum+=v;whiteCount++;}}
+  if(!blackCount||!whiteCount)return null;const black=blackSum/blackCount,white=whiteSum/whiteCount,contrast=white-black;if(contrast<=0)return null;const threshold=(black+white)/2;let errors=0;
+  for(let i=0;i<samples.length;i++)if((values[i]<threshold?1:0)!==samples[i].expected)errors++;const bits=samples.length,score=bits?(bits-errors)/bits:0;return{...trainingLock,threshold,contrast,score,bitErrors:errors,bits};
+}
 export function trackReservedLock(image:ImageData,matrix:number,trainingLock:PixelLock):PixelLock|null{
-  const tracked=trackCore(image,matrix,trainingLock);if(!tracked)return null;
-  // The preamble lock has already been proven exact. Reserved-cell tracking may have several
-  // equal-score phase candidates; do not replace that exact phase merely for higher contrast.
-  // Re-estimate the dynamic threshold through reserved tracking, then qualify the original
-  // phase with the frame CRC before accepting a phase shift.
-  const baseline={...tracked,phaseX:trainingLock.phaseX,phaseY:trainingLock.phaseY};
-  if(decodeCore(image,matrix,baseline))return baseline;
-  return tracked;
+  // Preamble geometry and phase are authoritative. Re-estimate threshold at that exact phase
+  // first; only search neighboring phases when the exact-phase frame does not pass CRC.
+  const baseline=reservedAtExactPhase(image,matrix,trainingLock);
+  if(baseline&&baseline.score>=.68&&baseline.contrast>=12&&decodeCore(image,matrix,baseline))return baseline;
+  return trackCore(image,matrix,trainingLock);
 }
