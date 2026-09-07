@@ -1,0 +1,25 @@
+import {spawn,execFileSync} from 'node:child_process';
+import {createWriteStream} from 'node:fs';
+import {access,chmod,mkdir} from 'node:fs/promises';
+import {homedir} from 'node:os';
+import {join} from 'node:path';
+import {randomBytes} from 'node:crypto';
+import {createServer as createNetServer} from 'node:net';
+import {pipeline} from 'node:stream/promises';
+import {Readable} from 'node:stream';
+
+const token=process.env.OPTILINK_LAB_TOKEN||randomBytes(18).toString('hex'),instanceId=randomBytes(8).toString('hex'),cacheDir=join(homedir(),'.cache','optilink'),binary=join(cacheDir,'cloudflared');
+function cloudflaredUrl(){if(process.platform!=='linux')throw new Error(`Unsupported platform: ${process.platform}`);if(process.arch==='x64')return'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64';if(process.arch==='arm64')return'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64';throw new Error(`Unsupported architecture: ${process.arch}`);}
+async function ensureCloudflared(){try{await access(binary);return binary;}catch{}await mkdir(cacheDir,{recursive:true});const response=await fetch(cloudflaredUrl(),{redirect:'follow'});if(!response.ok||!response.body)throw new Error(`cloudflared download failed: HTTP ${response.status}`);await pipeline(Readable.fromWeb(response.body),createWriteStream(binary));await chmod(binary,0o755);return binary;}
+function cleanup(){if(process.platform!=='linux')return;for(const [cmd,args] of [['pkill',['-f','node .*lab-server-tf007f\\.mjs']],['pkill',['-f','cloudflared .*tunnel .*--url http://127\\.0\\.0\\.1:']]])try{execFileSync(cmd,args,{stdio:'ignore'});}catch{}}
+function portAvailable(port){return new Promise(resolve=>{const probe=createNetServer();probe.once('error',()=>resolve(false));probe.once('listening',()=>probe.close(()=>resolve(true)));probe.listen(port,'127.0.0.1');});}
+async function choosePort(){if(process.env.PORT){const value=Number(process.env.PORT);if(!Number.isInteger(value)||value<1||value>65535||!await portAvailable(value))throw new Error(`PORT ${process.env.PORT} unavailable`);return value;}for(let port=8087;port<8107;port++)if(await portAvailable(port))return port;throw new Error('No free TF-007F lab port');}
+cleanup();await new Promise(resolve=>setTimeout(resolve,350));const port=await choosePort(),cloudflared=await ensureCloudflared();
+const lab=spawn(process.execPath,['lab-server-tf007f.mjs'],{stdio:['inherit','pipe','pipe'],env:{...process.env,PORT:String(port),HOST:'127.0.0.1',OPTILINK_LAB_TOKEN:token,OPTILINK_LAB_INSTANCE_ID:instanceId,OPTILINK_PUBLISH_GITHUB:process.env.OPTILINK_PUBLISH_GITHUB??'1'}});
+lab.stdout.on('data',chunk=>process.stdout.write(`[lab] ${chunk}`));lab.stderr.on('data',chunk=>process.stderr.write(`[lab] ${chunk}`));
+const deadline=Date.now()+15000;while(true){try{const response=await fetch(`http://127.0.0.1:${port}/api/lab/health`);if(response.ok){const health=await response.json();if(health.status==='OK'&&health.mode==='tf007f'&&health.instanceId===instanceId)break;}}catch{}if(Date.now()>deadline)throw new Error('TF-007F local health timeout');await new Promise(resolve=>setTimeout(resolve,250));}
+const probeUrl=new URL(`http://127.0.0.1:${port}/tiled-physical-v5.html`);probeUrl.searchParams.set('role','sender');probeUrl.searchParams.set('token',token);const probe=await fetch(probeUrl);if(!probe.ok||!(await probe.text()).includes('TF-007F buffered physical gate'))throw new Error('TF-007F local page verification failed');
+console.log(`Local TF-007F lab healthy on 127.0.0.1:${port} · instance ${instanceId}`);
+const tunnel=spawn(cloudflared,['tunnel','--no-autoupdate','--url',`http://127.0.0.1:${port}`],{stdio:['inherit','pipe','pipe']});let printed=false;const pattern=/https:\/\/[a-z0-9-]+\.trycloudflare\.com/gi;
+function inspect(text){process.stdout.write(`[tunnel] ${text}`);if(printed)return;const match=text.match(pattern)?.[0];if(!match)return;printed=true;const path='/tiled-physical-v5.html',sender=`${match}${path}?role=sender&token=${token}&run=${instanceId}`,receiver=`${match}${path}?role=receiver&token=${token}&run=${instanceId}`;console.log('\n============================================================');console.log('OptiLink TF-007F Buffered Physical Auto Lab is ready');console.log(`Mode     : tf007f · instance ${instanceId} · local port ${port}`);console.log(`Sender   : ${sender}`);console.log(`Receiver : ${receiver}`);console.log(`Health   : ${match}/api/lab/health`);console.log('Use ONLY these fresh URLs and keep this terminal running.');console.log('Payload, OptiGrid cells and Manifest bytes remain optical-only; WebSocket is control/telemetry.');console.log('============================================================\n');}
+tunnel.stdout.on('data',chunk=>inspect(String(chunk)));tunnel.stderr.on('data',chunk=>inspect(String(chunk)));tunnel.on('exit',code=>{lab.kill('SIGTERM');process.exit(code??0);});function shutdown(){tunnel.kill('SIGTERM');lab.kill('SIGTERM');}process.on('SIGINT',()=>{shutdown();process.exit(130);});process.on('SIGTERM',()=>{shutdown();process.exit(143);});
