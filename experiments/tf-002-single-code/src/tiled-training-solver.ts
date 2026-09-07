@@ -106,7 +106,7 @@ function trackLocalGeometry(image:ImageData,matrix:number,start:PixelLock):Pixel
   }
   if(best){
     for(const radius of[.3,.15,.075]){
-      const origin=best;
+      const origin=best as PixelLock;
       for(const dx of[-radius,0,radius])for(const dy of[-radius,0,radius]){
         const candidate=cloneLock(origin);candidate.phaseX=origin.phaseX+dx;candidate.phaseY=origin.phaseY+dy;best=betterTracked(evaluateReserved(image,matrix,candidate),best);
       }
