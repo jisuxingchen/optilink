@@ -10,7 +10,7 @@ import {Readable} from 'node:stream';
 
 const token = process.env.OPTILINK_LAB_TOKEN || randomBytes(18).toString('hex');
 const requestedPage = process.env.OPTILINK_LAB_PAGE || 'baseline';
-const page = ['baseline', 'fountain', 'optigrid'].includes(requestedPage) ? requestedPage : 'baseline';
+const page = ['baseline', 'fountain', 'optigrid', 'tiled'].includes(requestedPage) ? requestedPage : 'baseline';
 const instanceId = randomBytes(8).toString('hex');
 const cacheDir = join(homedir(), '.cache', 'optilink');
 const binary = join(cacheDir, 'cloudflared');
@@ -61,7 +61,7 @@ async function choosePort() {
     if (!await portAvailable(explicit)) throw new Error(`Requested PORT ${explicit} is already in use; stop the old lab or omit PORT so Auto Lab can choose a free port.`);
     return explicit;
   }
-  const start = page === 'optigrid' ? 8083 : page === 'fountain' ? 8081 : 8080;
+  const start = page === 'tiled' ? 8085 : page === 'optigrid' ? 8083 : page === 'fountain' ? 8081 : 8080;
   for (let port = start; port < start + 20; port += 1) if (await portAvailable(port)) return port;
   throw new Error(`No free local lab port found in ${start}-${start + 19}`);
 }
@@ -69,18 +69,21 @@ async function choosePort() {
 function pageRoute() {
   if (page === 'fountain') return '/fountain.html';
   if (page === 'optigrid') return '/optigrid.html';
+  if (page === 'tiled') return '/tiled-physical.html';
   return '/';
 }
 
 function expectedMarker() {
   if (page === 'fountain') return 'Fountain / rateless single-QR benchmark';
   if (page === 'optigrid') return 'OptiGrid v0 · dense monochrome carrier calibration';
+  if (page === 'tiled') return 'OptiLink · TF-007 physical gate';
   return 'Single-code optical baseline';
 }
 
 function readyLabel() {
   if (page === 'fountain') return 'OptiLink Fountain Auto Lab is ready';
   if (page === 'optigrid') return 'OptiLink OptiGrid Auto Lab is ready';
+  if (page === 'tiled') return 'OptiLink TF-007 Tiled Physical Auto Lab is ready';
   return 'OptiLink Auto Lab is ready';
 }
 

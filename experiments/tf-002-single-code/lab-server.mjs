@@ -4,13 +4,14 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {WebSocketServer, WebSocket} from 'ws';
 import {createServer as createViteServer} from 'vite';
+import {allowTiledHello, allowTiledLabResult, allowTiledRelay} from './tiled-control-policy.mjs';
 
 const execFileAsync = promisify(execFile);
 const port = Number(process.env.PORT || 5173);
 const host = process.env.HOST || '0.0.0.0';
 const labToken = process.env.OPTILINK_LAB_TOKEN || '';
 const requestedMode = process.env.OPTILINK_LAB_PAGE || 'baseline';
-const labMode = ['baseline', 'fountain', 'optigrid'].includes(requestedMode) ? requestedMode : 'baseline';
+const labMode = ['baseline', 'fountain', 'optigrid', 'tiled'].includes(requestedMode) ? requestedMode : 'baseline';
 const labInstanceId = process.env.OPTILINK_LAB_INSTANCE_ID || '';
 const clients = new Map();
 let latestRun = null;
@@ -45,6 +46,7 @@ function maybeSetAuthCookie(req, res) {
 function htmlEntryForPath(pathname) {
   if (pathname === '/fountain.html') return 'fountain.html';
   if (pathname === '/optigrid.html') return 'optigrid.html';
+  if (pathname === '/tiled-physical.html') return 'tiled-physical.html';
   return 'index.html';
 }
 
@@ -105,6 +107,17 @@ function safeSend(ws, payload) {
 function broadcast(payload, except) {
   for (const ws of clients.keys()) if (ws !== except) safeSend(ws, payload);
 }
+function broadcastTiled(payload, except, sourceRole) {
+  const targetRole = sourceRole === 'tf007v3-tiled-sender'
+    ? 'tf007v3-tiled-receiver'
+    : sourceRole === 'tf007v3-tiled-receiver'
+      ? 'tf007v3-tiled-sender'
+      : null;
+  if (!targetRole) return;
+  for (const [ws, meta] of clients.entries()) {
+    if (ws !== except && meta.role === targetRole) safeSend(ws, payload);
+  }
+}
 async function persistResult(run) {
   latestRun = run;
   await mkdir('results', {recursive: true});
@@ -118,7 +131,8 @@ function resultSummaryLines(run) {
   const receiverUa = run.receiver?.userAgent || 'n/a';
   const fountain = run.kind === 'benchmark-1mib-fountain';
   const optigrid = run.kind === 'optigrid-calibration';
-  const title = optigrid ? 'TF-004 OptiGrid' : fountain ? 'TF-002B Fountain' : 'TF-002';
+  const tiled = run.kind === 'tf007-tiled-physical-calibration';
+  const title = tiled ? 'TF-007 Tiled Physical' : optigrid ? 'TF-004 OptiGrid' : fountain ? 'TF-002B Fountain' : 'TF-002';
   const common = [
     `## ${title} automated lab result`, '',
     `- Time: ${run.finishedAt || new Date().toISOString()}`,
@@ -128,6 +142,22 @@ function resultSummaryLines(run) {
     `- Receiver UA (captured on receiver page): ${receiverUa}`,
     `- Status: ${run.status}`,
   ];
+
+  if (tiled) {
+    const display = run.displayBaseline || {};
+    const best = run.best || null;
+    return common.concat([
+      `- Physical display refresh: ${display.physicalRefreshHz ?? 'n/a'} Hz`,
+      `- Carrier: ${run.carrier?.name ?? 'OptiGrid tiled monochrome'} · ${run.carrier?.tileCount ?? 3} tiles`,
+      `- Candidates: ${(run.candidates || []).map(candidate => `3×${candidate.matrixSize}@${candidate.targetHz}:${Number(candidate.rawUniqueOpticalIngressBytesPerSecond || 0).toFixed(0)} B/s`).join(' · ') || 'n/a'}`,
+      `- Best candidate: ${best ? `3×${best.matrixSize}@${best.targetHz}` : 'n/a'}`,
+      `- Best raw unique optical ingress: ${Number.isFinite(best?.rawUniqueOpticalIngressBytesPerSecond) ? best.rawUniqueOpticalIngressBytesPerSecond.toFixed(2) : 'n/a'} B/s`,
+      `- Best valid tile ratio: ${Number.isFinite(best?.validTileRatio) ? (best.validTileRatio * 100).toFixed(1) : 'n/a'}%`,
+      `- Best complete-frame ratio: ${Number.isFinite(best?.completeFrameRatio) ? (best.completeFrameRatio * 100).toFixed(1) : 'n/a'}%`,
+      `- Best decode CPU p95: ${Number.isFinite(best?.decodeP95Ms) ? best.decodeP95Ms.toFixed(2) : 'n/a'} ms`,
+      `- Note: this is raw physical carrier ingress, not file-level Net Goodput. Fountain + reconstructed file SHA-256 remains the acceptance gate.`,
+    ]);
+  }
 
   if (optigrid) {
     const display = run.displayBaseline || {};
@@ -183,7 +213,7 @@ function resultSummaryLines(run) {
 async function tryPublishIssue(run) {
   if (process.env.OPTILINK_PUBLISH_GITHUB !== '1') return {published: false, reason: 'disabled'};
   const body = [...resultSummaryLines(run), '', '<details><summary>Machine-readable summary</summary>', '', '```json', JSON.stringify(run, null, 2).slice(0, 50000), '```', '</details>'].join('\n');
-  const issueNumber = run.kind === 'optigrid-calibration' ? '16' : run.kind === 'benchmark-1mib-fountain' ? '13' : '9';
+  const issueNumber = String(run.issueNumber || (run.kind === 'optigrid-calibration' ? '16' : run.kind === 'benchmark-1mib-fountain' ? '13' : '9'));
   try {
     await writeFile('results/issue-comment.md', body);
     await execFileAsync('gh', ['issue', 'comment', issueNumber, '--repo', 'jisuxingchen/optilink', '--body-file', 'results/issue-comment.md']);
@@ -205,16 +235,38 @@ wss.on('connection', (ws, req) => {
     try { message = JSON.parse(String(raw)); } catch { return; }
     const meta = clients.get(ws) || {role: 'unknown'};
     if (message.type === 'hello') {
+      if (labMode === 'tiled') {
+        if (!allowTiledHello(message)) {
+          safeSend(ws, {type: 'server', event: 'policy-rejected', reason: 'TF-007 tiled hello boundary'});
+          return;
+        }
+        meta.role = message.role;
+        clients.set(ws, meta);
+        broadcastTiled({type: 'peer', event: 'hello', role: meta.role}, ws, meta.role);
+        return;
+      }
       meta.role = message.role || 'unknown';
       clients.set(ws, meta);
       broadcast({type: 'peer', event: 'hello', role: meta.role}, ws);
       return;
     }
     if (message.type === 'telemetry' || message.type === 'command' || message.type === 'state') {
+      if (labMode === 'tiled') {
+        if (!allowTiledRelay(meta.role, message)) {
+          safeSend(ws, {type: 'server', event: 'policy-rejected', reason: 'TF-007 tiled control-plane boundary'});
+          return;
+        }
+        broadcastTiled(message, ws, meta.role);
+        return;
+      }
       broadcast(message, ws);
       return;
     }
     if (message.type === 'lab-result') {
+      if (labMode === 'tiled' && !allowTiledLabResult(meta.role, message)) {
+        safeSend(ws, {type: 'server', event: 'policy-rejected', reason: 'TF-007 tiled result boundary'});
+        return;
+      }
       const run = {...message.run, receivedAt: new Date().toISOString()};
       await persistResult(run);
       const publish = await tryPublishIssue(run);
@@ -233,5 +285,6 @@ server.listen(port, host, () => {
   console.log('Baseline:     /?role=sender|receiver');
   console.log('Fountain:     /fountain.html?role=sender|receiver');
   console.log('OptiGrid:     /optigrid.html?role=sender|receiver');
+  console.log('TF-007 tiled: /tiled-physical.html?role=sender|receiver');
   console.log('Latest result endpoint: /api/lab/latest');
 });

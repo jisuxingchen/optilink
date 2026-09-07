@@ -9,9 +9,13 @@
     "lab:tunnel": "node lab-tunnel.mjs",
     "lab:tunnel:fountain": "OPTILINK_LAB_PAGE=fountain node lab-tunnel.mjs",
     "lab:tunnel:optigrid": "OPTILINK_LAB_PAGE=optigrid node lab-tunnel.mjs",
+    "lab:tunnel:tiled": "OPTILINK_LAB_PAGE=tiled node lab-tunnel.mjs",
     "build": "tsc --noEmit && vite build",
     "test": "node --test src/*.test.ts",
-    "bench:headless": "playwright test carrier-bench.spec.mjs --config=playwright.config.mjs --reporter=line"
+    "bench:headless": "playwright test carrier-bench.spec.mjs --config=playwright.config.mjs --reporter=line",
+    "bench:tiled": "npm run bench:physical-selftest && playwright test tiled-carrier.spec.mjs --config=playwright.config.mjs --reporter=line",
+    "bench:temporal": "playwright test tiled-temporal.spec.mjs --config=playwright.config.mjs --reporter=line",
+    "bench:physical-selftest": "playwright test tiled-physical-selftest.spec.mjs --config=playwright.config.mjs --reporter=line"
   },
   "dependencies": {
     "@zxing/browser": "0.2.1",
