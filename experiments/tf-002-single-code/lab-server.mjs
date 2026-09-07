@@ -4,7 +4,7 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {WebSocketServer, WebSocket} from 'ws';
 import {createServer as createViteServer} from 'vite';
-import {allowTiledLabResult, allowTiledRelay} from './tiled-control-policy.mjs';
+import {allowTiledHello, allowTiledLabResult, allowTiledRelay} from './tiled-control-policy.mjs';
 
 const execFileAsync = promisify(execFile);
 const port = Number(process.env.PORT || 5173);
@@ -235,6 +235,16 @@ wss.on('connection', (ws, req) => {
     try { message = JSON.parse(String(raw)); } catch { return; }
     const meta = clients.get(ws) || {role: 'unknown'};
     if (message.type === 'hello') {
+      if (labMode === 'tiled') {
+        if (!allowTiledHello(message)) {
+          safeSend(ws, {type: 'server', event: 'policy-rejected', reason: 'TF-007 tiled hello boundary'});
+          return;
+        }
+        meta.role = message.role;
+        clients.set(ws, meta);
+        broadcastTiled({type: 'peer', event: 'hello', role: meta.role}, ws, meta.role);
+        return;
+      }
       meta.role = message.role || 'unknown';
       clients.set(ws, meta);
       broadcast({type: 'peer', event: 'hello', role: meta.role}, ws);
