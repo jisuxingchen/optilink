@@ -41,6 +41,9 @@ export function rankOrientationCandidate(input: OrientationRankInput): number {
   // Do not let a visually strong but geometrically impossible marker triplet win
   // merely because the alternative candidate had fewer acquired tiles.
   if (input.projectionSafe === false) return -1e15 + input.exactTiles * 1e7 + score * 1e4;
-  const errors = Number.isFinite(input.totalBitErrors) ? input.totalBitErrors : 1e9;
+  // Number.MAX_SAFE_INTEGER is used upstream as an explicit "not all tiles acquired"
+  // sentinel. It must not be multiplied as if it were a real BER measurement.
+  const incomplete = input.acquiredTiles < 3 || input.totalBitErrors >= Number.MAX_SAFE_INTEGER / 2;
+  const errors = incomplete ? 1e6 : (Number.isFinite(input.totalBitErrors) ? input.totalBitErrors : 1e6);
   return input.acquiredTiles * 1e9 + input.exactTiles * 1e7 - errors * 1e5 + score * 1e4;
 }
