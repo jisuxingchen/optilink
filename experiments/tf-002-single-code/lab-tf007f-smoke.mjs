@@ -21,6 +21,18 @@ try{
   const config={id:'tf007f-176-15-ci1',matrixSize:176,symbolHz:15,displayRefreshHz:60,holdRefreshes:4,durationMs:10000,payloadBytes:3028,tileCount:3,control:false};
   const relayed=waitMessage(receiver,m=>m?.type==='command'&&m?.action==='tf007f-candidate-config');sender.send(JSON.stringify({type:'command',action:'tf007f-candidate-config',id:config.id,config}));const message=await relayed;if(message.config?.matrixSize!==176)throw new Error('candidate config relay mismatch');
   const rejected=waitMessage(sender,m=>m?.type==='server'&&m?.event==='policy-rejected');sender.send(JSON.stringify({type:'command',action:'tf007f-candidate-config',id:config.id,config,payload:[1,2,3]}));await rejected;
+
+  // TF-007G Manifest contract: dwellMs=600 must relay, wrong dwell must be rejected.
+  const manifestId='tf007f-manifest-ci1';
+  const manifestRelayed=waitMessage(receiver,m=>m?.type==='command'&&m?.action==='tf007f-manifest-read'&&m?.id===manifestId);sender.send(JSON.stringify({type:'command',action:'tf007f-manifest-read',id:manifestId,matrixSize:96,repetitions:3,dwellMs:600}));const manifestMessage=await manifestRelayed;if(manifestMessage.dwellMs!==600)throw new Error('TF-007G manifest dwell relay mismatch');
+  const wrongDwellRejected=waitMessage(sender,m=>m?.type==='server'&&m?.event==='policy-rejected');sender.send(JSON.stringify({type:'command',action:'tf007f-manifest-read',id:manifestId,matrixSize:96,repetitions:3,dwellMs:300}));await wrongDwellRejected;
+  const manifestPayloadRejected=waitMessage(sender,m=>m?.type==='server'&&m?.event==='policy-rejected');sender.send(JSON.stringify({type:'command',action:'tf007f-manifest-read',id:manifestId,matrixSize:96,repetitions:3,dwellMs:600,manifestBytes:[1,2,3]}));await manifestPayloadRejected;
+
+  // TF-007G result must be accepted only for the exact schema/kind/Issue #34 route.
+  const resultSaved=waitMessage(sender,m=>m?.type==='server'&&m?.event==='result-saved');sender.send(JSON.stringify({type:'lab-result',run:{schema:'optilink.tf007g.manifest-recovery.physical.v1',kind:'tf007g-manifest-recovery-physical',issueNumber:34,evidenceClass:'physical-manifest-recovery',status:'MANIFEST_RECOVERY_FAILED',finishedAt:new Date().toISOString(),manifestResult:{success:false}}}));await resultSaved;
+  const latestResponse=await fetch(`http://127.0.0.1:${port}/api/lab/latest?token=${token}`);const latest=await latestResponse.json();if(latest.kind!=='tf007g-manifest-recovery-physical'||Number(latest.issueNumber)!==34)throw new Error('TF-007G latest-result routing mismatch');
+  const wrongIssueRejected=waitMessage(sender,m=>m?.type==='server'&&m?.event==='policy-rejected');sender.send(JSON.stringify({type:'lab-result',run:{schema:'optilink.tf007g.manifest-recovery.physical.v1',kind:'tf007g-manifest-recovery-physical',issueNumber:32,status:'ERROR'}}));await wrongIssueRejected;
+
   sender.close();receiver.close();
-  console.log('TF-007F lab smoke PASS: token, v5 route, late-sender readiness replay, control relay and payload rejection');
+  console.log('TF-007F/TF-007G lab smoke PASS: token, v5 route, late-sender replay, candidate relay, Manifest dwell contract, payload rejection and Issue #34 result routing');
 }finally{child.kill('SIGTERM');}
