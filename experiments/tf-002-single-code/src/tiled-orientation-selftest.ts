@@ -24,22 +24,31 @@ function cloneLock(lock:PixelLock):PixelLock{return{...lock,quad:{tl:{...lock.qu
 function calibrate(mode:Mode){const image=normalize(mode),locks:Array<PixelLock|null>=[],errors:number[]=[];for(let i=0;i<3;i++){const cells=preambleCells(i),lock=acquireKnownTrainingLock(image,MATRIX,cells,lane(i));locks.push(lock);errors.push(lock?countKnownErrors(image,MATRIX,cells,lock).errors:Number.MAX_SAFE_INTEGER);}let exact=errors.filter(e=>e===0).length,acquired=locks.filter(Boolean).length;const refinedTiles:number[]=[];if(acquired===3&&exact===2){const index=errors.findIndex(e=>e>0&&e<=64);if(index>=0&&locks[index]){const refined=refineKnownTrainingResidual(image,MATRIX,preambleCells(index),locks[index]!);locks[index]=refined.lock;errors[index]=countKnownErrors(image,MATRIX,preambleCells(index),refined.lock).errors;refinedTiles.push(index);exact=errors.filter(e=>e===0).length;}}const total=acquired===3?errors.reduce((a,b)=>a+b,0):Number.MAX_SAFE_INTEGER,diagnostic=getPhysicalAcquisitionDiagnostics().slice(-1)[0]?.fiducial||null,projectionSafe=projectedTileRegionsSafe(diagnostic,SW,SH),success=exact===3&&total===0,scoreSum=locks.reduce((s,l)=>s+(l?.score||0),0),rank=rankOrientationCandidate({success,acquiredTiles:acquired,exactTiles:exact,totalBitErrors:total,scoreSum,projectionSafe});return{mode,image,locks,errors,exact,acquired,total,projectionSafe,success,rank,refinedTiles,diagnostic};}
 function residualRefineProbe(image:ImageData,lock:PixelLock,tileIndex:number){
   const cells=preambleCells(tileIndex);
-  const tests:Array<{phaseX:number;phaseY:number;dx:number;dy:number}>=[];
-  // Sweep only small, physically plausible residual offsets around an already exact lock.
-  // The previous probe jumped directly to large phase offsets and could skip the 1..64-error
-  // regime entirely, making the regression red even though the production refiner was sound.
+  type Probe={before:number;lock:PixelLock;test:string};
+  const probes:Probe[]=[];
+  const record=(candidate:PixelLock,test:string)=>{const before=countKnownErrors(image,MATRIX,cells,candidate).errors;if(before>0&&before<=64)probes.push({before,lock:candidate,test});};
+
+  // Physical evidence was a small residual (15/1936) on one otherwise-acquired tile.
+  // Build that class of failure from real pixel sampling instead of assuming one large
+  // global phase jump will happen to land inside the low-BER window. Projective/corner
+  // residuals are especially representative of handheld perspective error.
   for(const phase of[.02,.03,.04,.05,.06,.07,.08,.09,.10,.12,.14,.16]){
-    tests.push({phaseX:phase,phaseY:0,dx:0,dy:0},{phaseX:-phase,phaseY:0,dx:0,dy:0},{phaseX:0,phaseY:phase,dx:0,dy:0},{phaseX:0,phaseY:-phase,dx:0,dy:0});
+    for(const [px,py,label] of [[phase,0,'px'],[-phase,0,'nx'],[0,phase,'py'],[0,-phase,'ny']] as const){const candidate=cloneLock(lock);candidate.phaseX+=px;candidate.phaseY+=py;record(candidate,`phase-${label}-${phase}`);}
+  }
+  for(let step=1;step<=40;step++){
+    const delta=step*.05;
+    for(const corner of['tl','tr','br','bl'] as const)for(const axis of['x','y'] as const)for(const direction of[-1,1] as const){const candidate=cloneLock(lock);candidate.quad[corner][axis]+=delta*direction;record(candidate,`corner-${corner}-${axis}-${direction}-${delta.toFixed(2)}`);}
   }
   for(const delta of[.125,.25,.375,.5,.625,.75,1]){
-    tests.push({phaseX:0,phaseY:0,dx:delta,dy:0},{phaseX:0,phaseY:0,dx:-delta,dy:0},{phaseX:0,phaseY:0,dx:0,dy:delta},{phaseX:0,phaseY:0,dx:0,dy:-delta});
+    for(const [dx,dy,label] of [[delta,0,'px'],[-delta,0,'nx'],[0,delta,'py'],[0,-delta,'ny']] as const){const candidate=cloneLock(lock);for(const key of['tl','tr','br','bl'] as const){candidate.quad[key].x+=dx;candidate.quad[key].y+=dy;}record(candidate,`translate-${label}-${delta}`);}
   }
-  let nearest:{before:number;after:number;improved:boolean;test:{phaseX:number;phaseY:number;dx:number;dy:number}}|null=null;
-  for(const test of tests){
-    const perturbed=cloneLock(lock);perturbed.phaseX+=test.phaseX;perturbed.phaseY+=test.phaseY;for(const key of['tl','tr','br','bl'] as const){perturbed.quad[key].x+=test.dx;perturbed.quad[key].y+=test.dy;}
-    const before=countKnownErrors(image,MATRIX,cells,perturbed).errors;if(before<=0||before>64)continue;
-    const refined=refineKnownTrainingResidual(image,MATRIX,cells,perturbed),after=countKnownErrors(image,MATRIX,cells,refined.lock).errors;
-    const result={before,after,improved:refined.improved,test};
+
+  // Prefer a synthetic residual near the observed physical 15-bit case. Correctness still
+  // comes from the production full-known-preamble error counter and refiner; no threshold is weakened.
+  probes.sort((a,b)=>Math.abs(a.before-15)-Math.abs(b.before-15)||a.before-b.before);
+  let nearest:{before:number;after:number;improved:boolean;test:string}|null=null;
+  for(const probe of probes.slice(0,24)){
+    const refined=refineKnownTrainingResidual(image,MATRIX,cells,probe.lock),after=countKnownErrors(image,MATRIX,cells,refined.lock).errors,result={before:probe.before,after,improved:refined.improved,test:probe.test};
     if(after===0)return{found:true,...result};
     if(!nearest||after<nearest.after)nearest=result;
   }
