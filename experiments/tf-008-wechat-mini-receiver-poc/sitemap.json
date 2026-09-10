@@ -1,0 +1,9 @@
+{
+  "desc": "OptiLink TF-008 camera-frame PoC sitemap. No network access is performed.",
+  "rules": [
+    {
+      "action": "allow",
+      "page": "*"
+    }
+  ]
+}

@@ -1,0 +1,107 @@
+.page {
+  padding: 16rpx;
+  box-sizing: border-box;
+}
+
+.banner {
+  background: #166534;
+  color: #dcfce7;
+  font-weight: 700;
+  text-align: center;
+  padding: 18rpx;
+  border-radius: 12rpx;
+  margin-bottom: 10rpx;
+  letter-spacing: 0.06em;
+}
+
+.netbanner {
+  background: #111827;
+  color: #f87171;
+  font-weight: 700;
+  text-align: center;
+  padding: 12rpx;
+  border-radius: 12rpx;
+  margin-bottom: 16rpx;
+  letter-spacing: 0.04em;
+  border: 1rpx solid #7f1d1d;
+}
+
+.camera {
+  width: 100%;
+  height: 520rpx;
+  border-radius: 12rpx;
+  margin-bottom: 16rpx;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12rpx;
+  margin-bottom: 16rpx;
+}
+
+.btn {
+  font-size: 26rpx;
+  padding: 0 24rpx;
+  line-height: 2.4;
+  border-radius: 8rpx;
+  background: #1e293b;
+  color: #e2e8f0;
+  border: 1rpx solid #334155;
+}
+
+.btn.primary {
+  background: #1d4ed8;
+  color: #fff;
+}
+
+.panel {
+  background: #111827;
+  border: 1rpx solid #1f2937;
+  border-radius: 12rpx;
+  padding: 20rpx;
+  margin-bottom: 16rpx;
+}
+
+.section {
+  font-size: 24rpx;
+  color: #94a3b8;
+  margin-bottom: 10rpx;
+}
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 26rpx;
+  line-height: 1.9;
+}
+
+.row .k {
+  color: #94a3b8;
+}
+
+.row .v {
+  color: #fbbf24;
+  font-weight: 600;
+}
+
+.err {
+  font-size: 22rpx;
+  color: #f87171;
+  line-height: 1.7;
+  word-break: break-all;
+}
+
+.frozen {
+  font-size: 22rpx;
+  color: #93c5fd;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.log {
+  font-size: 22rpx;
+  color: #64748b;
+  white-space: pre-wrap;
+  word-break: break-all;
+}

@@ -1,0 +1,109 @@
+<view class="page">
+  <view class="banner">OPTICAL CAMERA FRAME — LOCAL ONLY</view>
+  <view class="netbanner">Network payload path: NONE</view>
+
+  <camera
+    device-position="back"
+    flash="off"
+    resolution="high"
+    frame-size="large"
+    class="camera"
+    bindinitdone="onInitDone"
+    bindstop="onCameraStop"
+    binderror="onCameraError"
+  />
+
+  <view class="controls">
+    <button class="btn primary" bindtap="startCamera" disabled="{{running}}">Start Camera</button>
+    <button class="btn" bindtap="stopCamera" disabled="{{!running}}">Stop Camera</button>
+    <button class="btn" bindtap="resetMetrics">Reset Metrics</button>
+    <button class="btn" bindtap="toggleMode">Mode: {{mode}}</button>
+    <button class="btn" wx:if="{{mode === 'benchmark'}}" bindtap="toggleHeavy">{{heavy ? 'Normalization 1280x720: ON' : 'Normalization 1280x720: OFF'}}</button>
+  </view>
+
+  <view class="panel">
+    <view class="section">status</view>
+    <view class="row"><text class="k">camera permission</text><text class="v">{{permissionStatus}}</text></view>
+    <view class="row"><text class="k">camera running</text><text class="v">{{running ? 'running' : 'stopped'}}</text></view>
+    <view class="row"><text class="k">frame callback</text><text class="v">{{callbackActive ? 'active' : 'inactive'}}</text></view>
+    <view class="row"><text class="k">maxZoom</text><text class="v">{{maxZoom}}</text></view>
+  </view>
+
+  <view class="panel">
+    <view class="section">live frame metrics</view>
+    <view class="row"><text class="k">frame</text><text class="v">{{frameWidth}} × {{frameHeight}}</text></view>
+    <view class="row"><text class="k">frame format</text><text class="v">{{frameFormat}}</text></view>
+    <view class="row"><text class="k">frame buffer bytes</text><text class="v">{{frameBufferBytes}}</text></view>
+    <view class="row"><text class="k">callback FPS</text><text class="v">{{callbackFps}}</text></view>
+    <view class="row"><text class="k">processing FPS</text><text class="v">{{processingFps}}</text></view>
+    <view class="row"><text class="k">total received frames</text><text class="v">{{totalReceived}}</text></view>
+    <view class="row"><text class="k">processed frames</text><text class="v">{{processed}}</text></view>
+    <view class="row"><text class="k">skipped / dropped</text><text class="v">{{skipped}}</text></view>
+    <view class="row"><text class="k">skip ratio</text><text class="v">{{skipRatio}}</text></view>
+    <view class="row"><text class="k">avg process time</text><text class="v">{{avgProcessMs}}</text></view>
+    <view class="row"><text class="k">p95 process time</text><text class="v">{{p95ProcessMs}}</text></view>
+    <view class="row"><text class="k">data ingress</text><text class="v">{{ingressMBps}} MB/s</text></view>
+  </view>
+
+  <view class="panel" wx:if="{{mode === 'orientation'}}">
+    <view class="section">TF-007H 64×64 orientation acquisition</view>
+    <view class="row"><text class="k">acquisition attempts</text><text class="v">{{orientAttempts}}</text></view>
+    <view class="row"><text class="k">received / processed / skipped</text><text class="v">{{orientReceived}} / {{orientProcessed}} / {{orientSkipped}}</text></view>
+    <view class="row"><text class="k">candidate</text><text class="v">{{orientCandidate}}</text></view>
+    <view class="row"><text class="k">state</text><text class="v">{{orientLocked}}</text></view>
+    <view class="row"><text class="k">exact tiles</text><text class="v">{{orientExactTiles}}</text></view>
+    <view class="row"><text class="k">total errors</text><text class="v">{{orientTotalErrors}}</text></view>
+    <view class="row"><text class="k">projection safe</text><text class="v">{{orientProjection}}</text></view>
+    <view class="row"><text class="k">locator support</text><text class="v">{{orientSupport}}</text></view>
+    <view class="row"><text class="k">acquisition avg</text><text class="v">{{orientAvgMs}}</text></view>
+    <view class="row"><text class="k">acquisition p95</text><text class="v">{{orientP95Ms}}</text></view>
+    <view class="row" wx:for="{{tileStatus}}" wx:key="*this"><text class="k">per-tile</text><text class="v">{{item}}</text></view>
+  </view>
+
+  <view class="panel" wx:if="{{mode === 'benchmark'}}">
+    <view class="section">luminance / contrast (sampled pixels)</view>
+    <view class="row"><text class="k">mean luma</text><text class="v">{{meanLuma}}</text></view>
+    <view class="row"><text class="k">min luma</text><text class="v">{{minLuma}}</text></view>
+    <view class="row"><text class="k">max luma</text><text class="v">{{maxLuma}}</text></view>
+    <view class="row"><text class="k">contrast range</text><text class="v">{{contrastRange}}</text></view>
+  </view>
+
+  <view class="panel" wx:if="{{mode === 'benchmark' && heavy}}">
+    <view class="section">1280×720 normalization benchmark</view>
+    <view class="row"><text class="k">average</text><text class="v">{{normalizeAvgMs}}</text></view>
+    <view class="row"><text class="k">p95</text><text class="v">{{normalizeP95Ms}}</text></view>
+    <view class="row"><text class="k">effective FPS</text><text class="v">{{normalizeFps}}</text></view>
+    <view class="row"><text class="k">samples</text><text class="v">{{normalizeSamples}}</text></view>
+  </view>
+
+  <view class="panel">
+    <view class="section">Physical Device Evidence</view>
+    <view class="row"><text class="k">timestamp</text><text class="v">{{deviceTimestamp}}</text></view>
+    <view class="row"><text class="k">model</text><text class="v">{{model}}</text></view>
+    <view class="row"><text class="k">brand</text><text class="v">{{brand}}</text></view>
+    <view class="row"><text class="k">system</text><text class="v">{{system}}</text></view>
+    <view class="row"><text class="k">platform</text><text class="v">{{platform}}</text></view>
+    <view class="row"><text class="k">pixel ratio</text><text class="v">{{pixelRatio}}</text></view>
+    <view class="row"><text class="k">screen</text><text class="v">{{screenSize}}</text></view>
+    <view class="row"><text class="k">WeChat version</text><text class="v">{{wechatVersion}}</text></view>
+    <view class="row"><text class="k">base library</text><text class="v">{{baseLibVersion}}</text></view>
+    <view class="row"><text class="k">SDK</text><text class="v">{{sdkVersion}}</text></view>
+  </view>
+
+  <view class="panel" wx:if="{{errors.length}}">
+    <view class="section">errors / warnings ({{errors.length}})</view>
+    <view class="err" wx:for="{{errors}}" wx:key="*this">{{item}}</view>
+  </view>
+
+  <view class="controls">
+    <button class="btn" bindtap="freezeResult">Freeze Test Result</button>
+    <button class="btn" bindtap="copyResult" disabled="{{!frozenResult}}">Copy Result</button>
+  </view>
+
+  <view class="panel" wx:if="{{frozenResult}}">
+    <view class="section">frozen result ({{frozenAt}})</view>
+    <text class="frozen" selectable="true">{{frozenResult}}</text>
+  </view>
+
+  <view class="log">{{log}}</view>
+</view>
