@@ -1,0 +1,7 @@
+{
+  "name": "OptiLink",
+
+  // 其他现有配置……
+
+  "postStartCommand": "bash .devcontainer/start-deepseek-harness.sh"
+}
