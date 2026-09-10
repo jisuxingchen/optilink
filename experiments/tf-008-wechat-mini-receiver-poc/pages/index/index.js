@@ -53,6 +53,9 @@ Page({
     orientMarkers: '—',
     orientAvgMs: '—',
     orientP95Ms: '—',
+    orientSelfCheck: '—',
+    orientLastResultAge: '—',
+    orientPipelineError: '',
     tileStatus: [],
 
     // live metrics
@@ -131,6 +134,7 @@ Page({
   orientFramesReceived: 0,
   orientFramesProcessed: 0,
   orientLatest: null,  // last OrientationAcquisition result
+  orientLastAt: 0,     // timestamp of last successful acquisition
 
   onLoad() {
     this.collectDeviceEvidence();
@@ -142,6 +146,7 @@ Page({
 
     this.appendLog('OptiLink camera-frame PoC ready. Payload is OPTICAL-ONLY.');
     this.appendLog('Network payload path: NONE (no network APIs used).');
+    this.runOrientationSelfCheck();
   },
 
   onUnload() {
@@ -274,6 +279,9 @@ Page({
       orientMarkers: '—',
       orientAvgMs: '—',
       orientP95Ms: '—',
+      orientSelfCheck: '—',
+      orientLastResultAge: '—',
+      orientPipelineError: '',
       tileStatus: []
     });
     this.appendLog('metrics reset');
@@ -286,11 +294,32 @@ Page({
       : 'normalization benchmark disabled');
   },
 
-  toggleMode() {
-    const next = this.data.mode === 'orientation' ? 'benchmark' : 'orientation';
+  // Idempotent mode selection — selecting the active mode is a no-op. Used by
+  // the two explicit mode buttons so the PO cannot accidentally toggle away
+  // from orientation.
+  setMode(mode) {
+    if (this.data.mode === mode) return;
     this.resetMetrics();
-    this.setData({ mode: next });
-    this.appendLog('mode: ' + next);
+    this.setData({ mode, orientPipelineError: '' });
+    this.appendLog('active mode: ' + mode);
+    if (mode === 'orientation') this.runOrientationSelfCheck();
+  },
+
+  onSelectMode(e) {
+    this.setMode(e.currentTarget.dataset.mode);
+  },
+
+  runOrientationSelfCheck() {
+    const problems = [];
+    if (!opticalCore) problems.push('optical-core bundle missing');
+    else if (typeof opticalCore.acquireOrientation !== 'function') problems.push('acquireOrientation not a function');
+    if (this.data.mode !== 'orientation') problems.push('mode is not orientation');
+    if (problems.length) {
+      this.setData({ orientSelfCheck: 'SELF-CHECK FAIL: ' + problems.join('; ') });
+      this.recordError('orientation_selfcheck_failed: ' + problems.join('; '));
+    } else {
+      this.setData({ orientSelfCheck: 'SELF-CHECK OK' });
+    }
   },
 
   // ---- frame callback ----------------------------------------------------
@@ -380,6 +409,7 @@ Page({
     if (this.orientTimes.length > PROCESS_TIME_CAP) this.orientTimes.shift();
     this.orientFramesProcessed++;
     this.orientLatest = result;
+    this.orientLastAt = Date.now();
     this.processedFrames++;
     this.windowProcessed++;
   },
@@ -507,6 +537,11 @@ Page({
         'tile ' + t.tile + ': ' + (t.acquired ? (t.exact ? 'exact' : 'err ' + t.bitErrors) : 'miss')
       );
     }
+
+    patch.orientLastResultAge = this.orientLastAt ? (Date.now() - this.orientLastAt) + ' ms ago' : 'no result';
+    patch.orientPipelineError = (this.data.running && this.orientFramesReceived > ORIENT_EVERY && this.orientFramesProcessed === 0)
+      ? 'ERROR: ORIENTATION PIPELINE NOT RUNNING'
+      : '';
 
     this.setData(patch);
   },
@@ -649,7 +684,7 @@ Page({
             reason: t.reason || (t.acquired ? 'acquired' : 'not-acquired')
           }))
         }
-      : { locked: false, support: [], tiles: [] };
+      : { locked: false, reason: 'no-acquisition-result', support: [], tiles: [] };
 
     return {
       evidenceClass: 'PHYSICAL MINI PROGRAM TF-007H ORIENTATION ACQUISITION',

@@ -26,6 +26,34 @@
   border: 1rpx solid #7f1d1d;
 }
 
+.orientbanner {
+  background: #7c2d12;
+  color: #fed7aa;
+  font-weight: 800;
+  text-align: center;
+  padding: 14rpx;
+  border-radius: 12rpx;
+  margin-bottom: 10rpx;
+  letter-spacing: 0.04em;
+  border: 1rpx solid #9a3412;
+}
+
+.modebtn.modeactive {
+  background: #065f46;
+  color: #d1fae5;
+  border-color: #10b981;
+}
+
+.pipeline-error {
+  background: #7f1d1d;
+  color: #fecaca;
+  font-weight: 700;
+  padding: 12rpx;
+  border-radius: 8rpx;
+  margin-bottom: 10rpx;
+  text-align: center;
+}
+
 .camera {
   width: 100%;
   height: 520rpx;
