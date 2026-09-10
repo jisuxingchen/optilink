@@ -1,0 +1,67 @@
+import type {FiducialLocatorDiagnostic} from './tiled-orientation-fiducial.ts';
+
+export type OrientationRankInput = {
+  success: boolean;
+  acquiredTiles: number;
+  exactTiles: number;
+  totalBitErrors: number;
+  scoreSum: number;
+  projectionSafe: boolean | null;
+};
+
+type TripletCandidate = NonNullable<FiducialLocatorDiagnostic['triplet']>;
+
+/**
+ * A macro locator result is only trustworthy geometry when all three markers were
+ * actually observed. `outer-pair` support synthesizes the middle marker from the
+ * two outer markers, so its projected tile centers and estimated tile side are a
+ * guess. Physical evidence shows outer-pair runs correlate with 0/3 acquisition,
+ * so neither the acquisition seed nor the projection-safety heuristic may trust it.
+ */
+export function isTrustedTriplet(
+  triplet: FiducialLocatorDiagnostic['triplet'],
+): triplet is TripletCandidate {
+  return triplet?.support === 'triplet';
+}
+
+/**
+ * The macro markers live above the three tiles in the canonical sender view.
+ * A 180-degree/wrong-normal interpretation can still form an excellent marker
+ * triplet while projecting the actual tile centers outside the normalized frame.
+ * Require most of every estimated tile region to remain in-frame before using a
+ * failed candidate as an orientation winner. Exact 3/3 preamble evidence remains
+ * authoritative and is ranked above this geometric heuristic.
+ */
+export function projectedTileRegionsSafe(
+  diagnostic: FiducialLocatorDiagnostic | null | undefined,
+  width: number,
+  height: number,
+): boolean | null {
+  const triplet = diagnostic?.triplet;
+  if (!triplet) return null;
+  // An outer-pair candidate can produce plausible in-frame points while the synthesized
+  // middle-marker geometry is wrong. Treat it as untrusted rather than safe.
+  if (!isTrustedTriplet(triplet)) return false;
+  if (!(width > 0 && height > 0 && triplet.estimatedTileSide > 0)) return false;
+  const halfRequired = triplet.estimatedTileSide * 0.40;
+  const edgeAllowance = Math.max(4, Math.min(width, height) * 0.012);
+  return triplet.points.every(point =>
+    point.x - halfRequired >= -edgeAllowance
+    && point.x + halfRequired <= width + edgeAllowance
+    && point.y - halfRequired >= -edgeAllowance
+    && point.y + halfRequired <= height + edgeAllowance,
+  );
+}
+
+export function rankOrientationCandidate(input: OrientationRankInput): number {
+  const score = Number.isFinite(input.scoreSum) ? input.scoreSum : 0;
+  if (input.success) return 1e15 + score * 1e4;
+  // Do not let a visually strong but geometrically impossible marker triplet win
+  // merely because the alternative candidate had fewer acquired tiles.
+  if (input.projectionSafe === false) return -1e15 + input.exactTiles * 1e7 + score * 1e4;
+  // Number.MAX_SAFE_INTEGER is used upstream as an explicit "not all tiles acquired"
+  // sentinel. It must not be multiplied as if it were a real BER measurement.
+  const incomplete = input.acquiredTiles < 3 || input.totalBitErrors >= Number.MAX_SAFE_INTEGER / 2;
+  const errors = incomplete ? 1e6 : (Number.isFinite(input.totalBitErrors) ? input.totalBitErrors : 1e6);
+  return input.acquiredTiles * 1e9 + input.exactTiles * 1e7 - errors * 1e5 + score * 1e4;
+}

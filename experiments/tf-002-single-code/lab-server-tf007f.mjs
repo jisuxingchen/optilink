@@ -12,7 +12,12 @@ const clients=new Map();let latestRun=null,latestReceiverReady=null,vite;
 function parseCookies(req){const result=new Map();for(const part of String(req.headers.cookie||'').split(';')){const index=part.indexOf('=');if(index<0)continue;result.set(part.slice(0,index).trim(),decodeURIComponent(part.slice(index+1).trim()));}return result;}
 function tokenFromUrl(req){try{return new URL(req.url||'/','http://localhost').searchParams.get('token')||'';}catch{return '';}}
 function authorized(req){return!labToken||tokenFromUrl(req)===labToken||parseCookies(req).get('optilink_lab_token')===labToken;}
-function maybeCookie(req,res){if(labToken&&tokenFromUrl(req)===labToken)res.setHeader('set-cookie',`optilink_lab_token=${encodeURIComponent(labToken)}; Path=/; HttpOnly; Secure; SameSite=Strict`);}
+// The lab token cookie is only marked Secure when the transport is actually HTTPS.
+// On a plain-HTTP LAN debug connection (no TLS and no forwarded-proto: https) a Secure
+// cookie is never stored or sent, which would leave the /@vite/client and /src/* module
+// requests unauthorized and the page stuck at "waiting for coordinator".
+function secureTransport(req){return Boolean(req.socket?.encrypted)||String(req.headers['x-forwarded-proto']||'').toLowerCase()==='https';}
+function maybeCookie(req,res){if(!labToken||tokenFromUrl(req)!==labToken)return;const secure=secureTransport(req)?'; Secure':'';res.setHeader('set-cookie',`optilink_lab_token=${encodeURIComponent(labToken)}; Path=/; HttpOnly;${secure}; SameSite=Strict`);}
 function exactKeys(value,allowed){return Boolean(value)&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).length===allowed.size&&Object.keys(value).every(key=>allowed.has(key));}
 function allowTf007gRelay(role,message){
   const manifestCommand=role===TF007F_SENDER_ROLE&&message?.type==='command'&&(message.action==='tf007f-manifest-visible'||message.action==='tf007f-manifest-read');
