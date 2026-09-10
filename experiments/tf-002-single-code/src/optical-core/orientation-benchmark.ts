@@ -81,13 +81,17 @@ totals.sort((a, b) => a - b);
 const avg = totals.reduce((a, b) => a + b, 0) / N;
 console.log('[synthetic benchmark — NON-PHYSICAL]');
 if (sample) {
-  console.log('profile (first run): ' + JSON.stringify(sample.profile));
-  console.log('best: locked=' + sample.locked
+  console.log('selectedTransform=' + sample.selectedTransform
+    + ' locked=' + sample.locked
     + ' mode=' + sample.orientationMode
     + ' support=' + (sample.best?.locatorSupport ?? 'none')
-    + ' observedMarkers=' + (sample.best?.observedMarkerCount ?? 0)
-    + ' reject=' + (sample.best?.tripletRejectReason ?? 'n/a')
-    + ' markerCandidates=' + (sample.best?.markerCandidates.length ?? 0));
+    + ' tripletValid=' + (sample.best?.tripletValid ?? false)
+    + ' detectedComponents=' + (sample.best?.detectedMarkerComponentCount ?? 0)
+    + ' validTripletMarkers=' + (sample.best?.validTripletMarkerCount ?? 0)
+    + ' lockMode=' + (sample.best?.lockMode ?? 'n/a')
+    + ' reject=' + (sample.best?.tripletRejectReason ?? 'n/a'));
+  console.log('transformCandidates=' + JSON.stringify(sample.transformCandidates.map(tc => ({mode: tc.mode, tripletValid: tc.tripletValid, support: tc.tripletSupport, score: tc.geometryScore, components: tc.detectedMarkerComponentCount}))));
+  console.log('profile: ' + JSON.stringify(sample.profile));
 }
 console.log('acquireOrientation total: avg=' + avg.toFixed(1)
   + 'ms p50=' + totals[Math.floor(N * 0.5)]

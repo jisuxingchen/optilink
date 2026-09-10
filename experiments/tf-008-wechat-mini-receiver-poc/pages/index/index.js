@@ -532,7 +532,7 @@ Page({
       patch.orientProjection = best.projectionSafe === true ? 'true' : best.projectionSafe === false ? 'false' : 'null';
       patch.orientSupport = best.locatorSupport;
       patch.orientReject = best.tripletRejectReason || '—';
-      patch.orientMarkers = (best.observedMarkerCount != null ? best.observedMarkerCount : 0) + ' observed / ' + (best.markerCandidates ? best.markerCandidates.length : 0) + ' candidates';
+      patch.orientMarkers = (best.detectedMarkerComponentCount != null ? best.detectedMarkerComponentCount : 0) + ' components / ' + (best.validTripletMarkerCount != null ? best.validTripletMarkerCount : 0) + ' triplet markers';
       patch.tileStatus = best.tiles.map(t =>
         'tile ' + t.tile + ': ' + (t.acquired ? (t.exact ? 'exact' : 'err ' + t.bitErrors) : 'miss')
       );
@@ -673,7 +673,10 @@ Page({
           projection: best.projectionSafe,
           locked,
           support: best.locatorSupport,
-          observedMarkerCount: best.observedMarkerCount != null ? best.observedMarkerCount : 0,
+          detectedMarkerComponentCount: best.detectedMarkerComponentCount != null ? best.detectedMarkerComponentCount : 0,
+          validTripletMarkerCount: best.validTripletMarkerCount != null ? best.validTripletMarkerCount : 0,
+          tripletValid: !!best.tripletValid,
+          lockMode: best.lockMode || 'fallback-exhaustive',
           tripletRejectReason: best.tripletRejectReason || null,
           markerCandidates: best.markerCandidates || [],
           tiles: best.tiles.map(t => ({
@@ -710,6 +713,8 @@ Page({
         frameFormat: this.data.frameFormat
       },
       orientation,
+      transformCandidates: r && r.transformCandidates ? r.transformCandidates : [],
+      selectedTransform: r && r.selectedTransform ? r.selectedTransform : null,
       profile: r && r.profile ? r.profile : null,
       performance: {
         callbackFps: Number(callbackFps),

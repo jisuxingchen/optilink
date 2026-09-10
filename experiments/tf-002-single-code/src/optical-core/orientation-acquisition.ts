@@ -87,11 +87,24 @@ export type CalibrationResult = {
   totalBitErrors: number | null;  // null when not all 3 tiles acquired
   projectionSafe: boolean | null;
   locatorSupport: 'triplet' | 'outer-pair' | 'none';
-  observedMarkerCount: number;
+  detectedMarkerComponentCount: number;  // number of marker components actually found
+  validTripletMarkerCount: number;       // 3 (triplet) / 2 (outer-pair) / 0
+  tripletValid: boolean;
+  lockMode: 'triplet-seeded' | 'outer-pair-untrusted' | 'fallback-exhaustive';
   markerCandidates: MarkerCandidate[];
   tripletRejectReason: string;
   calibrationMs: number;
   stage: CalibrationStage;
+};
+
+export type TransformCandidate = {
+  mode: OrientationMode;
+  detectedMarkerComponentCount: number;
+  validTripletMarkerCount: number;
+  tripletValid: boolean;
+  tripletSupport: 'triplet' | 'outer-pair' | 'none';
+  geometryScore: number;
+  tripletRejectReason: string;
 };
 
 export type OrientationAcquisition = {
@@ -100,6 +113,8 @@ export type OrientationAcquisition = {
   matrixSize: number;
   candidates: CalibrationResult[];
   best: CalibrationResult | null;
+  transformCandidates: TransformCandidate[];
+  selectedTransform: OrientationMode | null;
   profile: StageProfile;
 };
 
@@ -154,10 +169,23 @@ export function normalizeFrame(
   th: number = SAMPLE_HEIGHT,
 ): PixelFrame {
   const src = frame.data;
-  const sw = frame.width;
-  const sh = frame.height;
+  const fw = frame.width;   // full-frame width
+  const fh = frame.height;  // full-frame height
+
+  // Letterbox-aware source region: when the raw frame is portrait (taller than
+  // wide) and we are NOT rotating 90°, the 16:9 optical content is a central
+  // horizontal strip (the sender is landscape). Crop that strip so markers/tiles
+  // keep their true aspect ratio instead of being vertically squashed.
+  let sx0 = 0, sy0 = 0, sW = fw, sH = fh;
+  if ((mode === 'native' || mode === 'rotate180') && fh > fw) {
+    sW = fw;
+    sH = Math.round(fw * 9 / 16);
+    sy0 = Math.round((fh - sH) / 2);
+  }
+
   const out = new Uint8ClampedArray(tw * th * 4);
-  const sw1 = sw - 1, sh1 = sh - 1, tw1 = tw - 1, th1 = th - 1;
+  const sW1 = sW - 1, sH1 = sH - 1, tw1 = tw - 1, th1 = th - 1;
+  const fw1 = fw - 1, fh1 = fh - 1;
 
   for (let oy = 0; oy < th; oy++) {
     const oyNorm = oy / th1;
@@ -169,17 +197,17 @@ export function normalizeFrame(
       else if (mode === 'rotateCW') { sxNorm = oyNorm; syNorm = 1 - oxNorm; }
       else { sxNorm = 1 - oyNorm; syNorm = oxNorm; } // rotateCCW
 
-      const sx = sxNorm * sw1;
-      const sy = syNorm * sh1;
+      const sx = sx0 + sxNorm * sW1;
+      const sy = sy0 + syNorm * sH1;
       const x0 = Math.floor(sx), y0 = Math.floor(sy);
       const fx = sx - x0, fy = sy - y0;
-      const x1 = Math.min(x0 + 1, sw1), y1 = Math.min(y0 + 1, sh1);
+      const x1 = Math.min(x0 + 1, fw1), y1 = Math.min(y0 + 1, fh1);
 
       const o = (oy * tw + ox) * 4;
-      const i00 = (y0 * sw + x0) * 4;
-      const i10 = (y0 * sw + x1) * 4;
-      const i01 = (y1 * sw + x0) * 4;
-      const i11 = (y1 * sw + x1) * 4;
+      const i00 = (y0 * fw + x0) * 4;
+      const i10 = (y0 * fw + x1) * 4;
+      const i01 = (y1 * fw + x0) * 4;
+      const i11 = (y1 * fw + x1) * 4;
 
       for (let c = 0; c < 3; c++) {
         const top = src[i00 + c] * (1 - fx) + src[i10 + c] * fx;
@@ -268,6 +296,11 @@ function calibrationFromImage(image: PixelFrame, matrixSize: number, mode: Orien
   const fid = diagnostic?.fiducial || null;
   const projectionSafe = projectedTileRegionsSafe(fid, image.width, image.height);
   const locatorSupport: CalibrationResult['locatorSupport'] = fid?.triplet?.support ?? 'none';
+  const lockMode: CalibrationResult['lockMode'] = locatorSupport === 'triplet'
+    ? 'triplet-seeded'
+    : locatorSupport === 'outer-pair'
+      ? 'outer-pair-untrusted'
+      : 'fallback-exhaustive';
   const calibrationMs = Date.now() - started;
 
   return {
@@ -290,7 +323,10 @@ function calibrationFromImage(image: PixelFrame, matrixSize: number, mode: Orien
     totalBitErrors,
     projectionSafe,
     locatorSupport,
-    observedMarkerCount: fid?.triplet?.observedMarkerCount ?? 0,
+    detectedMarkerComponentCount: fid?.componentCount ?? 0,
+    validTripletMarkerCount: fid?.triplet?.observedMarkerCount ?? 0,
+    tripletValid: fid?.triplet?.support === 'triplet',
+    lockMode,
     markerCandidates: (fid?.components ?? []).map(c => ({
       x: c.x, y: c.y, width: c.width, height: c.height, sampleCount: c.sampleCount, fillRatio: c.fillRatio,
     })),
@@ -313,8 +349,11 @@ function rankCalibration(result: CalibrationResult): number {
   });
 }
 
-function orientationCandidates(frame: PixelFrame): OrientationMode[] {
-  return frame.width < frame.height ? ['rotateCW', 'rotateCCW'] : ['native', 'rotate180'];
+function orientationCandidates(_frame: PixelFrame): OrientationMode[] {
+  // Evaluate ALL transforms; the pre-scan picks by valid-triplet geometry.
+  // The physical sensor is portrait, so "none" (letterbox crop) is often the
+  // correct transform, not a 90-degree rotation.
+  return ['native', 'rotate180', 'rotateCW', 'rotateCCW'];
 }
 
 const PRE_SCAN_W = 320;
@@ -332,19 +371,30 @@ export function acquireOrientation(frame: PixelFrame, candidates?: OrientationMo
   const t0 = Date.now();
   const modes = candidates ?? orientationCandidates(frame);
 
-  // Phase 1: cheap orientation pre-scan on downsampled frames.
+  // Phase 1: cheap pre-scan on downsampled frames for EVERY transform, recording
+  // per-transform geometry diagnostics and ranking by valid-triplet evidence.
   const preScan0 = Date.now();
-  let bestMode: OrientationMode = modes[0];
-  let preScanScore = -Infinity;
+  const transformCandidates: TransformCandidate[] = [];
   for (const mode of modes) {
     const small = normalizeFrame(frame, mode, PRE_SCAN_W, PRE_SCAN_H);
     const fid = locateOrientationFiducials(asImageData(small));
-    const score = fiducialScore(fid);
-    if (score > preScanScore) { preScanScore = score; bestMode = mode; }
+    transformCandidates.push({
+      mode,
+      detectedMarkerComponentCount: fid.componentCount,
+      validTripletMarkerCount: fid.triplet ? fid.triplet.observedMarkerCount : 0,
+      tripletValid: fid.triplet?.support === 'triplet',
+      tripletSupport: fid.triplet?.support ?? 'none',
+      geometryScore: fiducialScore(fid),
+      tripletRejectReason: tripletRejectReason(fid),
+    });
   }
   const preScanMs = Date.now() - preScan0;
 
-  // Phase 2: full-res acquisition on the winning orientation (+ fallback).
+  // Rank transforms: valid 3-marker triplet > outer-pair > nothing.
+  const ranked = transformCandidates.slice().sort((a, b) => b.geometryScore - a.geometryScore);
+
+  // Phase 2: full-res acquisition on the best transform (+ one fallback only if
+  // the winner does not lock and the runner-up has at least outer-pair evidence).
   resetPhysicalAcquisitionDiagnostics();
   const results: CalibrationResult[] = [];
   let normalizeMs = 0, lockMs = 0, refineMs = 0, errorsMs = 0, calibrationMs = 0;
@@ -359,13 +409,10 @@ export function acquireOrientation(frame: PixelFrame, candidates?: OrientationMo
     return r;
   };
 
-  let best: CalibrationResult = runCalibration(bestMode);
-  if (!best.success && modes.length > 1) {
-    const other = modes.find(m => m !== bestMode);
-    if (other) {
-      const second = runCalibration(other);
-      if (rankCalibration(second) > rankCalibration(best)) best = second;
-    }
+  let best: CalibrationResult = runCalibration(ranked[0].mode);
+  if (!best.success && ranked.length > 1 && ranked[1].geometryScore > -Infinity) {
+    const second = runCalibration(ranked[1].mode);
+    if (rankCalibration(second) > rankCalibration(best)) best = second;
   }
 
   return {
@@ -374,6 +421,8 @@ export function acquireOrientation(frame: PixelFrame, candidates?: OrientationMo
     matrixSize: ORIENTATION_MATRIX,
     candidates: results,
     best,
+    transformCandidates,
+    selectedTransform: ranked[0].mode,
     profile: {preScanMs, normalizeMs, lockMs, refineMs, errorsMs, calibrationMs, totalMs: Date.now() - t0},
   };
 }
