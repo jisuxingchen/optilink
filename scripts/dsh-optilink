@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -lt 1 ]]; then
+  echo "Usage: scripts/dsh-optilink \"task\"" >&2
+  exit 2
+fi
+
+if [[ -z "${DEEPSEEK_API_KEY:-}" ]]; then
+  cat >&2 <<'EOF'
+DEEPSEEK_API_KEY is not available in this shell.
+Configure it as a GitHub Codespaces secret named DEEPSEEK_API_KEY, then restart the Codespace.
+Do not store the key in this repository.
+EOF
+  exit 3
+fi
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+POLICY="$ROOT/docs/DEEPSEEK_HARNESS_POLICY.md"
+DSH_BIN="${DSH_BIN:-$HOME/.local/bin/dsh}"
+
+if [[ ! -x "$DSH_BIN" ]]; then
+  echo "dsh not found at $DSH_BIN. Rebuild the Codespace or run .devcontainer/setup-deepseek-harness.sh." >&2
+  exit 4
+fi
+
+if [[ ! -f "$POLICY" ]]; then
+  echo "Harness policy missing: $POLICY" >&2
+  exit 5
+fi
+
+TASK="$*"
+POLICY_TEXT="$(cat "$POLICY")"
+
+cd "$ROOT"
+exec "$DSH_BIN" --profile headless "${POLICY_TEXT}
+
+---
+USER TASK:
+${TASK}"

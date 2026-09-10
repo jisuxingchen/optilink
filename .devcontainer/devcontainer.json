@@ -1,0 +1,16 @@
+{
+  "name": "OptiLink",
+  "postCreateCommand": "bash .devcontainer/setup-deepseek-harness.sh",
+  "postStartCommand": "bash .devcontainer/start-deepseek-harness.sh",
+  "remoteEnv": {
+    "PATH": "${containerEnv:PATH}:/home/codespace/.local/bin"
+  },
+  "forwardPorts": [3080],
+  "portsAttributes": {
+    "3080": {
+      "label": "DeepSeek Harness",
+      "onAutoForward": "notify",
+      "visibility": "private"
+    }
+  }
+}
