@@ -12,7 +12,7 @@ The Codespace lifecycle is defined in `.devcontainer/devcontainer.json`:
 
 The setup script installs the pinned package `@deepseek-ai/dsh@0.1.2-rc.1` under `$HOME/.local`, creates the stable command `$HOME/.local/bin/dsh`, and adds that directory to Bash PATH.
 
-The startup script starts `dsh web --no-open --port 3080` only when the service is not already healthy. Runtime files live outside the repository:
+The startup script starts `dsh web --no-open --port 3080` only when the service is not already listening. Runtime files live outside the repository:
 
 - log: `$HOME/.optilink/deepseek-harness.log`
 - pid: `$HOME/.optilink/deepseek-harness.pid`
@@ -38,8 +38,10 @@ Never echo the value itself.
 ```bash
 command -v dsh
 dsh --version
-curl --fail --silent http://127.0.0.1:3080/ >/dev/null && echo "Harness Web healthy"
+(echo >/dev/tcp/127.0.0.1/3080) >/dev/null 2>&1 && echo "Harness Web listening"
 ```
+
+The Web UI uses a token-protected URL, so an unauthenticated `curl --fail http://127.0.0.1:3080/` is not a valid health check and may report failure even when the service is healthy.
 
 For a minimal model call:
 
