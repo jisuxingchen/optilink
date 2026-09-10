@@ -39,10 +39,26 @@ jobs:
           test -x scripts/dsh-optilink
       - name: Guard against committed DeepSeek credentials
         run: |
-          if grep -R -n -E 'DEEPSEEK_API_KEY[[:space:]]*=[[:space:]]*["'"']?sk-' .devcontainer scripts docs; then
-            echo 'A DeepSeek API key appears to be committed.' >&2
-            exit 1
-          fi
+          python - <<'PY'
+          from pathlib import Path
+
+          roots = [Path('.devcontainer'), Path('scripts'), Path('docs')]
+          forbidden = 'DEEPSEEK_API_KEY=sk-'
+          hits = []
+          for root in roots:
+              if not root.exists():
+                  continue
+              for path in root.rglob('*'):
+                  if path.is_file():
+                      try:
+                          text = path.read_text(encoding='utf-8')
+                      except UnicodeDecodeError:
+                          continue
+                      if forbidden in text:
+                          hits.append(str(path))
+          if hits:
+              raise SystemExit('DeepSeek API key-like literal found in: ' + ', '.join(hits))
+          PY
 
   dashboard-build:
     runs-on: ubuntu-latest
