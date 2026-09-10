@@ -22,6 +22,48 @@ jobs:
       - name: Validate project structure and dashboard data
         run: python scripts/validate_project.py
 
+  harness-config-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Validate devcontainer JSON
+        run: python -m json.tool .devcontainer/devcontainer.json >/dev/null
+      - name: Validate Harness shell entry points
+        run: |
+          bash -n .devcontainer/setup-deepseek-harness.sh
+          bash -n .devcontainer/start-deepseek-harness.sh
+          bash -n scripts/dsh-optilink
+          test -x .devcontainer/setup-deepseek-harness.sh
+          test -x .devcontainer/start-deepseek-harness.sh
+          test -x scripts/dsh-optilink
+      - name: Validate Harness Web launcher contract
+        run: |
+          grep -q -- 'web --no-open --port' .devcontainer/start-deepseek-harness.sh
+          grep -q -- '/dev/tcp/127.0.0.1/' .devcontainer/start-deepseek-harness.sh
+      - name: Guard against committed DeepSeek credentials
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          roots = [Path('.devcontainer'), Path('scripts'), Path('docs')]
+          forbidden = 'DEEPSEEK_API_KEY=sk-'
+          hits = []
+          for root in roots:
+              if not root.exists():
+                  continue
+              for path in root.rglob('*'):
+                  if path.is_file():
+                      try:
+                          text = path.read_text(encoding='utf-8')
+                      except UnicodeDecodeError:
+                          continue
+                      if forbidden in text:
+                          hits.append(str(path))
+          if hits:
+              raise SystemExit('DeepSeek API key-like literal found in: ' + ', '.join(hits))
+          PY
+
   dashboard-build:
     runs-on: ubuntu-latest
     steps:
