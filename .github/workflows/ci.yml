@@ -22,6 +22,28 @@ jobs:
       - name: Validate project structure and dashboard data
         run: python scripts/validate_project.py
 
+  harness-config-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Validate devcontainer JSON
+        run: python -m json.tool .devcontainer/devcontainer.json >/dev/null
+      - name: Validate Harness shell entry points
+        run: |
+          bash -n .devcontainer/setup-deepseek-harness.sh
+          bash -n .devcontainer/start-deepseek-harness.sh
+          bash -n scripts/dsh-optilink
+          test -x .devcontainer/setup-deepseek-harness.sh
+          test -x .devcontainer/start-deepseek-harness.sh
+          test -x scripts/dsh-optilink
+      - name: Guard against committed DeepSeek credentials
+        run: |
+          if grep -R -n -E 'DEEPSEEK_API_KEY[[:space:]]*=[[:space:]]*["'"']?sk-' .devcontainer scripts docs; then
+            echo 'A DeepSeek API key appears to be committed.' >&2
+            exit 1
+          fi
+
   dashboard-build:
     runs-on: ubuntu-latest
     steps:
