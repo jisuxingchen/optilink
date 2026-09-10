@@ -2,6 +2,7 @@
   "pages": [
     "pages/index/index"
   ],
+  "lazyCodeLoading": "requiredComponents",
   "window": {
     "navigationBarTitleText": "OptiLink Camera PoC",
     "navigationBarBackgroundColor": "#0f172a",
