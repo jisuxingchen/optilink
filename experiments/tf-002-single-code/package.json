@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
+    "dev:tf008-sender": "vite --host 127.0.0.1 --port 5317 --strictPort",
     "lab": "node lab-server.mjs",
     "lab:tf007f": "node lab-server-tf007f.mjs",
     "lab:tunnel": "node lab-tunnel.mjs",
