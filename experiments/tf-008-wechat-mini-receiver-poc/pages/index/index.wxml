@@ -1,7 +1,8 @@
 <view class="page">
   <view class="banner">OPTICAL CAMERA FRAME — LOCAL ONLY</view>
   <view class="netbanner">Network payload path: NONE</view>
-  <view class="orientbanner" wx:if="{{mode === 'orientation'}}">TF-007H ORIENTATION MODE ACTIVE</view>
+  <view class="orientbanner" wx:if="{{mode === 'orientation'}}">TF-007H ORIENTATION MODE ACTIVE · buildId {{buildId}}</view>
+  <view class="benchbanner" wx:if="{{mode === 'benchmark'}}">CAMERA BENCHMARK MODE ACTIVE · buildId {{buildId}}</view>
 
   <camera
     device-position="back"
@@ -26,6 +27,7 @@
   <view class="panel">
     <view class="section">status</view>
     <view class="row"><text class="k">camera permission</text><text class="v">{{permissionStatus}}</text></view>
+    <view class="row"><text class="k">buildId</text><text class="v">{{buildId}}</text></view>
     <view class="row"><text class="k">active mode</text><text class="v">{{mode}}</text></view>
     <view class="row"><text class="k">camera running</text><text class="v">{{running ? 'running' : 'stopped'}}</text></view>
     <view class="row"><text class="k">frame callback</text><text class="v">{{callbackActive ? 'active' : 'inactive'}}</text></view>

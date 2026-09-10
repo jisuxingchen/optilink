@@ -38,6 +38,18 @@
   border: 1rpx solid #9a3412;
 }
 
+.benchbanner {
+  background: #1e3a8a;
+  color: #bfdbfe;
+  font-weight: 800;
+  text-align: center;
+  padding: 14rpx;
+  border-radius: 12rpx;
+  margin-bottom: 10rpx;
+  letter-spacing: 0.04em;
+  border: 1rpx solid #2563eb;
+}
+
 .modebtn.modeactive {
   background: #065f46;
   color: #d1fae5;

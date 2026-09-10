@@ -26,6 +26,10 @@ const ORIENT_EVERY = 4;        // run orientation acquisition on every Nth frame
 // Shared optical acquisition core (bundled from the TF-007H modules).
 const opticalCore = require('../../utils/optical-core.js');
 
+// Unmistakable build identifier — must be visible on the phone to prove the
+// device is running the latest orientation-capable package (not a stale cache).
+const BUILD_ID = 'tf008-r9';
+
 Page({
   data: {
     // lifecycle
@@ -34,6 +38,7 @@ Page({
     frozen: false,
     heavy: false,
     mode: 'orientation', // 'orientation' | 'benchmark'
+    buildId: BUILD_ID,
     permissionStatus: 'unknown',
     maxZoom: '—',
     networkPath: 'NONE',
@@ -601,6 +606,8 @@ Page({
 
     return {
       evidenceClass: 'PHYSICAL MINI PROGRAM CAMERA-FRAME POC',
+      buildId: this.data.buildId,
+      appMode: this.data.mode,
       note: 'Feasibility spike only. NOT TF-007H PASS / Manifest PASS / throughput PASS / Net Goodput.',
       networkPayloadPath: 'NONE',
       timestamp: new Date().toISOString(),
@@ -691,6 +698,8 @@ Page({
 
     return {
       evidenceClass: 'PHYSICAL MINI PROGRAM TF-007H ORIENTATION ACQUISITION',
+      buildId: this.data.buildId,
+      appMode: this.data.mode,
       note: 'Feasibility spike only. NOT Manifest PASS / throughput PASS / Net Goodput.',
       networkPayloadPath: 'NONE',
       timestamp: new Date().toISOString(),
