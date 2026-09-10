@@ -9,13 +9,17 @@ PORT="3080"
 
 mkdir -p "$LOG_DIR"
 
+port_open() {
+  (echo >"/dev/tcp/127.0.0.1/${PORT}") >/dev/null 2>&1
+}
+
 if [[ ! -x "$DSH_BIN" ]]; then
   echo "DeepSeek Harness is not installed at $DSH_BIN. Rebuild the Codespace or run .devcontainer/setup-deepseek-harness.sh." >&2
   exit 1
 fi
 
-if curl --silent --fail --max-time 2 "http://127.0.0.1:${PORT}/" >/dev/null 2>&1; then
-  echo "DeepSeek Harness already healthy on port ${PORT}."
+if port_open; then
+  echo "DeepSeek Harness already listening on port ${PORT}."
   exit 0
 fi
 
@@ -29,12 +33,12 @@ if [[ -f "$PID_FILE" ]]; then
 fi
 
 echo "Starting DeepSeek Harness Web UI on port ${PORT} ..."
-nohup "$DSH_BIN" web --port "$PORT" >"$LOG_FILE" 2>&1 &
+nohup "$DSH_BIN" web --no-open --port "$PORT" >"$LOG_FILE" 2>&1 &
 pid=$!
 echo "$pid" > "$PID_FILE"
 
 for _ in $(seq 1 20); do
-  if curl --silent --fail --max-time 2 "http://127.0.0.1:${PORT}/" >/dev/null 2>&1; then
+  if port_open; then
     echo "DeepSeek Harness is ready. Log: $LOG_FILE"
     exit 0
   fi
@@ -46,5 +50,5 @@ for _ in $(seq 1 20); do
   sleep 1
 done
 
-echo "DeepSeek Harness did not become healthy on port ${PORT}. See $LOG_FILE" >&2
+echo "DeepSeek Harness did not begin listening on port ${PORT}. See $LOG_FILE" >&2
 exit 1
