@@ -13,6 +13,21 @@ try{
   const denied=await fetch(`http://127.0.0.1:${port}/tiled-physical-v5.html?role=sender`);if(denied.status!==401)throw new Error(`expected 401 without token, got ${denied.status}`);
   const page=await fetch(`http://127.0.0.1:${port}/tiled-physical-v5.html?role=sender&token=${token}`);const html=await page.text();if(!page.ok||!html.includes('TF-007F buffered physical gate'))throw new Error('v5 sender HTML smoke failed');
 
+  // LAN HTTP regression: plain-HTTP cookie must NOT be Secure, so the browser can send it for module requests.
+  const plainCookie=page.headers.get('set-cookie')||'';
+  if(/;\s*Secure\b/i.test(plainCookie))throw new Error('plain HTTP cookie must not carry Secure');
+  const cookiePair=plainCookie.split(';')[0];
+  // Simulated HTTPS (Cloudflare tunnel sets x-forwarded-proto): cookie must remain Secure.
+  const httpsPage=await fetch(`http://127.0.0.1:${port}/tiled-physical-v5.html?role=sender&token=${token}`,{headers:{'x-forwarded-proto':'https'}});
+  const httpsCookie=httpsPage.headers.get('set-cookie')||'';
+  if(!/;\s*Secure\b/i.test(httpsCookie))throw new Error('HTTPS cookie must remain Secure');
+  // Sub-resource (JS module) must load using only the cookie, no token in URL — what the browser does over HTTP.
+  const moduleResp=await fetch(`http://127.0.0.1:${port}/src/tiled-physical-v5-main.ts`,{headers:{cookie:cookiePair}});
+  if(!moduleResp.ok)throw new Error(`sub-resource with cookie failed: ${moduleResp.status}`);
+  // Unauthorized /lab WebSocket must still be rejected with close code 1008.
+  const rejectedClose=await new Promise(resolve=>{let settled=false;const ws=new WebSocket(`ws://127.0.0.1:${port}/lab`);const done=(code,reason)=>{if(settled)return;settled=true;resolve({code,reason:String(reason)});try{ws.terminate();}catch{}};ws.on('close',(code,reason)=>done(code,reason));ws.on('error',()=>done(-1,'error'));setTimeout(()=>done(-1,'timeout'),4000);});
+  if(rejectedClose.code!==1008)throw new Error(`unauthorized /lab must close 1008, got ${rejectedClose.code}`);
+
   // Receiver can become ready before Sender opens. Coordinator must replay readiness to late Sender.
   const receiver=await openSocket();receiver.send(JSON.stringify({type:'hello',role:'tf007f-tiled-receiver'}));await sleep(30);
   receiver.send(JSON.stringify({type:'state',event:'tf007f-receiver-ready',receiver:{configuredDevice:'ci-camera'}}));await sleep(30);
@@ -34,5 +49,5 @@ try{
   const wrongIssueRejected=waitMessage(sender,m=>m?.type==='server'&&m?.event==='policy-rejected');sender.send(JSON.stringify({type:'lab-result',run:{schema:'optilink.tf007g.manifest-recovery.physical.v1',kind:'tf007g-manifest-recovery-physical',issueNumber:32,status:'ERROR'}}));await wrongIssueRejected;
 
   sender.close();receiver.close();
-  console.log('TF-007F/TF-007G lab smoke PASS: token, v5 route, late-sender replay, candidate relay, Manifest dwell contract, payload rejection and Issue #34 result routing');
+  console.log('TF-007F/TF-007G lab smoke PASS: token, v5 route, LAN HTTP cookie (non-Secure), HTTPS cookie (Secure), cookie-only sub-resource auth, unauthorized /lab 1008 rejection, late-sender replay, candidate relay, Manifest dwell contract, payload rejection and Issue #34 result routing');
 }finally{child.kill('SIGTERM');}
