@@ -55,6 +55,8 @@
     <view class="row"><text class="k">total errors</text><text class="v">{{orientTotalErrors}}</text></view>
     <view class="row"><text class="k">projection safe</text><text class="v">{{orientProjection}}</text></view>
     <view class="row"><text class="k">locator support</text><text class="v">{{orientSupport}}</text></view>
+    <view class="row"><text class="k">reject reason</text><text class="v">{{orientReject}}</text></view>
+    <view class="row"><text class="k">markers</text><text class="v">{{orientMarkers}}</text></view>
     <view class="row"><text class="k">acquisition avg</text><text class="v">{{orientAvgMs}}</text></view>
     <view class="row"><text class="k">acquisition p95</text><text class="v">{{orientP95Ms}}</text></view>
     <view class="row" wx:for="{{tileStatus}}" wx:key="*this"><text class="k">per-tile</text><text class="v">{{item}}</text></view>

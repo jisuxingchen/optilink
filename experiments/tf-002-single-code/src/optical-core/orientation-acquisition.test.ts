@@ -69,3 +69,17 @@ test('acquireOrientation returns two candidates on a landscape frame', () => {
 test('tile count constant is 3', () => {
   assert.equal(TILE_COUNT, 3);
 });
+
+test('not-acquired tiles serialize bitErrors null with reason not-acquired', () => {
+  const blank: PixelFrame = {width: 64, height: 128, data: new Uint8ClampedArray(64*128*4)};
+  const result = acquireOrientation(blank);
+  assert.equal(result.locked, false);
+  assert.ok(result.best, 'best candidate exists');
+  for (const tile of result.best!.tiles) {
+    assert.equal(tile.acquired, false);
+    assert.equal(tile.bitErrors, null, 'not-acquired bitErrors must be null, not sentinel');
+    assert.equal(tile.reason, 'not-acquired');
+  }
+  assert.equal(result.best!.totalBitErrors, null, 'totalBitErrors null when not all acquired');
+  assert.ok(result.profile && typeof result.profile.totalMs === 'number', 'profile present');
+});

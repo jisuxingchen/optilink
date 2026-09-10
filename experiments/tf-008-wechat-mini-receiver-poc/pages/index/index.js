@@ -49,6 +49,8 @@ Page({
     orientTotalErrors: '—',
     orientProjection: '—',
     orientSupport: '—',
+    orientReject: '—',
+    orientMarkers: '—',
     orientAvgMs: '—',
     orientP95Ms: '—',
     tileStatus: [],
@@ -268,6 +270,8 @@ Page({
       orientTotalErrors: '—',
       orientProjection: '—',
       orientSupport: '—',
+      orientReject: '—',
+      orientMarkers: '—',
       orientAvgMs: '—',
       orientP95Ms: '—',
       tileStatus: []
@@ -497,6 +501,8 @@ Page({
       patch.orientTotalErrors = Number.isFinite(best.totalBitErrors) ? String(best.totalBitErrors) : 'n/a';
       patch.orientProjection = best.projectionSafe === true ? 'true' : best.projectionSafe === false ? 'false' : 'null';
       patch.orientSupport = best.locatorSupport;
+      patch.orientReject = best.tripletRejectReason || '—';
+      patch.orientMarkers = (best.observedMarkerCount != null ? best.observedMarkerCount : 0) + ' observed / ' + (best.markerCandidates ? best.markerCandidates.length : 0) + ' candidates';
       patch.tileStatus = best.tiles.map(t =>
         'tile ' + t.tile + ': ' + (t.acquired ? (t.exact ? 'exact' : 'err ' + t.bitErrors) : 'miss')
       );
@@ -632,11 +638,15 @@ Page({
           projection: best.projectionSafe,
           locked,
           support: best.locatorSupport,
+          observedMarkerCount: best.observedMarkerCount != null ? best.observedMarkerCount : 0,
+          tripletRejectReason: best.tripletRejectReason || null,
+          markerCandidates: best.markerCandidates || [],
           tiles: best.tiles.map(t => ({
             tile: t.tile,
             acquired: t.acquired,
             exact: t.exact,
-            bitErrors: Number.isFinite(t.bitErrors) ? t.bitErrors : null
+            bitErrors: Number.isFinite(t.bitErrors) ? t.bitErrors : null,
+            reason: t.reason || (t.acquired ? 'acquired' : 'not-acquired')
           }))
         }
       : { locked: false, support: [], tiles: [] };
@@ -665,6 +675,7 @@ Page({
         frameFormat: this.data.frameFormat
       },
       orientation,
+      profile: r && r.profile ? r.profile : null,
       performance: {
         callbackFps: Number(callbackFps),
         acquisitionFps: Number(acquisitionFps),

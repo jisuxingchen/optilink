@@ -29,6 +29,7 @@ import {
 } from '../tiled-training-solver.ts';
 import {refineKnownTrainingResidual} from '../tf007h-known-training-refine.ts';
 import {projectedTileRegionsSafe,rankOrientationCandidate} from '../tf007h-orientation-quality.ts';
+import {locateOrientationFiducials,type FiducialLocatorDiagnostic} from '../tiled-orientation-fiducial.ts';
 import type {PixelFrame} from './pixel-frame.ts';
 
 export type OrientationMode = 'native' | 'rotate180' | 'rotateCW' | 'rotateCCW';
@@ -38,11 +39,38 @@ export const TILE_COUNT = 3;
 export const SAMPLE_WIDTH = 1280;
 export const SAMPLE_HEIGHT = 720;
 
+export type MarkerCandidate = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  sampleCount: number;
+  fillRatio: number;
+};
+
+export type CalibrationStage = {
+  lockMs: number;
+  refineMs: number;
+  errorsMs: number;
+  calibrationMs: number;
+};
+
+export type StageProfile = {
+  preScanMs: number;    // orientation pre-scan (downsampled normalize + macro-marker locator)
+  normalizeMs: number;  // full-res rotate+resize
+  lockMs: number;       // acquireKnownTrainingLock total (includes full-res macro-marker locator)
+  refineMs: number;     // refineKnownTrainingResidual
+  errorsMs: number;     // countKnownErrors total
+  calibrationMs: number;
+  totalMs: number;      // total acquireOrientation
+};
+
 export type TileStatus = {
   tile: number;
   acquired: boolean;
   exact: boolean;
-  bitErrors: number;
+  bitErrors: number | null;  // null when not acquired
+  reason: 'acquired' | 'not-acquired';
   bits: number;
   score: number;
   contrast: number;
@@ -56,10 +84,14 @@ export type CalibrationResult = {
   orientationMode: OrientationMode;
   tiles: TileStatus[];
   exactTiles: number;
-  totalBitErrors: number;
+  totalBitErrors: number | null;  // null when not all 3 tiles acquired
   projectionSafe: boolean | null;
   locatorSupport: 'triplet' | 'outer-pair' | 'none';
+  observedMarkerCount: number;
+  markerCandidates: MarkerCandidate[];
+  tripletRejectReason: string;
   calibrationMs: number;
+  stage: CalibrationStage;
 };
 
 export type OrientationAcquisition = {
@@ -68,6 +100,7 @@ export type OrientationAcquisition = {
   matrixSize: number;
   candidates: CalibrationResult[];
   best: CalibrationResult | null;
+  profile: StageProfile;
 };
 
 // --- sender-side preamble encoding (deterministic, shared with the PC sender) ---
@@ -160,20 +193,47 @@ export function normalizeFrame(
   return {width: tw, height: th, data: out};
 }
 
+function fiducialScore(fid: FiducialLocatorDiagnostic | null | undefined): number {
+  const t = fid && fid.triplet;
+  if (!t) return -Infinity;
+  if (t.support === 'triplet') return 1e6 - t.score;
+  return 5e5 - t.score; // outer-pair
+}
+
+function tripletRejectReason(fid: FiducialLocatorDiagnostic | null | undefined): string {
+  if (!fid) return 'no-fiducial';
+  const t = fid.triplet;
+  if (!t) {
+    const n = typeof fid.conservativeComponentCount === 'number' ? fid.conservativeComponentCount : fid.componentCount;
+    if (n < 3) return 'insufficient-markers (' + n + ' detected)';
+    return 'geometry-mismatch (' + fid.componentCount + ' components, no valid triplet)';
+  }
+  if (t.support === 'outer-pair') return 'outer-pair (only 2 markers observed)';
+  return 'triplet-ok';
+}
+
 function calibrationFromImage(image: PixelFrame, matrixSize: number, mode: OrientationMode): CalibrationResult {
   const started = Date.now();
   const imageData = asImageData(image);
-  type Tile = TileStatus & {lock: PixelLock | null};
+  type Tile = {
+    tile: number; acquired: boolean; exact: boolean; bitErrors: number; bits: number; score: number; contrast: number;
+    lock: PixelLock | null; refined?: boolean; beforeRefineErrors?: number;
+  };
   const tiles: Tile[] = [];
+  let lockMs = 0, errorsMs = 0, refineMs = 0;
 
   for (let tile = 0; tile < TILE_COUNT; tile++) {
     const cells = preambleCells(matrixSize, tile);
+    const tLock = Date.now();
     const lock = acquireKnownTrainingLock(imageData, matrixSize, cells, lane(tile));
+    lockMs += Date.now() - tLock;
     if (!lock) {
       tiles.push({tile, acquired: false, exact: false, bitErrors: Number.MAX_SAFE_INTEGER, bits: 0, score: 0, contrast: 0, lock: null});
       continue;
     }
+    const tErr = Date.now();
     const error = countKnownErrors(imageData, matrixSize, cells, lock);
+    errorsMs += Date.now() - tErr;
     tiles.push({tile, acquired: true, exact: error.errors === 0, bitErrors: error.errors, bits: error.bits, score: error.score, contrast: error.contrast, lock});
   }
 
@@ -186,7 +246,9 @@ function calibrationFromImage(image: PixelFrame, matrixSize: number, mode: Orien
     const residual = tiles.find(tile => tile.acquired && tile.lock && tile.bitErrors > 0 && tile.bitErrors <= 64);
     if (residual && residual.lock) {
       const cells = preambleCells(matrixSize, residual.tile);
+      const tR = Date.now();
       const refined = refineKnownTrainingResidual(imageData, matrixSize, cells, residual.lock);
+      refineMs += Date.now() - tR;
       const error = countKnownErrors(imageData, matrixSize, cells, refined.lock);
       residual.beforeRefineErrors = refined.beforeErrors;
       residual.refined = refined.improved;
@@ -201,23 +263,40 @@ function calibrationFromImage(image: PixelFrame, matrixSize: number, mode: Orien
   }
 
   acquired = tiles.filter(t => t.acquired).length;
-  const totalBitErrors = acquired === TILE_COUNT
-    ? tiles.reduce((s, t) => s + t.bitErrors, 0)
-    : Number.MAX_SAFE_INTEGER;
+  const totalBitErrors = acquired === TILE_COUNT ? tiles.reduce((s, t) => s + t.bitErrors, 0) : null;
   const diagnostic = getPhysicalAcquisitionDiagnostics().slice(-1)[0] || null;
-  const projectionSafe = projectedTileRegionsSafe(diagnostic?.fiducial || null, image.width, image.height);
-  const locatorSupport: CalibrationResult['locatorSupport'] = diagnostic?.fiducial?.triplet?.support ?? 'none';
+  const fid = diagnostic?.fiducial || null;
+  const projectionSafe = projectedTileRegionsSafe(fid, image.width, image.height);
+  const locatorSupport: CalibrationResult['locatorSupport'] = fid?.triplet?.support ?? 'none';
+  const calibrationMs = Date.now() - started;
 
   return {
     success: exactTiles === TILE_COUNT && totalBitErrors === 0,
     matrixSize,
     orientationMode: mode,
-    tiles: tiles.map(({lock: _lock, ...rest}) => rest),
+    tiles: tiles.map(t => ({
+      tile: t.tile,
+      acquired: t.acquired,
+      exact: t.exact,
+      bitErrors: t.acquired ? t.bitErrors : null,
+      reason: t.acquired ? 'acquired' : 'not-acquired',
+      bits: t.bits,
+      score: t.score,
+      contrast: t.contrast,
+      refined: t.refined,
+      beforeRefineErrors: t.beforeRefineErrors,
+    })),
     exactTiles,
     totalBitErrors,
     projectionSafe,
     locatorSupport,
-    calibrationMs: Date.now() - started,
+    observedMarkerCount: fid?.triplet?.observedMarkerCount ?? 0,
+    markerCandidates: (fid?.components ?? []).map(c => ({
+      x: c.x, y: c.y, width: c.width, height: c.height, sampleCount: c.sampleCount, fillRatio: c.fillRatio,
+    })),
+    tripletRejectReason: tripletRejectReason(fid),
+    calibrationMs,
+    stage: {lockMs, refineMs, errorsMs, calibrationMs},
   };
 }
 
@@ -228,7 +307,7 @@ function rankCalibration(result: CalibrationResult): number {
     success: result.success,
     acquiredTiles: acquired,
     exactTiles: result.exactTiles,
-    totalBitErrors: result.totalBitErrors,
+    totalBitErrors: result.totalBitErrors === null ? Number.MAX_SAFE_INTEGER : result.totalBitErrors,
     scoreSum,
     projectionSafe: result.projectionSafe,
   });
@@ -238,29 +317,63 @@ function orientationCandidates(frame: PixelFrame): OrientationMode[] {
   return frame.width < frame.height ? ['rotateCW', 'rotateCCW'] : ['native', 'rotate180'];
 }
 
+const PRE_SCAN_W = 320;
+const PRE_SCAN_H = 180;
+
 /**
  * Run the full TF-007H 64x64 orientation acquisition on a single raw camera
- * frame. Tries the applicable orientation candidates, ranks them with the same
- * scoring the browser uses, and returns the best (plus per-candidate detail).
+ * frame. Uses a cheap downsampled fiducial pre-scan to pick the likely
+ * orientation, then runs full-res acquisition on the winner (with a fallback to
+ * the other orientation if the winner does not lock). This preserves the
+ * "find the locking orientation" outcome while avoiding full-res work on both
+ * orientations when one is clearly correct.
  */
 export function acquireOrientation(frame: PixelFrame, candidates?: OrientationMode[]): OrientationAcquisition {
-  resetPhysicalAcquisitionDiagnostics();
+  const t0 = Date.now();
   const modes = candidates ?? orientationCandidates(frame);
-  const results: CalibrationResult[] = [];
-  let best: CalibrationResult | null = null;
 
+  // Phase 1: cheap orientation pre-scan on downsampled frames.
+  const preScan0 = Date.now();
+  let bestMode: OrientationMode = modes[0];
+  let preScanScore = -Infinity;
   for (const mode of modes) {
-    const normalized = normalizeFrame(frame, mode);
-    const result = calibrationFromImage(normalized, ORIENTATION_MATRIX, mode);
-    results.push(result);
-    if (!best || rankCalibration(result) > rankCalibration(best)) best = result;
+    const small = normalizeFrame(frame, mode, PRE_SCAN_W, PRE_SCAN_H);
+    const fid = locateOrientationFiducials(asImageData(small));
+    const score = fiducialScore(fid);
+    if (score > preScanScore) { preScanScore = score; bestMode = mode; }
+  }
+  const preScanMs = Date.now() - preScan0;
+
+  // Phase 2: full-res acquisition on the winning orientation (+ fallback).
+  resetPhysicalAcquisitionDiagnostics();
+  const results: CalibrationResult[] = [];
+  let normalizeMs = 0, lockMs = 0, refineMs = 0, errorsMs = 0, calibrationMs = 0;
+
+  const runCalibration = (mode: OrientationMode): CalibrationResult => {
+    const n0 = Date.now();
+    const normalized = normalizeFrame(frame, mode, SAMPLE_WIDTH, SAMPLE_HEIGHT);
+    normalizeMs += Date.now() - n0;
+    const r = calibrationFromImage(normalized, ORIENTATION_MATRIX, mode);
+    lockMs += r.stage.lockMs; refineMs += r.stage.refineMs; errorsMs += r.stage.errorsMs; calibrationMs += r.stage.calibrationMs;
+    results.push(r);
+    return r;
+  };
+
+  let best: CalibrationResult = runCalibration(bestMode);
+  if (!best.success && modes.length > 1) {
+    const other = modes.find(m => m !== bestMode);
+    if (other) {
+      const second = runCalibration(other);
+      if (rankCalibration(second) > rankCalibration(best)) best = second;
+    }
   }
 
   return {
-    locked: best ? best.success : false,
-    orientationMode: best && best.success ? best.orientationMode : null,
+    locked: best.success,
+    orientationMode: best.success ? best.orientationMode : null,
     matrixSize: ORIENTATION_MATRIX,
     candidates: results,
     best,
+    profile: {preScanMs, normalizeMs, lockMs, refineMs, errorsMs, calibrationMs, totalMs: Date.now() - t0},
   };
 }
