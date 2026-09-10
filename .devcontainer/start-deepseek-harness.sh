@@ -29,7 +29,7 @@ if [[ -f "$PID_FILE" ]]; then
 fi
 
 echo "Starting DeepSeek Harness Web UI on port ${PORT} ..."
-nohup "$DSH_BIN" web --no-open --port "$PORT" >"$LOG_FILE" 2>&1 &
+nohup "$DSH_BIN" web --port "$PORT" >"$LOG_FILE" 2>&1 &
 pid=$!
 echo "$pid" > "$PID_FILE"
 
