@@ -9,6 +9,21 @@ export type OrientationRankInput = {
   projectionSafe: boolean | null;
 };
 
+type TripletCandidate = NonNullable<FiducialLocatorDiagnostic['triplet']>;
+
+/**
+ * A macro locator result is only trustworthy geometry when all three markers were
+ * actually observed. `outer-pair` support synthesizes the middle marker from the
+ * two outer markers, so its projected tile centers and estimated tile side are a
+ * guess. Physical evidence shows outer-pair runs correlate with 0/3 acquisition,
+ * so neither the acquisition seed nor the projection-safety heuristic may trust it.
+ */
+export function isTrustedTriplet(
+  triplet: FiducialLocatorDiagnostic['triplet'],
+): triplet is TripletCandidate {
+  return triplet?.support === 'triplet';
+}
+
 /**
  * The macro markers live above the three tiles in the canonical sender view.
  * A 180-degree/wrong-normal interpretation can still form an excellent marker
@@ -24,6 +39,9 @@ export function projectedTileRegionsSafe(
 ): boolean | null {
   const triplet = diagnostic?.triplet;
   if (!triplet) return null;
+  // An outer-pair candidate can produce plausible in-frame points while the synthesized
+  // middle-marker geometry is wrong. Treat it as untrusted rather than safe.
+  if (!isTrustedTriplet(triplet)) return false;
   if (!(width > 0 && height > 0 && triplet.estimatedTileSide > 0)) return false;
   const halfRequired = triplet.estimatedTileSide * 0.40;
   const edgeAllowance = Math.max(4, Math.min(width, height) * 0.012);

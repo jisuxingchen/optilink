@@ -1,15 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {projectedTileRegionsSafe,rankOrientationCandidate} from './tf007h-orientation-quality.ts';
+import {isTrustedTriplet,projectedTileRegionsSafe,rankOrientationCandidate} from './tf007h-orientation-quality.ts';
 import type {FiducialLocatorDiagnostic} from './tiled-orientation-fiducial.ts';
 
-function diagnostic(points: Array<{x:number;y:number}>): FiducialLocatorDiagnostic {
+function diagnostic(
+  points: Array<{x:number;y:number}>,
+  support:'triplet'|'outer-pair'='triplet',
+): FiducialLocatorDiagnostic {
   return {
     method:'macro-marker-triplet-v4',width:1280,height:720,sampleStep:2,
     luma:{p02:0,p10:10,p50:80,p85:240,p98:255,dynamicRange:255,darkThreshold:70,inclusiveThreshold:112},
     thresholdMode:'inclusive',componentCount:3,components:[],conservativeComponentCount:3,inclusiveComponentCount:3,inclusiveEvaluated:true,
     triplet:{
-      support:'triplet',observedMarkerCount:3,
+      support,observedMarkerCount:support==='triplet'?3:2,
       markers:points.map(p=>({...p,width:44,height:44})),
       points:points.map(p=>({...p,width:256,height:256})),
       spacing:300,spacingError:0,ySpread:0,sizeSpread:0,markerSideRatio:.14,markerGeometryError:.05,
@@ -26,6 +29,19 @@ test('TF-007H rejects wrong-normal projected tile centers outside the normalized
 test('TF-007H accepts canonical projected tile regions with useful edge margin', () => {
   const upright = diagnostic([{x:184,y:360},{x:640,y:360},{x:1096,y:360}]);
   assert.equal(projectedTileRegionsSafe(upright,1280,720), true);
+});
+
+test('TF-007H treats in-frame outer-pair projection as untrusted while preserving exact 3-marker triplet acceptance', () => {
+  const points = [{x:184,y:360},{x:640,y:360},{x:1096,y:360}];
+  assert.equal(projectedTileRegionsSafe(diagnostic(points,'outer-pair'),1280,720), false);
+  assert.equal(projectedTileRegionsSafe(diagnostic(points,'triplet'),1280,720), true);
+});
+
+test('TF-007H only true three-marker support may seed trusted macro geometry', () => {
+  const points = [{x:184,y:360},{x:640,y:360},{x:1096,y:360}];
+  assert.equal(isTrustedTriplet(diagnostic(points,'triplet').triplet), true);
+  assert.equal(isTrustedTriplet(diagnostic(points,'outer-pair').triplet), false);
+  assert.equal(isTrustedTriplet(null), false);
 });
 
 test('TF-007H exact optical evidence outranks geometry heuristics, otherwise unsafe projection loses', () => {
