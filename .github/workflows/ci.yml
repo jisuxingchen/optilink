@@ -37,6 +37,14 @@ jobs:
           test -x .devcontainer/setup-deepseek-harness.sh
           test -x .devcontainer/start-deepseek-harness.sh
           test -x scripts/dsh-optilink
+      - name: Validate supported Harness Web CLI flags
+        run: |
+          if grep -q -- '--no-open' .devcontainer/start-deepseek-harness.sh; then
+            echo 'Unsupported dsh web flag detected: --no-open' >&2
+            exit 1
+          fi
+          grep -q -- 'dsh\|DSH_BIN' .devcontainer/start-deepseek-harness.sh
+          grep -q -- 'web --port' .devcontainer/start-deepseek-harness.sh
       - name: Guard against committed DeepSeek credentials
         run: |
           python - <<'PY'
