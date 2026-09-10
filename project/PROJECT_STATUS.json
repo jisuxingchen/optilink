@@ -2,102 +2,607 @@
   "project": "OptiLink",
   "tagline": "Offline optical data exchange · screen → camera",
   "phase": "Phase 0 — Technical Feasibility",
-  "sprint": "Sprint 0 — Carrier Feasibility / OptiGrid",
-  "overallProgress": 44,
-  "sprintProgress": 86,
-  "lastUpdated": "2026-09-06",
-  "summary": "G1 已批准。单 QR + Fountain 已完成 1 MiB SHA-256 PASS，验证吞吐约 2.40 KB/s；原生 4QR + Fountain 提升至约 3.62 KB/s，但 4 倍显示容量只得到约 1.51 倍 verified goodput。TF-003 已完成并停止 9QR/16QR 主路线，当前进入 TF-004 OptiGrid v0：自定义高密度黑白光学载体，Fountain 继续保留在恢复层。>=100 KB/s 仍是未达成的验证目标。",
+  "sprint": "Sprint 0 — Carrier Feasibility / Physical Validation",
+  "overallProgress": 52,
+  "sprintProgress": 91,
+  "lastUpdated": "2026-09-10",
+  "summary": "G0/G1 已批准，G2 尚未就绪。单 QR + Fountain 已完成 1 MiB SHA-256 PASS（约 2.40 KB/s），4QR + Fountain 提升至约 3.62 KB/s后已停止继续扩展标准多 QR 主路线。OptiGrid 已从单块载体推进到 TF-007 全屏三分块、缓冲接收、OLTP Manifest 与 symbol-hold 架构。当前最前沿为 TF-007H：针对真实手机测试暴露的 64×64 朝向选择/单块低 BER 残差进行修复；exact head b955e484… 的 CI #375 已 5/5 PASS，Technical PASS 仅覆盖软件/CI，下一不可替代门槛是一轮 moto razr 40 ultra 物理复测。>=100 KB/s 仍只是验证目标；在真实文件重建 + 最终 SHA-256 前不得称为 Net Goodput 达标。",
   "repository": {
     "name": "jisuxingchen/optilink",
     "url": "https://github.com/jisuxingchen/optilink",
-    "workingBranch": "spike/tf-004-optigrid-monochrome",
+    "workingBranch": "spike/tf-007h-orientation-acquisition",
     "pullRequest": {
-      "number": 17,
-      "title": "TF-004: OptiGrid dense monochrome carrier spike",
-      "url": "https://github.com/jisuxingchen/optilink/pull/17",
-      "status": "DRAFT"
+      "number": 37,
+      "title": "TF-007H: stabilize 64×64 physical orientation acquisition",
+      "url": "https://github.com/jisuxingchen/optilink/pull/37",
+      "status": "DRAFT · TECH PASS · PHYSICAL RE-TEST PENDING"
     }
   },
   "metrics": {
-    "openIssues": 5,
-    "ownerActions": 0,
-    "blockers": 1,
+    "openIssues": 13,
+    "ownerActions": 1,
+    "blockers": 2,
     "ciStatus": "PASSING",
-    "ciUrl": "https://github.com/jisuxingchen/optilink/actions/workflows/ci.yml"
+    "ciUrl": "https://github.com/jisuxingchen/optilink/actions/runs/34302512473"
   },
   "currentFocus": [
-    {"title":"TF-004 · OptiGrid v0 物理校准","detail":"自动测试 64/80/96/120/160 cell 黑白矩阵；固定 60 Hz 物理屏幕和 24 Hz 光学更新。","status":"IN_PROGRESS","link":"https://github.com/jisuxingchen/optilink/issues/16"},
-    {"title":"根据实测选择矩阵密度","detail":"按 unique optical payload ingress、CRC/对齐拒绝率和手机 CPU 解码耗时选择，不按理论容量拍板。","status":"IN_PROGRESS","link":"https://github.com/jisuxingchen/optilink/pull/17"},
-    {"title":"OptiGrid + Fountain 1 MiB 验证","detail":"校准后将已验证的 Fountain 恢复层放到 OptiGrid 上，完整重建后必须 SHA-256 PASS。","status":"NEXT","link":"https://github.com/jisuxingchen/optilink/issues/16"}
+    {
+      "title": "TF-007H · exact-head 手机物理复测",
+      "detail": "在 b955e484… 上验证 64×64 三 tile 朝向选择与低 BER 残差修复是否在 moto razr 40 ultra 上稳定达到 3/3 exact。",
+      "status": "READY_FOR_PHYSICAL_RETEST",
+      "link": "https://github.com/jisuxingchen/optilink/issues/36"
+    },
+    {
+      "title": "TF-007G · Manifest 光学恢复",
+      "detail": "96×96 Manifest 前导与控制面修复已完成软件验证；需先通过 TF-007H 物理采集门，再继续判断 Manifest 动态恢复。",
+      "status": "WAITING_ON_TF007H",
+      "link": "https://github.com/jisuxingchen/optilink/issues/34"
+    },
+    {
+      "title": "G0 性能目标 · 文件级证据",
+      "detail": "理论容量、像素模拟 ingress、物理 raw optical ingress 与 Net Goodput 严格分离；只有真实文件重建 + SHA-256 后才进入 G0 性能判定。",
+      "status": "NOT_YET_PROVEN",
+      "link": "https://github.com/jisuxingchen/optilink/issues/27"
+    }
   ],
   "approvals": [
-    {"id":"G0","title":"First MVP hypothesis","status":"APPROVED","ownerAction":false,"decision":"Computer → Android；screen-to-camera；单向离线文件传输；>=100 KB/s 为验证目标。"},
-    {"id":"G1","title":"Initial technical path","status":"APPROVED","ownerAction":false,"decision":"Browser/Android first；Fountain/rateless recovery；按实测从标准 QR 升级到自定义 carrier。"},
-    {"id":"G2","title":"Prototype carrier decision","status":"NOT_READY","ownerAction":false,"decision":"等待 OptiGrid 物理校准和至少一次 OptiGrid + Fountain 1 MiB SHA-256 PASS 后再冻结载体。"}
+    {
+      "id": "G0",
+      "title": "First MVP hypothesis",
+      "status": "APPROVED",
+      "ownerAction": false,
+      "decision": "Computer → Android；screen-to-camera；单向离线文件传输；>=100 KB/s 为验证目标。"
+    },
+    {
+      "id": "G1",
+      "title": "Initial technical path",
+      "status": "APPROVED",
+      "ownerAction": false,
+      "decision": "Browser/Android first；Fountain/rateless recovery；按实测从标准 QR 升级为项目自有 OptiGrid carrier。"
+    },
+    {
+      "id": "G2",
+      "title": "Prototype carrier decision",
+      "status": "NOT_READY",
+      "ownerAction": false,
+      "decision": "等待 TF-007 物理动态链路稳定、Manifest 可恢复，并取得真实文件级 SHA-256 / Net Goodput 证据后再冻结原型载体。"
+    }
   ],
-  "reviewQueue": [],
+  "reviewQueue": [
+    {
+      "id": "TF-007H-PHYSICAL",
+      "kind": "PHYSICAL_TEST",
+      "title": "moto razr 40 ultra · TF-007H exact-head physical re-test",
+      "status": "READY",
+      "priority": "HIGH",
+      "why": "CI 已覆盖错误朝向投影和 15-bit 低 BER 残差，但真实 screen→camera 结果不可由模拟替代。",
+      "action": "在 PR #37 exact head b955e484… 运行一轮手机物理测试；结果只作为物理采集/恢复证据，不等同于 merge 授权。",
+      "url": "https://github.com/jisuxingchen/optilink/issues/36"
+    }
+  ],
   "epics": [
     {
-      "id":"E0","title":"Product Discovery","status":"IN_PROGRESS","progress":92,"start":"2026-09-05","end":"2026-09-12","scheduleType":"forecast",
-      "tasks":[
-        {"id":"PD-002","title":"Scenario library","status":"IN_PROGRESS","progress":82,"subtasks":[{"title":"Expand candidate scenarios","status":"DONE"},{"title":"Weighted scoring","status":"DONE"},{"title":"Deep workflow validation","status":"TODO"}],"subs":["DONE · Expand candidate scenarios","DONE · Weighted scoring","TODO · Deep workflow validation"]},
-        {"id":"PD-004","title":"Competitive landscape","status":"IN_PROGRESS","progress":80,"subtasks":[{"title":"Prior-art scan","status":"DONE"},{"title":"License notes","status":"DONE"},{"title":"Deep capability comparison","status":"TODO"}],"subs":["DONE · Prior-art scan","DONE · License notes","TODO · Deep capability comparison"]}
+      "id": "E0",
+      "title": "Product Discovery",
+      "status": "IN_PROGRESS",
+      "progress": 92,
+      "start": "2026-09-05",
+      "end": "2026-09-18",
+      "scheduleType": "forecast",
+      "tasks": [
+        {
+          "id": "PD-002",
+          "title": "Scenario library",
+          "status": "IN_PROGRESS",
+          "progress": 82,
+          "subtasks": [
+            {"title": "Expand candidate scenarios", "status": "DONE"},
+            {"title": "Weighted scoring", "status": "DONE"},
+            {"title": "Deep workflow validation", "status": "TODO"}
+          ],
+          "subs": ["DONE · Expand candidate scenarios", "DONE · Weighted scoring", "TODO · Deep workflow validation"]
+        },
+        {
+          "id": "PD-004",
+          "title": "Competitive landscape",
+          "status": "IN_PROGRESS",
+          "progress": 80,
+          "subtasks": [
+            {"title": "Prior-art scan", "status": "DONE"},
+            {"title": "License notes", "status": "DONE"},
+            {"title": "Deep capability comparison", "status": "TODO"}
+          ],
+          "subs": ["DONE · Prior-art scan", "DONE · License notes", "TODO · Deep capability comparison"]
+        }
       ]
     },
     {
-      "id":"E1","title":"Technical Feasibility","status":"IN_PROGRESS","progress":72,"start":"2026-09-05","end":"2026-09-20","scheduleType":"evidence-driven",
-      "tasks":[
-        {"id":"TF-001","title":"Benchmark design","status":"DONE","progress":100,"subtasks":[{"title":"Net Goodput definition","status":"DONE"},{"title":"10 MiB / 5-of-5 / SHA-256 rules","status":"DONE"}],"subs":["DONE · Net Goodput definition","DONE · 10 MiB / 5-of-5 / SHA-256 rules"]},
-        {"id":"TF-002","title":"Single QR + Fountain","status":"DONE","progress":100,"subtasks":[{"title":"Cyclic baseline","status":"DONE"},{"title":"Fountain recovery","status":"DONE"},{"title":"1 MiB SHA-256 PASS · 2403.70 B/s","status":"DONE"}],"subs":["DONE · Cyclic baseline","DONE · Fountain recovery","EVIDENCE · 1 MiB PASS · 2403.70 B/s"]},
-        {"id":"TF-003","title":"4QR spatial scaling","status":"DONE_PIVOT","progress":100,"subtasks":[{"title":"4QR v1 sequential ZXing","status":"DONE"},{"title":"Native BarcodeDetector correction","status":"DONE"},{"title":"1 MiB SHA-256 PASS · 3618.15 B/s","status":"DONE"},{"title":"Stop 9QR/16QR primary route","status":"DONE"}],"subs":["DONE · 4QR v1","DONE · Native BarcodeDetector","EVIDENCE · 3618.15 B/s","DECISION · Pivot to OptiGrid"]},
-        {"id":"TF-004","title":"OptiGrid dense monochrome carrier","status":"IN_PROGRESS","progress":40,"subtasks":[{"title":"Binary codec + CRC32","status":"DONE"},{"title":"Border/pilot framing","status":"DONE"},{"title":"Direct pixel sampler","status":"DONE"},{"title":"64→160 automated sweep","status":"DONE"},{"title":"Physical calibration","status":"TODO"},{"title":"Fountain + 1 MiB SHA-256","status":"TODO"}],"subs":["DONE · Binary codec + CRC32","DONE · Border/pilot framing","DONE · Direct pixel sampler","DONE · 64→160 automated sweep","NEXT · Physical calibration","NEXT · Fountain integration"]}
+      "id": "E1",
+      "title": "Technical Feasibility",
+      "status": "IN_PROGRESS",
+      "progress": 86,
+      "start": "2026-09-05",
+      "end": "2026-09-25",
+      "scheduleType": "evidence-driven",
+      "tasks": [
+        {
+          "id": "TF-001",
+          "title": "Benchmark design",
+          "status": "DONE",
+          "progress": 100,
+          "subtasks": [
+            {"title": "Net Goodput definition", "status": "DONE"},
+            {"title": "10 MiB / 5-of-5 / SHA-256 rules", "status": "DONE"}
+          ],
+          "subs": ["DONE · Net Goodput definition", "DONE · 10 MiB / 5-of-5 / SHA-256 rules"]
+        },
+        {
+          "id": "TF-002",
+          "title": "Single QR + Fountain",
+          "status": "DONE",
+          "progress": 100,
+          "subtasks": [
+            {"title": "Cyclic baseline", "status": "DONE"},
+            {"title": "Fountain recovery", "status": "DONE"},
+            {"title": "1 MiB SHA-256 PASS · 2403.70 B/s", "status": "DONE"}
+          ],
+          "subs": ["DONE · Cyclic baseline", "DONE · Fountain recovery", "EVIDENCE · 1 MiB PASS · 2403.70 B/s"]
+        },
+        {
+          "id": "TF-003",
+          "title": "4QR spatial scaling",
+          "status": "DONE_PIVOT",
+          "progress": 100,
+          "subtasks": [
+            {"title": "4QR v2 physical 1 MiB SHA-256 PASS", "status": "DONE"},
+            {"title": "Verified goodput · 3618.15 B/s", "status": "DONE"},
+            {"title": "Stop 9QR/16QR primary route", "status": "DONE"}
+          ],
+          "subs": ["EVIDENCE · 3618.15 B/s", "DECISION · Pivot to OptiGrid"]
+        },
+        {
+          "id": "TF-004",
+          "title": "OptiGrid dense monochrome carrier",
+          "status": "DONE_PIVOT",
+          "progress": 100,
+          "subtasks": [
+            {"title": "Binary codec + CRC32", "status": "DONE"},
+            {"title": "Physical calibration frontier", "status": "DONE"},
+            {"title": "Pivot to acquisition/tracking bench", "status": "DONE"}
+          ],
+          "subs": ["DONE · Core carrier", "DONE · Physical frontier", "DECISION · Move to TF-005/TF-007"]
+        },
+        {
+          "id": "TF-005",
+          "title": "Pixel-isolated carrier simulation bench",
+          "status": "DONE_SIMULATION",
+          "progress": 100,
+          "subtasks": [
+            {"title": "Pixel-only receiver boundary", "status": "DONE"},
+            {"title": "160/240 high-density simulation", "status": "DONE"},
+            {"title": "Acquisition → Tracking → Fast Decode regression", "status": "DONE"}
+          ],
+          "subs": ["DONE · Simulation mission", "EVIDENCE · >100 KB/s pixel-domain candidates", "BOUNDARY · Not physical"]
+        },
+        {
+          "id": "TF-006",
+          "title": "Physical OptiGrid diagnostic frontier",
+          "status": "DONE_DIAGNOSTIC",
+          "progress": 100,
+          "subtasks": [
+            {"title": "Real phone exact low-density captures", "status": "DONE"},
+            {"title": "Global-center vs mesh qualification diagnosis", "status": "DONE"},
+            {"title": "Pivot to full-frame tiled carrier", "status": "DONE"}
+          ],
+          "subs": ["EVIDENCE · exact static captures", "DIAGNOSIS · sampler qualification bug", "DECISION · tiled full-frame"]
+        },
+        {
+          "id": "TF-007",
+          "title": "Full-frame tiled OptiGrid",
+          "status": "IN_PROGRESS",
+          "progress": 82,
+          "subtasks": [
+            {"title": "3×96 pixel bench · 127,440 B/s simulated ingress", "status": "DONE"},
+            {"title": "Macro fiducial acquisition hardening", "status": "DONE"},
+            {"title": "Dynamic tracking remediation", "status": "DONE"},
+            {"title": "Physical dynamic path", "status": "IN_PROGRESS"}
+          ],
+          "subs": ["DONE · tiled pixel bench", "DONE · acquisition/tracking regressions", "IN PROGRESS · physical dynamic path"]
+        },
+        {
+          "id": "TF-007F",
+          "title": "Buffered transport + OLTP Manifest + symbol hold",
+          "status": "TECH_PASS_PHYSICAL_PARTIAL",
+          "progress": 78,
+          "subtasks": [
+            {"title": "Capture/decode clock decoupling", "status": "DONE"},
+            {"title": "3×160 @15 Hz · 109,620 B/s theoretical gross CI gate", "status": "DONE"},
+            {"title": "Physical Manifest recovery", "status": "BLOCKED"}
+          ],
+          "subs": ["CI · 36/36 exact tiles", "THEORETICAL · 109,620 B/s", "PHYSICAL · Manifest not yet recovered"]
+        },
+        {
+          "id": "TF-007G",
+          "title": "Manifest optical recovery hardening",
+          "status": "TECH_PASS_WAITING_ON_H",
+          "progress": 80,
+          "subtasks": [
+            {"title": "Manifest dynamic tracking/dwell", "status": "DONE"},
+            {"title": "Coordinator contract + Issue #34 publication fix", "status": "DONE"},
+            {"title": "Physical Manifest recovery after stable orientation", "status": "BLOCKED"}
+          ],
+          "subs": ["DONE · software remediation", "DONE · control-plane fix", "WAITING · TF-007H physical gate"]
+        },
+        {
+          "id": "TF-007H",
+          "title": "64×64 physical orientation acquisition stabilization",
+          "status": "READY_FOR_PHYSICAL_RETEST",
+          "progress": 90,
+          "subtasks": [
+            {"title": "Dual portrait orientation candidate evaluation", "status": "DONE"},
+            {"title": "Out-of-frame projection rejection", "status": "DONE"},
+            {"title": "15-bit residual constrained refine → 0 in deterministic gate", "status": "DONE"},
+            {"title": "moto razr 40 ultra exact-head physical re-test", "status": "NEXT"}
+          ],
+          "subs": ["CI #375 · 5/5 PASS", "TECH REVIEW · PASS software scope", "NEXT · physical re-test"]
+        }
       ]
     },
-    {"id":"E2","title":"Prototype","status":"BLOCKED_BY_G2","progress":0,"start":"2026-09-21","end":"2026-10-08","scheduleType":"forecast","tasks":[{"id":"PROTO-001","title":"Transport prototype","status":"BLOCKED_BY_G2","progress":0,"subtasks":[{"title":"Freeze carrier","status":"BLOCKED"}],"subs":["BLOCKED · Freeze carrier at G2"]}]}
+    {
+      "id": "E2",
+      "title": "Prototype",
+      "status": "BLOCKED_BY_G2",
+      "progress": 0,
+      "start": "2026-09-26",
+      "end": "2026-10-15",
+      "scheduleType": "forecast",
+      "tasks": [
+        {
+          "id": "PROTO-001",
+          "title": "Transport prototype",
+          "status": "BLOCKED_BY_G2",
+          "progress": 0,
+          "subtasks": [
+            {"title": "Freeze carrier / transport parameters", "status": "BLOCKED"}
+          ],
+          "subs": ["BLOCKED · Freeze carrier at G2"]
+        }
+      ]
+    }
   ],
   "documents": [
-    {"title":"TF-004 OptiGrid Issue","type":"Experiment","status":"ACTIVE","note":"自定义高密度黑白载体的实现、校准与成功门槛。","url":"https://github.com/jisuxingchen/optilink/issues/16"},
-    {"title":"PR #17 OptiGrid Spike","type":"PR","status":"DRAFT","note":"OptiGrid v0 codec、直接采样、Auto Lab 与 CI。","url":"https://github.com/jisuxingchen/optilink/pull/17"},
-    {"title":"TF-003 4QR Evidence","type":"Experiment","status":"COMPLETED","note":"4QR v2 PASS 3618.15 B/s；标准 QR 扩展明显非线性。","url":"https://github.com/jisuxingchen/optilink/issues/10"},
-    {"title":"TF-002B Fountain Evidence","type":"Experiment","status":"COMPLETED","note":"单 QR Fountain 1 MiB PASS 2403.70 B/s。","url":"https://github.com/jisuxingchen/optilink/issues/13"}
+    {
+      "title": "TF-007H Issue #36",
+      "type": "Experiment",
+      "status": "ACTIVE",
+      "note": "当前 exact-head 手机物理复测门；CI #375 已 PASS。",
+      "url": "https://github.com/jisuxingchen/optilink/issues/36"
+    },
+    {
+      "title": "PR #37 TF-007H",
+      "type": "PR",
+      "status": "DRAFT",
+      "note": "朝向选择 / 低 BER 残差修复；Technical PASS 不等于 merge 授权。",
+      "url": "https://github.com/jisuxingchen/optilink/pull/37"
+    },
+    {
+      "title": "TF-007G Issue #34",
+      "type": "Experiment",
+      "status": "WAITING",
+      "note": "Manifest 恢复与控制面修复，等待稳定物理 acquisition 后继续。",
+      "url": "https://github.com/jisuxingchen/optilink/issues/34"
+    },
+    {
+      "title": "PR #35 TF-007G",
+      "type": "PR",
+      "status": "DRAFT",
+      "note": "Manifest optical recovery hardening。",
+      "url": "https://github.com/jisuxingchen/optilink/pull/35"
+    },
+    {
+      "title": "TF-007F Issue #32",
+      "type": "Architecture",
+      "status": "TECH_PASS_PHYSICAL_PARTIAL",
+      "note": "Buffered receiver、OLTP Manifest、symbol hold；物理 Manifest 尚未恢复。",
+      "url": "https://github.com/jisuxingchen/optilink/issues/32"
+    },
+    {
+      "title": "PR #33 TF-007F",
+      "type": "PR",
+      "status": "DRAFT",
+      "note": "3×160 @15 Hz 理论 gross 109,620 B/s 的缓冲传输架构。",
+      "url": "https://github.com/jisuxingchen/optilink/pull/33"
+    },
+    {
+      "title": "TF-007 Parent Issue #27",
+      "type": "Experiment",
+      "status": "ACTIVE",
+      "note": "全屏三 tile OptiGrid 主实验与物理证据链。",
+      "url": "https://github.com/jisuxingchen/optilink/issues/27"
+    },
+    {
+      "title": "PR #31 TF-007",
+      "type": "PR",
+      "status": "DRAFT",
+      "note": "主 tiled carrier 分支；保持 Open/Draft/Unmerged。",
+      "url": "https://github.com/jisuxingchen/optilink/pull/31"
+    }
   ],
   "health": [
-    {"name":"Scope control","status":"HEALTHY","detail":"G0/G1 不变；载体升级由物理测试证据触发。"},
-    {"name":"Technical feasibility","status":"ACTIVE_PIVOT","detail":"正确重建已证明；当前主要未知是自定义载体能否显著提高吞吐。"},
-    {"name":"Evidence quality","status":"HEALTHY","detail":"单 QR 与 4QR 决策均有 1 MiB SHA-256 物理证据。"},
-    {"name":"CI / repository hygiene","status":"HEALTHY","detail":"OptiGrid codec、路由、token、TypeScript/build 已通过 GitHub Actions。"}
+    {
+      "name": "Scope control",
+      "status": "HEALTHY",
+      "detail": "G0/G1 不变；所有 stacked PR 保持 Draft，未获得 PO merge 授权。"
+    },
+    {
+      "name": "Technical feasibility",
+      "status": "PHYSICAL_GATE",
+      "detail": "模拟与软件回归已经较强，当前主要未知已收敛到真实手机 acquisition → Manifest → dynamic transport。"
+    },
+    {
+      "name": "Evidence quality",
+      "status": "HEALTHY",
+      "detail": "理论 gross、pixel-sim ingress、physical raw ingress、Net Goodput 持续分离；失败结果也保留。"
+    },
+    {
+      "name": "CI / repository hygiene",
+      "status": "HEALTHY",
+      "detail": "TF-007H exact head b955e484… 对应 CI #375 completed/success，5/5 jobs PASS。"
+    },
+    {
+      "name": "Schedule",
+      "status": "WATCH",
+      "detail": "技术链路仍处于 evidence-driven 迭代；Prototype 继续受 G2 阻塞，不用日期倒逼物理结论。"
+    }
   ],
   "activity": [
-    {"date":"2026-09-06","title":"OptiGrid v0 started","detail":"Issue #16、branch、Draft PR #17 与第一版直接采样校准工具已建立。"},
-    {"date":"2026-09-06","title":"TF-003 pivot decision","detail":"4QR v2 PASS，但扩展效率不足，停止 9QR/16QR 主路线。"}
+    {
+      "date": "2026-09-10",
+      "title": "Dashboard truth sync started",
+      "detail": "Issue #39 建立，准备将 main 看板从 TF-004 快照更新到 TF-007H 物理复测门。"
+    },
+    {
+      "date": "2026-09-09",
+      "title": "TF-007H exact-head CI PASS",
+      "detail": "b955e484… / CI #375 5/5 PASS；错误朝向越界与 15-bit 低 BER 残差均已进入 deterministic gate。"
+    },
+    {
+      "date": "2026-09-08",
+      "title": "Physical acquisition instability isolated",
+      "detail": "TF-007G 复测出现 2/3 exact + 15/1936 残差，以及错误 portrait orientation 将 tile 投影到 frame 边界外；由此启动 TF-007H。"
+    },
+    {
+      "date": "2026-09-08",
+      "title": "TF-007G control-plane remediation",
+      "detail": "Manifest dwell/control contract 与 Issue #34 自动发布路径完成修复并通过 CI #360。"
+    },
+    {
+      "date": "2026-09-07",
+      "title": "Buffered physical path reached Manifest stage",
+      "detail": "TF-007F 真实手机测试达到 64 orientation 3/3 exact 和 96 Manifest preamble PASS，但 Manifest recovery 失败；未形成 Net Goodput。"
+    },
+    {
+      "date": "2026-09-07",
+      "title": "Dynamic physical bottleneck measured",
+      "detail": "3×96@60 动态手机链路曾测得 3522.5 B/s physical raw optical ingress，valid-tile 33.3%，decode p95 约 226.8 ms；该数值不是 Net Goodput。"
+    }
   ],
-  "blockers": ["G2 等待 OptiGrid 物理校准以及 OptiGrid + Fountain 1 MiB SHA-256 验证。"],
-  "terminology": ["G0","G1","G2","ADR","PR","CI","Net Goodput","Fountain","FEC","CRC","ROI","OptiGrid"],
-  "reviews": [],
+  "blockers": [
+    "TF-007H exact head b955e484… 尚缺 moto razr 40 ultra 物理复测；CI/模拟不能替代 screen→camera acquisition 证据。",
+    "G2 仍缺稳定 Manifest/dynamic transport 以及真实文件重建 + 最终 SHA-256；>=100 KB/s 尚未被物理 Net Goodput 证明。"
+  ],
+  "terminology": [
+    "G0",
+    "G1",
+    "G2",
+    "ADR",
+    "PR",
+    "CI",
+    "Net Goodput",
+    "Physical raw optical ingress",
+    "Pixel-sim ingress",
+    "Theoretical gross capacity",
+    "Fountain",
+    "FEC",
+    "CRC",
+    "ROI",
+    "OptiGrid",
+    "Manifest",
+    "Symbol hold"
+  ],
+  "reviews": [
+    {
+      "id": "TF-007H-PHYSICAL",
+      "kind": "PHYSICAL_TEST",
+      "title": "moto razr 40 ultra · TF-007H exact-head physical re-test",
+      "status": "READY",
+      "priority": "HIGH",
+      "why": "CI 已覆盖错误朝向投影和 15-bit 低 BER 残差，但真实 screen→camera 结果不可由模拟替代。",
+      "action": "在 PR #37 exact head b955e484… 运行一轮手机物理测试；结果只作为物理采集/恢复证据，不等同于 merge 授权。",
+      "url": "https://github.com/jisuxingchen/optilink/issues/36"
+    }
+  ],
   "focus": [
-    {"title":"TF-004 · OptiGrid v0 carrier calibration","status":"IN PROGRESS","detail":"直接黑白 cell 采样，64→160 自动密度扫描。","url":"https://github.com/jisuxingchen/optilink/issues/16"},
-    {"title":"PR #17 · OptiGrid implementation","status":"DRAFT","detail":"实现已进入 CI，尚未合并。","url":"https://github.com/jisuxingchen/optilink/pull/17"},
-    {"title":"G2 · Prototype carrier decision","status":"BLOCKED BY EVIDENCE","detail":"等待 OptiGrid 物理证据。"}
+    {
+      "title": "TF-007H · exact-head 手机物理复测",
+      "status": "READY FOR PHYSICAL RE-TEST",
+      "detail": "b955e484… / CI #375 已绿；下一步只做一轮真实手机验证。",
+      "url": "https://github.com/jisuxingchen/optilink/issues/36"
+    },
+    {
+      "title": "TF-007G · Manifest optical recovery",
+      "status": "WAITING ON TF-007H",
+      "detail": "Manifest 软件与控制面修复已绿，等待稳定 acquisition。",
+      "url": "https://github.com/jisuxingchen/optilink/issues/34"
+    },
+    {
+      "title": "G2 · Prototype carrier decision",
+      "status": "BLOCKED BY PHYSICAL EVIDENCE",
+      "detail": "需要稳定动态链路与文件级 SHA-256 / Net Goodput 证据。"
+    }
   ],
   "gates": [
-    {"id":"G0","title":"First MVP hypothesis","status":"APPROVED","decision":"Computer → Android · screen-to-camera · >=100 KB/s validation target."},
-    {"id":"G1","title":"Initial technical path","status":"APPROVED","decision":"Browser/Android first · Fountain recovery · evidence-driven carrier escalation."},
-    {"id":"G2","title":"Prototype carrier decision","status":"NOT READY","decision":"等待 OptiGrid calibration + verified 1 MiB result。"}
+    {
+      "id": "G0",
+      "title": "First MVP hypothesis",
+      "status": "APPROVED",
+      "decision": "Computer → Android · screen-to-camera · >=100 KB/s validation target."
+    },
+    {
+      "id": "G1",
+      "title": "Initial technical path",
+      "status": "APPROVED",
+      "decision": "Browser/Android first · Fountain recovery · evidence-driven OptiGrid carrier."
+    },
+    {
+      "id": "G2",
+      "title": "Prototype carrier decision",
+      "status": "NOT READY",
+      "decision": "等待稳定 physical dynamic path + Manifest + reconstructed file SHA-256 / Net Goodput evidence。"
+    }
   ],
   "timelineStart": "2026-09-05",
   "timelineEnd": "2026-10-31",
   "timeline": [
-    {"id":"E0","name":"Product Discovery","start":"2026-09-05","end":"2026-09-12","progress":92,"status":"IN_PROGRESS","level":"EPIC"},
-    {"id":"TF-001","name":"Benchmark definition","start":"2026-09-05","end":"2026-09-05","progress":100,"status":"DONE","level":"TASK"},
-    {"id":"TF-002","name":"Single QR + Fountain","start":"2026-09-05","end":"2026-09-05","progress":100,"status":"DONE","level":"TASK"},
-    {"id":"TF-003","name":"4QR scaling experiment","start":"2026-09-05","end":"2026-09-06","progress":100,"status":"DONE_PIVOT","level":"TASK"},
-    {"id":"TF-004","name":"OptiGrid custom carrier","start":"2026-09-06","end":"2026-09-14","progress":40,"status":"IN_PROGRESS","level":"TASK"},
-    {"id":"E2","name":"Prototype","start":"2026-09-21","end":"2026-10-08","progress":0,"status":"BLOCKED_BY_G2","level":"EPIC"}
+    {
+      "id": "E0",
+      "name": "Product Discovery",
+      "start": "2026-09-05",
+      "end": "2026-09-18",
+      "progress": 92,
+      "status": "IN_PROGRESS",
+      "level": "EPIC"
+    },
+    {
+      "id": "TF-001",
+      "name": "Benchmark definition",
+      "start": "2026-09-05",
+      "end": "2026-09-05",
+      "progress": 100,
+      "status": "DONE",
+      "level": "TASK"
+    },
+    {
+      "id": "TF-002",
+      "name": "Single QR + Fountain",
+      "start": "2026-09-05",
+      "end": "2026-09-05",
+      "progress": 100,
+      "status": "DONE",
+      "level": "TASK"
+    },
+    {
+      "id": "TF-003",
+      "name": "4QR scaling experiment",
+      "start": "2026-09-05",
+      "end": "2026-09-06",
+      "progress": 100,
+      "status": "DONE_PIVOT",
+      "level": "TASK"
+    },
+    {
+      "id": "TF-004",
+      "name": "OptiGrid single-carrier frontier",
+      "start": "2026-09-06",
+      "end": "2026-09-06",
+      "progress": 100,
+      "status": "DONE_PIVOT",
+      "level": "TASK"
+    },
+    {
+      "id": "TF-005",
+      "name": "Pixel-isolated simulation bench",
+      "start": "2026-09-06",
+      "end": "2026-09-06",
+      "progress": 100,
+      "status": "DONE_SIMULATION",
+      "level": "TASK"
+    },
+    {
+      "id": "TF-006",
+      "name": "Physical OptiGrid diagnostics",
+      "start": "2026-09-06",
+      "end": "2026-09-06",
+      "progress": 100,
+      "status": "DONE_DIAGNOSTIC",
+      "level": "TASK"
+    },
+    {
+      "id": "TF-007",
+      "name": "Full-frame tiled OptiGrid",
+      "start": "2026-09-06",
+      "end": "2026-09-25",
+      "progress": 82,
+      "status": "IN_PROGRESS",
+      "level": "TASK"
+    },
+    {
+      "id": "TF-007F",
+      "name": "Buffered transport / Manifest / symbol hold",
+      "start": "2026-09-07",
+      "end": "2026-09-18",
+      "progress": 78,
+      "status": "TECH_PASS_PHYSICAL_PARTIAL",
+      "level": "TASK"
+    },
+    {
+      "id": "TF-007G",
+      "name": "Manifest recovery hardening",
+      "start": "2026-09-08",
+      "end": "2026-09-20",
+      "progress": 80,
+      "status": "WAITING_ON_TF007H",
+      "level": "TASK"
+    },
+    {
+      "id": "TF-007H",
+      "name": "Orientation acquisition stabilization",
+      "start": "2026-09-08",
+      "end": "2026-09-12",
+      "progress": 90,
+      "status": "READY_FOR_PHYSICAL_RETEST",
+      "level": "TASK"
+    },
+    {
+      "id": "E2",
+      "name": "Prototype",
+      "start": "2026-09-26",
+      "end": "2026-10-15",
+      "progress": 0,
+      "status": "BLOCKED_BY_G2",
+      "level": "EPIC"
+    }
   ],
   "docs": [
-    {"title":"TF-004 OptiGrid","note":"当前自定义载体实验与决策门。","url":"https://github.com/jisuxingchen/optilink/issues/16"},
-    {"title":"PR #17 OptiGrid","note":"当前实现；Draft，未合并。","url":"https://github.com/jisuxingchen/optilink/pull/17"},
-    {"title":"TF-003 4QR evidence","note":"标准 QR 路线停止扩展的物理证据。","url":"https://github.com/jisuxingchen/optilink/issues/10"},
-    {"title":"TF-002B Fountain evidence","note":"保留在 OptiGrid 上层的 rateless recovery 证据。","url":"https://github.com/jisuxingchen/optilink/issues/13"}
+    {
+      "title": "TF-007H Issue #36",
+      "note": "当前手机物理复测门；CI #375 5/5 PASS。",
+      "url": "https://github.com/jisuxingchen/optilink/issues/36"
+    },
+    {
+      "title": "PR #37 TF-007H",
+      "note": "exact head b955e484…；Draft / Technical PASS / physical pending。",
+      "url": "https://github.com/jisuxingchen/optilink/pull/37"
+    },
+    {
+      "title": "TF-007G Issue #34",
+      "note": "Manifest recovery hardening，等待 TF-007H 稳定物理 acquisition。",
+      "url": "https://github.com/jisuxingchen/optilink/issues/34"
+    },
+    {
+      "title": "TF-007F Issue #32",
+      "note": "Buffered receiver + OLTP Manifest + symbol hold 架构。",
+      "url": "https://github.com/jisuxingchen/optilink/issues/32"
+    },
+    {
+      "title": "TF-007 Parent #27",
+      "note": "全屏 tiled OptiGrid 主证据链。",
+      "url": "https://github.com/jisuxingchen/optilink/issues/27"
+    },
+    {
+      "title": "PR #31 TF-007",
+      "note": "主 tiled carrier stacked PR；保持 Draft/Open/Unmerged。",
+      "url": "https://github.com/jisuxingchen/optilink/pull/31"
+    }
   ]
 }
