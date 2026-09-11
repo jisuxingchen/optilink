@@ -14,6 +14,28 @@
   letter-spacing: 0.06em;
 }
 
+.bootbanner {
+  font-weight: 800;
+  text-align: center;
+  padding: 14rpx;
+  border-radius: 12rpx;
+  margin-bottom: 10rpx;
+  letter-spacing: 0.04em;
+  word-break: break-all;
+}
+
+.bootok {
+  background: #14532d;
+  color: #bbf7d0;
+  border: 1rpx solid #16a34a;
+}
+
+.booterr {
+  background: #7f1d1d;
+  color: #fecaca;
+  border: 1rpx solid #dc2626;
+}
+
 .netbanner {
   background: #111827;
   color: #f87171;

@@ -1,7 +1,7 @@
 {
   "evidenceClass": "SIMULATED REAL-TIME FRAME-CADENCE STRESS",
-  "generatedAt": "2026-09-11T07:01:20.097Z",
-  "gitHead": "21fcd3d3491fe2bb051ceb9771ec15eecb73874f",
+  "generatedAt": "2026-09-11T07:54:19.839Z",
+  "gitHead": "287cc25688b83d421b0fa83b96377113e1cb60a7",
   "senderEntry": "/tiled-physical-v5.html?role=sender&standalone=broadcast&sessions=2&replayEvery=16",
   "replayEvery": 16,
   "acquisitionBeacon": "orientation(64) + preamble(96) emitted at the start of every broadcast cycle",
@@ -17,59 +17,59 @@
   "budgetInventory": {
     "wrapMs": {
       "n": 10,
-      "avg": 54.73,
-      "p50": 53.5,
-      "p95": 56.7,
-      "max": 63.7
+      "avg": 51.48,
+      "p50": 49.7,
+      "p95": 55.8,
+      "max": 57.1
     },
     "beaconProbeAcceptMs": {
       "n": 10,
-      "avg": 30.34,
+      "avg": 26.9,
       "p50": 22.9,
-      "p95": 34.5,
-      "max": 80.2
+      "p95": 30.5,
+      "max": 52.5
     },
     "beaconProbeRejectMs": {
       "n": 10,
-      "avg": 27.33,
-      "p50": 24.7,
-      "p95": 31,
-      "max": 43.9
+      "avg": 22.43,
+      "p50": 22.5,
+      "p95": 26.6,
+      "max": 28.1
     },
     "orientationFiducialMs": {
       "n": 5,
-      "avg": 783.42,
-      "p50": 806.3,
-      "p95": 815.6,
-      "max": 844.8
+      "avg": 720.86,
+      "p50": 714.9,
+      "p95": 726,
+      "max": 754.3
     },
     "preambleLockMs": {
       "n": 5,
-      "avg": 4486.82,
-      "p50": 4878.7,
-      "p95": 5035.3,
-      "max": 5695
+      "avg": 3145.14,
+      "p50": 3390.4,
+      "p95": 3422.1,
+      "max": 3845.9
     },
     "manifestDecodeMs": {
       "n": 5,
-      "avg": 129.82,
-      "p50": 134.8,
-      "p95": 141.1,
-      "max": 158.4
+      "avg": 104.2,
+      "p50": 101.3,
+      "p95": 109.9,
+      "max": 118.3
     },
     "dynamicDecodeMs": {
       "n": 5,
-      "avg": 123.94,
-      "p50": 135,
-      "p95": 137.7,
-      "max": 151.3
+      "avg": 96,
+      "p50": 98.7,
+      "p95": 99,
+      "max": 99.2
     },
     "checkpointMs": {
       "n": 5,
-      "avg": 0.22,
+      "avg": 0.26,
       "p50": 0.2,
       "p95": 0.3,
-      "max": 0.5
+      "max": 0.6
     },
     "reconstructMs": {
       "n": 1,
@@ -80,10 +80,10 @@
     },
     "sha256Ms": {
       "n": 6,
-      "avg": 4.15,
-      "p50": 1.7,
-      "p95": 6.8,
-      "max": 9
+      "avg": 2.933,
+      "p50": 1.1,
+      "p95": 4.5,
+      "max": 5.7
     },
     "note": "dynamicDecodeMs includes track + decode + Fountain addSymbol (items 8+9). CameraFrame callback rate, UI setData, and local file write are measured on-device (Mini Program adapter)."
   },
@@ -94,46 +94,46 @@
       "complete": true,
       "shaMatch": true,
       "reconstructedSha": "191e27f4a771896d849e8d66c60a89996b6b974c5177dfcae75819195f11d819",
-      "producerFps": 4.93,
-      "processedFps": 4.93,
+      "producerFps": 4.14,
+      "processedFps": 4.14,
       "producerFrames": 58,
       "processedFrames": 58,
       "skippedBusyFrames": 0,
       "replacedFrames": 0,
       "maxQueueDepth": 1,
-      "usefulSymbolRate": 10.87,
-      "elapsedMs": 11770.9,
+      "usefulSymbolRate": 9.14,
+      "elapsedMs": 14010.8,
       "reconstructMs": 0.2,
-      "shaMs": 27.5,
-      "orientationMs": 1325.6,
+      "shaMs": 35.3,
+      "orientationMs": 1120.1,
       "stageTimes": {
         "idle": {
           "n": 1,
-          "avg": 1325.6,
-          "p50": 1325.6,
-          "p95": 1325.6,
-          "max": 1325.6
+          "avg": 1120.1,
+          "p50": 1120.1,
+          "p95": 1120.1,
+          "max": 1120.1
         },
         "oriented": {
           "n": 1,
-          "avg": 2775,
-          "p50": 2775,
-          "p95": 2775,
-          "max": 2775
+          "avg": 3392.3,
+          "p50": 3392.3,
+          "p95": 3392.3,
+          "max": 3392.3
         },
         "preamble": {
           "n": 1,
-          "avg": 66.5,
-          "p50": 66.5,
-          "p95": 66.5,
-          "max": 66.5
+          "avg": 103.8,
+          "p50": 103.8,
+          "p95": 103.8,
+          "max": 103.8
         },
         "receiving": {
           "n": 55,
-          "avg": 84.504,
-          "p50": 75.5,
-          "p95": 136.9,
-          "max": 157.1
+          "avg": 105.484,
+          "p50": 93.5,
+          "p95": 170.1,
+          "max": 208.8
         }
       },
       "coreStats": {
@@ -152,46 +152,46 @@
       "complete": true,
       "shaMatch": true,
       "reconstructedSha": "191e27f4a771896d849e8d66c60a89996b6b974c5177dfcae75819195f11d819",
-      "producerFps": 5.05,
-      "processedFps": 5.05,
+      "producerFps": 4.16,
+      "processedFps": 4.16,
       "producerFrames": 58,
       "processedFrames": 58,
       "skippedBusyFrames": 0,
       "replacedFrames": 0,
       "maxQueueDepth": 1,
-      "usefulSymbolRate": 11.15,
-      "elapsedMs": 11482.4,
+      "usefulSymbolRate": 9.19,
+      "elapsedMs": 13930.1,
       "reconstructMs": 0.1,
-      "shaMs": 2.3,
-      "orientationMs": 957.6,
+      "shaMs": 2.9,
+      "orientationMs": 1235,
       "stageTimes": {
         "idle": {
           "n": 1,
-          "avg": 957.6,
-          "p50": 957.6,
-          "p95": 957.6,
-          "max": 957.6
+          "avg": 1235,
+          "p50": 1235,
+          "p95": 1235,
+          "max": 1235
         },
         "oriented": {
           "n": 1,
-          "avg": 2932.6,
-          "p50": 2932.6,
-          "p95": 2932.6,
-          "max": 2932.6
+          "avg": 3196.6,
+          "p50": 3196.6,
+          "p95": 3196.6,
+          "max": 3196.6
         },
         "preamble": {
           "n": 1,
-          "avg": 84.8,
-          "p50": 84.8,
-          "p95": 84.8,
-          "max": 84.8
+          "avg": 91,
+          "p50": 91,
+          "p95": 91,
+          "max": 91
         },
         "receiving": {
           "n": 55,
-          "avg": 83.793,
-          "p50": 75.4,
-          "p95": 130.2,
-          "max": 164.8
+          "avg": 105.633,
+          "p50": 94.4,
+          "p95": 154,
+          "max": 210.2
         }
       },
       "coreStats": {
@@ -210,46 +210,46 @@
       "complete": true,
       "shaMatch": true,
       "reconstructedSha": "191e27f4a771896d849e8d66c60a89996b6b974c5177dfcae75819195f11d819",
-      "producerFps": 5.28,
-      "processedFps": 5.28,
+      "producerFps": 4.28,
+      "processedFps": 4.28,
       "producerFrames": 58,
       "processedFrames": 58,
       "skippedBusyFrames": 0,
       "replacedFrames": 0,
       "maxQueueDepth": 1,
-      "usefulSymbolRate": 11.66,
-      "elapsedMs": 10977.5,
-      "reconstructMs": 0.3,
-      "shaMs": 2.2,
-      "orientationMs": 1012.1,
+      "usefulSymbolRate": 9.46,
+      "elapsedMs": 13536.1,
+      "reconstructMs": 0.1,
+      "shaMs": 2.9,
+      "orientationMs": 1245.6,
       "stageTimes": {
         "idle": {
           "n": 1,
-          "avg": 1012.1,
-          "p50": 1012.1,
-          "p95": 1012.1,
-          "max": 1012.1
+          "avg": 1245.6,
+          "p50": 1245.6,
+          "p95": 1245.6,
+          "max": 1245.6
         },
         "oriented": {
           "n": 1,
-          "avg": 2695.1,
-          "p50": 2695.1,
-          "p95": 2695.1,
-          "max": 2695.1
+          "avg": 3670.2,
+          "p50": 3670.2,
+          "p95": 3670.2,
+          "max": 3670.2
         },
         "preamble": {
           "n": 1,
-          "avg": 66.7,
-          "p50": 66.7,
-          "p95": 66.7,
-          "max": 66.7
+          "avg": 87,
+          "p50": 87,
+          "p95": 87,
+          "max": 87
         },
         "receiving": {
           "n": 55,
-          "avg": 81.891,
-          "p50": 75.4,
-          "p95": 124.7,
-          "max": 161.2
+          "avg": 95.596,
+          "p50": 84.3,
+          "p95": 159.5,
+          "max": 233
         }
       },
       "coreStats": {
@@ -270,7 +270,7 @@
     "allBounded": true
   },
   "timings": {
-    "totalMs": 84097.4,
+    "totalMs": 81830.2,
     "timingNote": "DESKTOP / SIMULATION timing only"
   },
   "note": "SIMULATION EVIDENCE ONLY. Not physical raw optical ingress. Not Net Goodput."

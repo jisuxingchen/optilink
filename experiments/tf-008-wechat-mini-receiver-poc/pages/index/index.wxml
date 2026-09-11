@@ -1,5 +1,6 @@
 <view class="page">
-  <view class="banner">OPTICAL CAMERA FRAME — LOCAL ONLY</view>
+  <view class="banner">OptiLink · OPTICAL CAMERA FRAME — LOCAL ONLY</view>
+  <view class="bootbanner {{bootStatus === 'BOOT OK' ? 'bootok' : 'booterr'}}">{{bootStatus}} · buildId {{buildId}}{{bootError ? ' · ' + bootError : ''}}</view>
   <view class="netbanner">Network payload path: NONE</view>
   <view class="receivebanner" wx:if="{{mode === 'receive'}}">SHARED RECEIVE PIPELINE ACTIVE · buildId {{buildId}}</view>
   <view class="benchbanner" wx:if="{{mode === 'benchmark'}}">CAMERA BENCHMARK MODE ACTIVE · buildId {{buildId}}</view>

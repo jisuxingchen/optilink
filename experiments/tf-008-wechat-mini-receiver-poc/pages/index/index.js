@@ -24,11 +24,21 @@ const PROCESS_TIME_CAP = 600;  // max processing-time samples kept for p95
 const RECEIVE_MATRIX = 96;     // protocol constant: manifest + dynamic symbol matrix
 
 // Shared optical acquisition core (bundled from the TF-007H modules).
-const opticalCore = require('../../utils/optical-core.js');
+// GUARDED LOAD: the page must never fail silently. If the bundle throws at
+// require time (e.g. a missing runtime global), Page() still registers and the
+// UI visibly shows BOOT ERROR with the reason. The receive pipeline degrades
+// to "core unavailable" and still renders.
+let opticalCore = null;
+let opticalCoreLoadError = '';
+try {
+  opticalCore = require('../../utils/optical-core.js');
+} catch (err) {
+  opticalCoreLoadError = String(err && err.message ? err.message : err);
+}
 
 // Unmistakable build identifier — must be visible on the phone to prove the
 // device is running the latest shared-receive package (not a stale cache).
-const BUILD_ID = 'tf012-r1-4798fde';
+const BUILD_ID = 'tf012-r2-9a3f321';
 
 // Checkpoint persistence (bounded cadence — never per camera frame). The
 // platform-neutral core owns checkpoint export/import; this adapter only does
@@ -57,6 +67,8 @@ Page({
     heavy: false,
     mode: 'receive', // 'receive' | 'benchmark'
     buildId: BUILD_ID,
+    bootStatus: 'BOOT OK',
+    bootError: '',
     permissionStatus: 'unknown',
     maxZoom: '—',
     networkPath: 'NONE',
@@ -188,6 +200,19 @@ Page({
     this.receiveCore = (opticalCore && typeof opticalCore.SharedOpticalReceiveCore === 'function')
       ? new opticalCore.SharedOpticalReceiveCore()
       : null;
+
+    // Boot status is VISIBLE and never silent: if the bundle failed to load the
+    // page still renders and shows BOOT ERROR with the reason.
+    if (opticalCoreLoadError) {
+      this.setData({ bootStatus: 'BOOT ERROR', bootError: opticalCoreLoadError });
+      this.recordError('optical_core_load_failed:' + opticalCoreLoadError);
+      this.appendLog('BOOT ERROR: ' + opticalCoreLoadError);
+    } else if (!this.receiveCore) {
+      this.setData({ bootStatus: 'BOOT ERROR', bootError: 'SharedOpticalReceiveCore missing from bundle' });
+      this.recordError('receive_core_missing_from_bundle');
+    } else {
+      this.setData({ bootStatus: 'BOOT OK' });
+    }
 
     this.windowStartAt = Date.now();
     this.timer = setInterval(() => this.onTick(), UI_REFRESH_MS);
