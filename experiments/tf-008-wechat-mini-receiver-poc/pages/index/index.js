@@ -21,14 +21,14 @@ const NORMALIZE_EVERY = 3;     // run the normalization bench every Nth frame wh
 const FRAME_TIMEOUT_MS = 5000; // "no camera frame received within 5s"
 const UI_REFRESH_MS = 500;     // periodic UI refresh / FPS window
 const PROCESS_TIME_CAP = 600;  // max processing-time samples kept for p95
-const ORIENT_EVERY = 4;        // run orientation acquisition on every Nth frame
+const RECEIVE_MATRIX = 96;     // protocol constant: manifest + dynamic symbol matrix
 
 // Shared optical acquisition core (bundled from the TF-007H modules).
 const opticalCore = require('../../utils/optical-core.js');
 
 // Unmistakable build identifier — must be visible on the phone to prove the
-// device is running the latest orientation-capable package (not a stale cache).
-const BUILD_ID = 'tf008-r9';
+// device is running the latest shared-receive package (not a stale cache).
+const BUILD_ID = 'tf010-r1';
 
 Page({
   data: {
@@ -37,30 +37,28 @@ Page({
     callbackActive: false,
     frozen: false,
     heavy: false,
-    mode: 'orientation', // 'orientation' | 'benchmark'
+    mode: 'receive', // 'receive' | 'benchmark'
     buildId: BUILD_ID,
     permissionStatus: 'unknown',
     maxZoom: '—',
     networkPath: 'NONE',
 
-    // orientation mode state
-    orientAttempts: 0,
-    orientReceived: 0,
-    orientProcessed: 0,
-    orientSkipped: 0,
-    orientCandidate: '—',
-    orientLocked: 'WAITING',
-    orientExactTiles: '—',
-    orientTotalErrors: '—',
-    orientProjection: '—',
-    orientSupport: '—',
-    orientReject: '—',
-    orientMarkers: '—',
-    orientAvgMs: '—',
-    orientP95Ms: '—',
-    orientSelfCheck: '—',
-    orientLastResultAge: '—',
-    orientPipelineError: '',
+    // receive mode state (SharedOpticalReceiveCore)
+    receiveStage: 'IDLE',
+    receiveSelectedTransform: '—',
+    receiveTripletValid: '—',
+    receiveSupport: '—',
+    receiveExactTiles: '—',
+    manifestStatus: '—',
+    manifestFileSize: '—',
+    decodedSymbols: 0,
+    solvedBlocks: '—',
+    totalBlocks: '—',
+    reconstructionStatus: '—',
+    shaStatus: '—',
+    localFilePath: '—',
+    receiveSelfCheck: '—',
+    receivePipelineError: '',
     tileStatus: [],
 
     // live metrics
@@ -134,24 +132,29 @@ Page({
 
   latestLuma: null,
 
-  // orientation mode internal state
-  orientTimes: [],     // ms per acquisition run
-  orientFramesReceived: 0,
-  orientFramesProcessed: 0,
-  orientLatest: null,  // last OrientationAcquisition result
-  orientLastAt: 0,     // timestamp of last successful acquisition
+  // receive mode internal state
+  receiveCore: null,           // SharedOpticalReceiveCore instance
+  receiveBusy: false,          // at most one frame in flight (no unbounded queue)
+  receiveFramesReceived: 0,
+  receiveFramesProcessed: 0,
+  receiveFramesSkipped: 0,
+  receiveTimes: [],            // ms per processed frame
+  receiveFinalized: false,     // reconstruction + SHA already finalized
 
   onLoad() {
     this.collectDeviceEvidence();
     this.readCameraPermission();
     this.cameraContext = wx.createCameraContext();
+    this.receiveCore = (opticalCore && typeof opticalCore.SharedOpticalReceiveCore === 'function')
+      ? new opticalCore.SharedOpticalReceiveCore()
+      : null;
 
     this.windowStartAt = Date.now();
     this.timer = setInterval(() => this.onTick(), UI_REFRESH_MS);
 
-    this.appendLog('OptiLink camera-frame PoC ready. Payload is OPTICAL-ONLY.');
+    this.appendLog('OptiLink shared receive pipeline ready. Payload is OPTICAL-ONLY.');
     this.appendLog('Network payload path: NONE (no network APIs used).');
-    this.runOrientationSelfCheck();
+    this.runReceiveSelfCheck();
   },
 
   onUnload() {
@@ -235,10 +238,15 @@ Page({
     this.processTimes = [];
     this.normalizeTimes = [];
     this.latestLuma = null;
-    this.orientTimes = [];
-    this.orientFramesReceived = 0;
-    this.orientFramesProcessed = 0;
-    this.orientLatest = null;
+    this.receiveCore = (opticalCore && typeof opticalCore.SharedOpticalReceiveCore === 'function')
+      ? new opticalCore.SharedOpticalReceiveCore()
+      : null;
+    this.receiveBusy = false;
+    this.receiveFramesReceived = 0;
+    this.receiveFramesProcessed = 0;
+    this.receiveFramesSkipped = 0;
+    this.receiveTimes = [];
+    this.receiveFinalized = false;
     this.windowStartAt = Date.now();
     this.windowReceived = 0;
     this.windowProcessed = 0;
@@ -270,23 +278,21 @@ Page({
       normalizeP95Ms: '—',
       normalizeFps: '0.0',
       normalizeSamples: 0,
-      orientAttempts: 0,
-      orientReceived: 0,
-      orientProcessed: 0,
-      orientSkipped: 0,
-      orientCandidate: '—',
-      orientLocked: 'WAITING',
-      orientExactTiles: '—',
-      orientTotalErrors: '—',
-      orientProjection: '—',
-      orientSupport: '—',
-      orientReject: '—',
-      orientMarkers: '—',
-      orientAvgMs: '—',
-      orientP95Ms: '—',
-      orientSelfCheck: '—',
-      orientLastResultAge: '—',
-      orientPipelineError: '',
+      receiveStage: 'IDLE',
+      receiveSelectedTransform: '—',
+      receiveTripletValid: '—',
+      receiveSupport: '—',
+      receiveExactTiles: '—',
+      manifestStatus: '—',
+      manifestFileSize: '—',
+      decodedSymbols: 0,
+      solvedBlocks: '—',
+      totalBlocks: '—',
+      reconstructionStatus: '—',
+      shaStatus: '—',
+      localFilePath: '—',
+      receiveSelfCheck: '—',
+      receivePipelineError: '',
       tileStatus: []
     });
     this.appendLog('metrics reset');
@@ -301,29 +307,33 @@ Page({
 
   // Idempotent mode selection — selecting the active mode is a no-op. Used by
   // the two explicit mode buttons so the PO cannot accidentally toggle away
-  // from orientation.
+  // from the shared receive pipeline.
   setMode(mode) {
     if (this.data.mode === mode) return;
     this.resetMetrics();
-    this.setData({ mode, orientPipelineError: '' });
+    this.setData({ mode, receivePipelineError: '' });
     this.appendLog('active mode: ' + mode);
-    if (mode === 'orientation') this.runOrientationSelfCheck();
+    if (mode === 'receive') this.runReceiveSelfCheck();
   },
 
   onSelectMode(e) {
     this.setMode(e.currentTarget.dataset.mode);
   },
 
-  runOrientationSelfCheck() {
+  runReceiveSelfCheck() {
     const problems = [];
     if (!opticalCore) problems.push('optical-core bundle missing');
-    else if (typeof opticalCore.acquireOrientation !== 'function') problems.push('acquireOrientation not a function');
-    if (this.data.mode !== 'orientation') problems.push('mode is not orientation');
+    else {
+      if (typeof opticalCore.SharedOpticalReceiveCore !== 'function') problems.push('SharedOpticalReceiveCore not exported');
+      if (typeof opticalCore.sha256Hex !== 'function') problems.push('sha256Hex not exported');
+      if (typeof opticalCore.acquireOrientation !== 'function') problems.push('acquireOrientation not exported');
+    }
+    if (this.data.mode !== 'receive') problems.push('mode is not receive');
     if (problems.length) {
-      this.setData({ orientSelfCheck: 'SELF-CHECK FAIL: ' + problems.join('; ') });
-      this.recordError('orientation_selfcheck_failed: ' + problems.join('; '));
+      this.setData({ receiveSelfCheck: 'SELF-CHECK FAIL: ' + problems.join('; ') });
+      this.recordError('receive_selfcheck_failed: ' + problems.join('; '));
     } else {
-      this.setData({ orientSelfCheck: 'SELF-CHECK OK' });
+      this.setData({ receiveSelfCheck: 'SELF-CHECK OK' });
     }
   },
 
@@ -345,8 +355,8 @@ Page({
     const height = frame.height;
     const buffer = frame.data; // ArrayBuffer (RGBA, 4 bytes/px)
 
-    if (this.data.mode === 'orientation') {
-      this.processOrientationFrame(buffer, width, height);
+    if (this.data.mode === 'receive') {
+      this.processReceiveFrame(buffer, width, height);
     } else {
       this.processBenchmarkFrame(buffer, width, height);
     }
@@ -381,42 +391,87 @@ Page({
     this.windowProcessed++;
   },
 
-  // Orientation mode: run the shared TF-007H 64x64 acquisition on a cadence.
-  // Payload stays local — only the acquisition verdict is computed, in memory.
-  processOrientationFrame(buffer, width, height) {
-    this.orientFramesReceived++;
-    if (this.orientFramesReceived % ORIENT_EVERY !== 0) return; // every-N gate
-
-    if (!opticalCore || typeof opticalCore.acquireOrientation !== 'function') {
-      this.recordError('optical_core_unavailable');
+  // Receive mode: drive the shared SharedOpticalReceiveCore state machine.
+  // At most one frame is processed at a time (no unbounded queue); later frames
+  // are skipped while work is in flight. Payload stays local.
+  processReceiveFrame(buffer, width, height) {
+    if (this.receiveBusy) { this.receiveFramesSkipped++; return; }
+    this.receiveFramesReceived++;
+    if (!this.receiveCore) {
+      this.recordError('receive_core_unavailable');
       return;
     }
-
+    const core = this.receiveCore;
     const t0 = Date.now();
-    let frame;
+    this.receiveBusy = true;
     try {
-      frame = { width, height, data: new Uint8ClampedArray(buffer) };
+      const frame = { width, height, data: new Uint8ClampedArray(buffer) };
+      if (core.stage === 'idle') {
+        core.acquireOrientation(frame);
+      } else if (core.stage === 'oriented') {
+        core.lockPreamble(frame, RECEIVE_MATRIX);
+      } else if (core.stage === 'preamble') {
+        core.readManifest(frame, RECEIVE_MATRIX);
+      } else if (core.stage === 'receiving') {
+        core.acceptDynamicFrame(frame, RECEIVE_MATRIX);
+        if (core.complete && !this.receiveFinalized) this.finalizeReconstruction();
+      }
+      this.receiveTimes.push(Date.now() - t0);
+      if (this.receiveTimes.length > PROCESS_TIME_CAP) this.receiveTimes.shift();
+      this.receiveFramesProcessed++;
+      this.processedFrames++;
+      this.windowProcessed++;
     } catch (err) {
-      this.recordError('frame_wrap_failed:' + (err && err.message));
+      this.recordError('receive_failed:' + (err && err.message));
+    } finally {
+      this.receiveBusy = false;
+    }
+  },
+
+  // Reconstruction complete: compute the local SHA-256 and write the file.
+  finalizeReconstruction() {
+    const core = this.receiveCore;
+    if (!core || this.receiveFinalized) return;
+    this.receiveFinalized = true;
+    let bytes;
+    try {
+      bytes = core.reconstruct();
+    } catch (err) {
+      this.recordError('reconstruct_failed:' + (err && err.message));
       return;
     }
-
-    let result;
-    try {
-      result = opticalCore.acquireOrientation(frame);
-    } catch (err) {
-      this.recordError('acquireOrientation_failed:' + (err && err.message));
+    if (!bytes) {
+      this.recordError('reconstruct_incomplete:' + core.solvedCount + '/' + core.sourceCount);
       return;
     }
+    const reconstructedSha = opticalCore.sha256Hex(bytes);
+    const manifestSha = core.manifest && core.manifest.file ? core.manifest.file.sha256 : null;
+    const match = manifestSha !== null && reconstructedSha === manifestSha;
+    this.setData({
+      reconstructionStatus: 'RECONSTRUCTED ' + bytes.length + ' B',
+      shaStatus: match ? 'MATCH' : (manifestSha === null ? 'NO MANIFEST SHA' : 'MISMATCH'),
+      manifestFileSize: core.manifest ? (core.manifest.file.byteLength + ' B') : '—'
+    });
+    this.writeReconstructedFile(bytes, reconstructedSha, match);
+  },
 
-    const elapsed = Date.now() - t0;
-    this.orientTimes.push(elapsed);
-    if (this.orientTimes.length > PROCESS_TIME_CAP) this.orientTimes.shift();
-    this.orientFramesProcessed++;
-    this.orientLatest = result;
-    this.orientLastAt = Date.now();
-    this.processedFrames++;
-    this.windowProcessed++;
+  writeReconstructedFile(bytes, sha, match) {
+    try {
+      const fs = wx.getFileSystemManager();
+      const path = wx.env.USER_DATA_PATH + '/tf010-reconstructed-' + (match ? 'match' : 'mismatch') + '.bin';
+      const data = bytes.slice().buffer;
+      fs.writeFile({
+        filePath: path,
+        data,
+        success: () => {
+          this.setData({ localFilePath: path });
+          this.appendLog('reconstructed file written: ' + path + ' sha=' + sha);
+        },
+        fail: (err) => this.recordError('write_file_failed:' + (err && err.errMsg ? err.errMsg : JSON.stringify(err)))
+      });
+    } catch (err) {
+      this.recordError('file_write_unavailable:' + (err && err.message));
+    }
   },
 
   // ---- periodic tick -----------------------------------------------------
@@ -431,8 +486,8 @@ Page({
       }
     }
 
-    if (this.data.mode === 'orientation') {
-      this.onOrientationTick();
+    if (this.data.mode === 'receive') {
+      this.onReceiveTick();
     } else {
       this.onBenchmarkTick();
     }
@@ -491,26 +546,27 @@ Page({
     this.setData(patch);
   },
 
-  onOrientationTick() {
+  onReceiveTick() {
     const elapsed = Math.max(1, Date.now() - this.windowStartAt);
     const seconds = elapsed / 1000;
 
     const callbackFps = (this.windowReceived / seconds).toFixed(1);
-    const acquisitionFps = (this.windowProcessed / seconds).toFixed(1);
-    const skipped = Math.max(0, this.orientFramesReceived - this.orientFramesProcessed);
-    const skipRatio = this.orientFramesReceived
-      ? ((skipped / this.orientFramesReceived) * 100).toFixed(1) + '%'
+    const processingFps = (this.windowProcessed / seconds).toFixed(1);
+    const skipped = Math.max(0, this.receiveFramesReceived - this.receiveFramesProcessed);
+    const skipRatio = this.receiveFramesReceived
+      ? ((skipped / this.receiveFramesReceived) * 100).toFixed(1) + '%'
       : '0.0%';
-    const avgMs = this.orientTimes.length
-      ? (this.orientTimes.reduce((a, b) => a + b, 0) / this.orientTimes.length).toFixed(2) + ' ms'
+    const avgMs = this.receiveTimes.length
+      ? (this.receiveTimes.reduce((a, b) => a + b, 0) / this.receiveTimes.length).toFixed(2) + ' ms'
       : '—';
-    const p95 = this.percentile(this.orientTimes, 0.95);
+    const p95 = this.percentile(this.receiveTimes, 0.95);
     const bufferBytes = this.data.frameBufferBytes || 0;
     const ingressMBps = ((bufferBytes * Number(callbackFps)) / 1e6).toFixed(3);
+    const core = this.receiveCore;
 
     const patch = {
       callbackFps,
-      processingFps: acquisitionFps,
+      processingFps,
       totalReceived: this.receivedFrames,
       processed: this.processedFrames,
       skipped,
@@ -518,34 +574,30 @@ Page({
       avgProcessMs: avgMs,
       p95ProcessMs: p95 != null ? p95.toFixed(2) + ' ms' : '—',
       ingressMBps,
-      orientAttempts: this.orientFramesProcessed,
-      orientReceived: this.orientFramesReceived,
-      orientProcessed: this.orientFramesProcessed,
-      orientSkipped: skipped,
-      orientAvgMs: avgMs,
-      orientP95Ms: p95 != null ? p95.toFixed(2) + ' ms' : '—'
+      receiveStage: core ? core.stage.toUpperCase() : 'UNAVAILABLE',
+      decodedSymbols: core ? core.stats.decodedSymbols : 0,
+      solvedBlocks: core ? (core.solvedCount + ' / ' + core.sourceCount) : '—',
+      totalBlocks: core ? core.sourceCount : '—'
     };
 
-    const r = this.orientLatest;
-    if (r && r.best) {
-      const best = r.best;
-      const tileCount = opticalCore && opticalCore.TILE_COUNT ? opticalCore.TILE_COUNT : 3;
-      patch.orientCandidate = best.orientationMode;
-      patch.orientLocked = r.locked ? 'LOCKED' : 'NOT LOCKED';
-      patch.orientExactTiles = best.exactTiles + ' / ' + tileCount;
-      patch.orientTotalErrors = Number.isFinite(best.totalBitErrors) ? String(best.totalBitErrors) : 'n/a';
-      patch.orientProjection = best.projectionSafe === true ? 'true' : best.projectionSafe === false ? 'false' : 'null';
-      patch.orientSupport = best.locatorSupport;
-      patch.orientReject = best.tripletRejectReason || '—';
-      patch.orientMarkers = (best.detectedMarkerComponentCount != null ? best.detectedMarkerComponentCount : 0) + ' components / ' + (best.validTripletMarkerCount != null ? best.validTripletMarkerCount : 0) + ' triplet markers';
+    if (core && core.orientation && core.orientation.best) {
+      const best = core.orientation.best;
+      patch.receiveSelectedTransform = core.normalizedMode || '—';
+      patch.receiveTripletValid = best.tripletValid ? 'true' : 'false';
+      patch.receiveSupport = best.locatorSupport;
+      patch.receiveExactTiles = best.exactTiles + ' / 3';
       patch.tileStatus = best.tiles.map(t =>
         'tile ' + t.tile + ': ' + (t.acquired ? (t.exact ? 'exact' : 'err ' + t.bitErrors) : 'miss')
       );
     }
 
-    patch.orientLastResultAge = this.orientLastAt ? (Date.now() - this.orientLastAt) + ' ms ago' : 'no result';
-    patch.orientPipelineError = (this.data.running && this.orientFramesReceived > ORIENT_EVERY && this.orientFramesProcessed === 0)
-      ? 'ERROR: ORIENTATION PIPELINE NOT RUNNING'
+    if (core && core.manifest) {
+      patch.manifestStatus = 'RECOVERED';
+      patch.manifestFileSize = core.manifest.file.byteLength + ' B';
+    }
+
+    patch.receivePipelineError = (this.data.running && this.receiveFramesReceived > 4 && this.receiveFramesProcessed === 0)
+      ? 'ERROR: RECEIVE PIPELINE NOT RUNNING'
       : '';
 
     this.setData(patch);
@@ -580,7 +632,7 @@ Page({
   },
 
   buildResultPayload() {
-    if (this.data.mode === 'orientation') return this.buildOrientationResultPayload();
+    if (this.data.mode === 'receive') return this.buildReceiveResultPayload();
     const elapsedMs = this.startedAt ? Date.now() - this.startedAt : 0;
     const callbackFps = elapsedMs > 0 ? (this.receivedFrames / (elapsedMs / 1000)).toFixed(2) : '0.00';
     const processingFps = elapsedMs > 0 ? (this.processedFrames / (elapsedMs / 1000)).toFixed(2) : '0.00';
@@ -655,53 +707,81 @@ Page({
     };
   },
 
-  buildOrientationResultPayload() {
+  buildReceiveResultPayload() {
     const elapsedMs = this.startedAt ? Date.now() - this.startedAt : 0;
     const callbackFps = elapsedMs > 0 ? (this.receivedFrames / (elapsedMs / 1000)).toFixed(2) : '0.00';
-    const acquisitionFps = elapsedMs > 0 ? (this.orientFramesProcessed / (elapsedMs / 1000)).toFixed(2) : '0.00';
-    const skipped = Math.max(0, this.orientFramesReceived - this.orientFramesProcessed);
-    const avgAcqMs = this.orientTimes.length
-      ? Number((this.orientTimes.reduce((a, b) => a + b, 0) / this.orientTimes.length).toFixed(3))
-      : null;
-    const p95AcqMs = this.percentile(this.orientTimes, 0.95);
+    const processingFps = elapsedMs > 0 ? (this.receiveFramesProcessed / (elapsedMs / 1000)).toFixed(2) : '0.00';
+    const skipped = Math.max(0, this.receiveFramesReceived - this.receiveFramesProcessed);
+    const core = this.receiveCore;
+    const stage = core ? core.stage : 'unavailable';
+    const bytes = core && core.complete ? core.reconstruct() : null;
+    const reconstructedSha = bytes ? opticalCore.sha256Hex(bytes) : null;
+    const manifestSha = core && core.manifest ? core.manifest.file.sha256 : null;
+    const shaMatch = reconstructedSha !== null && manifestSha !== null && reconstructedSha === manifestSha;
 
-    const r = this.orientLatest;
-    const best = r ? r.best : null;
-    const locked = !!(r && r.locked);
-    const tileCount = opticalCore && opticalCore.TILE_COUNT ? opticalCore.TILE_COUNT : 3;
-
-    const orientation = best
+    const orientation = core && core.orientation && core.orientation.best
       ? {
-          mode: best.orientationMode,
-          matrixSize: best.matrixSize,
-          exactTiles: best.exactTiles,
-          tileCount,
-          errors: Number.isFinite(best.totalBitErrors) ? best.totalBitErrors : null,
-          projection: best.projectionSafe,
-          locked,
-          support: best.locatorSupport,
-          detectedMarkerComponentCount: best.detectedMarkerComponentCount != null ? best.detectedMarkerComponentCount : 0,
-          validTripletMarkerCount: best.validTripletMarkerCount != null ? best.validTripletMarkerCount : 0,
-          tripletValid: !!best.tripletValid,
-          lockMode: best.lockMode || 'fallback-exhaustive',
-          tripletRejectReason: best.tripletRejectReason || null,
-          markerCandidates: best.markerCandidates || [],
-          tiles: best.tiles.map(t => ({
-            tile: t.tile,
-            acquired: t.acquired,
-            exact: t.exact,
-            bitErrors: Number.isFinite(t.bitErrors) ? t.bitErrors : null,
-            reason: t.reason || (t.acquired ? 'acquired' : 'not-acquired')
+          mode: core.orientation.best.orientationMode,
+          matrixSize: core.orientation.best.matrixSize,
+          exactTiles: core.orientation.best.exactTiles,
+          tileCount: opticalCore && opticalCore.TILE_COUNT ? opticalCore.TILE_COUNT : 3,
+          errors: Number.isFinite(core.orientation.best.totalBitErrors) ? core.orientation.best.totalBitErrors : null,
+          projection: core.orientation.best.projectionSafe,
+          locked: core.orientation.locked,
+          support: core.orientation.best.locatorSupport,
+          tripletValid: !!core.orientation.best.tripletValid,
+          lockMode: core.orientation.best.lockMode || 'fallback-exhaustive',
+          tripletRejectReason: core.orientation.best.tripletRejectReason || null,
+          selectedTransform: core.orientation.selectedTransform,
+          tiles: core.orientation.best.tiles.map(t => ({
+            tile: t.tile, acquired: t.acquired, exact: t.exact,
+            bitErrors: Number.isFinite(t.bitErrors) ? t.bitErrors : null
           }))
         }
-      : { locked: false, reason: 'no-acquisition-result', support: [], tiles: [] };
+      : { locked: false, reason: 'no-orientation-result' };
+
+    const manifest = core && core.manifest
+      ? {
+          protocol: core.manifest.protocol,
+          version: core.manifest.version,
+          file: { name: core.manifest.file.name, byteLength: core.manifest.file.byteLength },
+          matrixSize: core.manifest.transport.matrixSize,
+          fountainSourceBlockBytes: core.manifest.transport.fountainSourceBlockBytes,
+          fountainSeed: core.manifest.transport.fountainSeed
+        }
+      : null;
+
+    const dynamic = core
+      ? {
+          capturedFrames: core.stats.capturedFrames,
+          decodedSymbols: core.stats.decodedSymbols,
+          duplicateSymbols: core.stats.duplicateSymbols,
+          redundantSymbols: core.stats.redundantSymbols,
+          decodeFailures: core.stats.decodeFailures,
+          trackFallbacks: core.stats.trackFallbacks,
+          solvedBlocks: core.solvedCount,
+          totalBlocks: core.sourceCount
+        }
+      : null;
+
+    const reconstruction = core
+      ? {
+          status: core.complete ? 'complete' : 'incomplete',
+          reconstructedSize: bytes ? bytes.length : null,
+          reconstructedSha256: reconstructedSha,
+          manifestSha256: manifestSha,
+          shaMatch
+        }
+      : null;
 
     return {
-      evidenceClass: 'PHYSICAL MINI PROGRAM TF-007H ORIENTATION ACQUISITION',
+      evidenceClass: 'PHYSICAL MINI PROGRAM SHARED RECEIVE PIPELINE',
       buildId: this.data.buildId,
       appMode: this.data.mode,
-      note: 'Feasibility spike only. NOT Manifest PASS / throughput PASS / Net Goodput.',
+      stage,
+      note: 'Code path exists; this does NOT claim physical PASS. NOT Net Goodput.',
       networkPayloadPath: 'NONE',
+      localFilePath: this.data.localFilePath || null,
       timestamp: new Date().toISOString(),
       testDurationMs: elapsedMs,
       device: {
@@ -722,16 +802,15 @@ Page({
         frameFormat: this.data.frameFormat
       },
       orientation,
-      transformCandidates: r && r.transformCandidates ? r.transformCandidates : [],
-      selectedTransform: r && r.selectedTransform ? r.selectedTransform : null,
-      profile: r && r.profile ? r.profile : null,
+      manifest,
+      dynamic,
+      reconstruction,
+      sha256: { reconstructedSha256: reconstructedSha, manifestSha256: manifestSha, shaMatch },
       performance: {
         callbackFps: Number(callbackFps),
-        acquisitionFps: Number(acquisitionFps),
-        avgAcquisitionMs: avgAcqMs,
-        p95AcquisitionMs: p95AcqMs != null ? Number(p95AcqMs.toFixed(3)) : null,
-        receivedFrames: this.orientFramesReceived,
-        processedFrames: this.orientFramesProcessed,
+        processingFps: Number(processingFps),
+        receivedFrames: this.receiveFramesReceived,
+        processedFrames: this.receiveFramesProcessed,
         skippedFrames: skipped
       },
       errors: this.data.errors

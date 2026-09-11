@@ -1,7 +1,7 @@
 <view class="page">
   <view class="banner">OPTICAL CAMERA FRAME — LOCAL ONLY</view>
   <view class="netbanner">Network payload path: NONE</view>
-  <view class="orientbanner" wx:if="{{mode === 'orientation'}}">TF-007H ORIENTATION MODE ACTIVE · buildId {{buildId}}</view>
+  <view class="receivebanner" wx:if="{{mode === 'receive'}}">SHARED RECEIVE PIPELINE ACTIVE · buildId {{buildId}}</view>
   <view class="benchbanner" wx:if="{{mode === 'benchmark'}}">CAMERA BENCHMARK MODE ACTIVE · buildId {{buildId}}</view>
 
   <camera
@@ -19,7 +19,7 @@
     <button class="btn primary" bindtap="startCamera" disabled="{{running}}">Start Camera</button>
     <button class="btn" bindtap="stopCamera" disabled="{{!running}}">Stop Camera</button>
     <button class="btn" bindtap="resetMetrics">Reset Metrics</button>
-    <button class="btn modebtn {{mode === 'orientation' ? 'modeactive' : ''}}" data-mode="orientation" bindtap="onSelectMode">TF-007H Orientation Test</button>
+    <button class="btn modebtn {{mode === 'receive' ? 'modeactive' : ''}}" data-mode="receive" bindtap="onSelectMode">Shared Receive Pipeline</button>
     <button class="btn modebtn {{mode === 'benchmark' ? 'modeactive' : ''}}" data-mode="benchmark" bindtap="onSelectMode">Camera Benchmark</button>
     <button class="btn" wx:if="{{mode === 'benchmark'}}" bindtap="toggleHeavy">{{heavy ? 'Normalization 1280x720: ON' : 'Normalization 1280x720: OFF'}}</button>
   </view>
@@ -50,23 +50,22 @@
     <view class="row"><text class="k">data ingress</text><text class="v">{{ingressMBps}} MB/s</text></view>
   </view>
 
-  <view class="panel" wx:if="{{mode === 'orientation'}}">
-    <view class="section">TF-007H 64×64 orientation acquisition</view>
-    <view class="pipeline-error" wx:if="{{orientPipelineError}}">{{orientPipelineError}}</view>
-    <view class="row"><text class="k">self-check</text><text class="v">{{orientSelfCheck}}</text></view>
-    <view class="row"><text class="k">last result age</text><text class="v">{{orientLastResultAge}}</text></view>
-    <view class="row"><text class="k">acquisition attempts</text><text class="v">{{orientAttempts}}</text></view>
-    <view class="row"><text class="k">received / processed / skipped</text><text class="v">{{orientReceived}} / {{orientProcessed}} / {{orientSkipped}}</text></view>
-    <view class="row"><text class="k">candidate</text><text class="v">{{orientCandidate}}</text></view>
-    <view class="row"><text class="k">state</text><text class="v">{{orientLocked}}</text></view>
-    <view class="row"><text class="k">exact tiles</text><text class="v">{{orientExactTiles}}</text></view>
-    <view class="row"><text class="k">total errors</text><text class="v">{{orientTotalErrors}}</text></view>
-    <view class="row"><text class="k">projection safe</text><text class="v">{{orientProjection}}</text></view>
-    <view class="row"><text class="k">locator support</text><text class="v">{{orientSupport}}</text></view>
-    <view class="row"><text class="k">reject reason</text><text class="v">{{orientReject}}</text></view>
-    <view class="row"><text class="k">markers</text><text class="v">{{orientMarkers}}</text></view>
-    <view class="row"><text class="k">acquisition avg</text><text class="v">{{orientAvgMs}}</text></view>
-    <view class="row"><text class="k">acquisition p95</text><text class="v">{{orientP95Ms}}</text></view>
+  <view class="panel" wx:if="{{mode === 'receive'}}">
+    <view class="section">shared receive pipeline</view>
+    <view class="pipeline-error" wx:if="{{receivePipelineError}}">{{receivePipelineError}}</view>
+    <view class="row"><text class="k">self-check</text><text class="v">{{receiveSelfCheck}}</text></view>
+    <view class="row"><text class="k">stage</text><text class="v">{{receiveStage}}</text></view>
+    <view class="row"><text class="k">selected transform</text><text class="v">{{receiveSelectedTransform}}</text></view>
+    <view class="row"><text class="k">triplet valid</text><text class="v">{{receiveTripletValid}}</text></view>
+    <view class="row"><text class="k">locator support</text><text class="v">{{receiveSupport}}</text></view>
+    <view class="row"><text class="k">exact tiles</text><text class="v">{{receiveExactTiles}}</text></view>
+    <view class="row"><text class="k">manifest</text><text class="v">{{manifestStatus}}</text></view>
+    <view class="row"><text class="k">manifest file size</text><text class="v">{{manifestFileSize}}</text></view>
+    <view class="row"><text class="k">decoded symbols</text><text class="v">{{decodedSymbols}}</text></view>
+    <view class="row"><text class="k">solved blocks</text><text class="v">{{solvedBlocks}}</text></view>
+    <view class="row"><text class="k">reconstruction</text><text class="v">{{reconstructionStatus}}</text></view>
+    <view class="row"><text class="k">SHA-256</text><text class="v">{{shaStatus}}</text></view>
+    <view class="row"><text class="k">local file</text><text class="v">{{localFilePath}}</text></view>
     <view class="row" wx:for="{{tileStatus}}" wx:key="*this"><text class="k">per-tile</text><text class="v">{{item}}</text></view>
   </view>
 
