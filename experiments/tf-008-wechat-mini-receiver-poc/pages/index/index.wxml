@@ -68,6 +68,10 @@
     <view class="row"><text class="k">orientation attempts</text><text class="v">{{orientationAttempts}}</text></view>
     <view class="row"><text class="k">orientation success</text><text class="v">{{orientationSuccess}}</text></view>
     <view class="row"><text class="k">manifest acquisitions</text><text class="v">{{manifestAcquisitions}}</text></view>
+    <view class="row"><text class="k">preamble attempts</text><text class="v">{{preambleAttempts}}</text></view>
+    <view class="row"><text class="k">preamble success</text><text class="v">{{preambleSuccess}}</text></view>
+    <view class="row"><text class="k">preamble rejected/skipped</text><text class="v">{{preambleRejected}}</text></view>
+    <view class="row"><text class="k">last stage transition</text><text class="v">{{lastStageTransition}} {{lastStageTransitionAt}}</text></view>
     <view class="row"><text class="k">decoded symbols</text><text class="v">{{decodedSymbols}}</text></view>
     <view class="row"><text class="k">duplicates</text><text class="v">{{duplicates}}</text></view>
     <view class="row"><text class="k">redundant</text><text class="v">{{redundant}}</text></view>

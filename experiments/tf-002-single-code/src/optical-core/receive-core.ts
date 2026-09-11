@@ -36,6 +36,7 @@ import {
   type PixelLock,
 } from '../tiled-training-solver.ts';
 import {locateOrientationFiducials} from '../tiled-orientation-fiducial.ts';
+import {homographyFromUnitSquare, mapHomography} from '../optigrid-geometry.ts';
 import {
   decodeManifestObservation,
   summarizeManifestRecovery,
@@ -122,7 +123,13 @@ export class SharedOpticalReceiveCore {
     orientationAttempts: 0, // expensive fiducialOnly acquisitions actually run
     orientationSuccess: 0,  // acquisitions that produced locks
     manifestAcquisitions: 0,// distinct Manifest recoveries (session switches)
+    preambleAttempts: 0,    // expensive 96-lock attempts (cheap gate passed)
+    preambleSuccess: 0,     // successful 96-preamble locks (3/3 + namespace verified)
+    preambleRejectedOrSkipped: 0, // frames rejected by cheap gate or failed lock/verify
   };
+  /** Last protocol stage transition label + timestamp (PO diagnostics). */
+  lastStageTransition = 'IDLE';
+  lastStageTransitionAt = 0;
   /** Checkpoints of prior incomplete sessions, keyed by sessionKey. */
   readonly previousCheckpoints = new Map<string, ReceiveCheckpoint>();
 
@@ -130,6 +137,14 @@ export class SharedOpticalReceiveCore {
   private dataLocks: PixelLock[] = [];
   private decoder: FountainDecoder | null = null;
   private attempt = 0;
+
+  /** Record a stage transition once (idempotent re-plays do not spam the log). */
+  private setStage(next: ReceiveStage, label: string): void {
+    if (this.stage === next) return;
+    this.stage = next;
+    this.lastStageTransition = label;
+    this.lastStageTransitionAt = Date.now();
+  }
 
   /** Normalize a raw camera-like frame to the canonical 1280x720 buffer. */
   private normalized(frame: PixelFrame): PixelFrame {
@@ -172,6 +187,40 @@ export class SharedOpticalReceiveCore {
     return transitions <= 42;
   }
 
+  /**
+   * Cheap 96-preamble candidate gate (used while 'oriented' before the expensive
+   * full lock). Samples a coarse grid of the KNOWN preamble cell pattern through
+   * the orientation tile homography — no exhaustive search. A non-preamble frame
+   * (Manifest / dynamic symbol / beacon) matches ~50%, a real preamble ~100%.
+   * A wrong answer is safe: a false reject just waits one more broadcast cycle;
+   * a false accept is caught by the namespace verification in lockPreamble.
+   */
+  isLikelyPreamble(image: ImageData, matrixSize: number): boolean {
+    if (this.orientationLocks.length !== TILE_COUNT) return false;
+    for (let tile = 0; tile < TILE_COUNT; tile += 1) {
+      const lock = this.orientationLocks[tile];
+      const h = homographyFromUnitSquare(lock.quad);
+      if (!h) return false;
+      const cells = preambleCells(matrixSize, tile);
+      let matches = 0;
+      let samples = 0;
+      const start = 12;
+      const end = matrixSize - 12;
+      const step = 7;
+      for (let r = start; r < end; r += step) {
+        for (let c = start; c < end; c += step) {
+          const expectedBlack = cells[r * matrixSize + c] === 1;
+          const p = mapHomography(h, (c + 0.5) / matrixSize, (r + 0.5) / matrixSize);
+          const v = sampleLuma(image, p.x, p.y);
+          samples += 1;
+          if ((v < 128) === expectedBlack) matches += 1;
+        }
+      }
+      if (samples > 0 && matches / samples < 0.7) return false;
+    }
+    return true;
+  }
+
   get complete(): boolean {
     return this.decoder !== null && this.decoder.complete;
   }
@@ -201,6 +250,11 @@ export class SharedOpticalReceiveCore {
     this.eventCounts.orientationAttempts = 0;
     this.eventCounts.orientationSuccess = 0;
     this.eventCounts.manifestAcquisitions = 0;
+    this.eventCounts.preambleAttempts = 0;
+    this.eventCounts.preambleSuccess = 0;
+    this.eventCounts.preambleRejectedOrSkipped = 0;
+    this.lastStageTransition = 'IDLE';
+    this.lastStageTransitionAt = Date.now();
     this.previousCheckpoints.clear();
   }
 
@@ -212,23 +266,47 @@ export class SharedOpticalReceiveCore {
       this.orientationLocks = this.orientation.best.tiles
         .map((tile) => tile.lock)
         .filter((lock): lock is PixelLock => Boolean(lock));
-      this.stage = 'oriented';
+      this.setStage('oriented', 'ORIENTATION');
       this.eventCounts.orientationSuccess += 1;
     }
     return this.orientation;
   }
 
-  /** Stage 2: acquire the 3 preamble locks at the data matrix size. */
+  /**
+   * Stage 2: acquire the 3 preamble locks at the data matrix size.
+   *
+   * Physical cold-join tolerant: the frame after orientation is NOT assumed to
+   * be a preamble (camera latency can skip it). A cheap known-pattern gate runs
+   * first; only a plausible preamble frame triggers the expensive full lock.
+   * Every locked tile is then namespace-verified (0x54xxxxxx) so a false lock
+   * on a Manifest/symbol frame can never advance the stage with corrupt geometry.
+   */
   lockPreamble(frame: PixelFrame, matrixSize: number): boolean {
     const image = asImageData(this.normalized(frame));
+    this.eventCounts.preambleAttempts += 1;
+    if (!this.isLikelyPreamble(image, matrixSize)) {
+      this.eventCounts.preambleRejectedOrSkipped += 1;
+      return false;
+    }
     const locks: PixelLock[] = [];
     for (let tile = 0; tile < TILE_COUNT; tile += 1) {
       const lock = acquireKnownTrainingLock(image, matrixSize, preambleCells(matrixSize, tile), lane(tile));
-      if (!lock) return false;
+      if (!lock) {
+        this.eventCounts.preambleRejectedOrSkipped += 1;
+        return false;
+      }
+      // Namespace verification: a locked tile must decode to the 0x54 preamble
+      // beacon namespace. Prevents a false lock on Manifest/symbol content.
+      const decoded = decodeWithPixelLock(image, matrixSize, lock);
+      if (!decoded || (decoded.sequence & 0xff000000) !== 0x54000000) {
+        this.eventCounts.preambleRejectedOrSkipped += 1;
+        return false;
+      }
       locks.push(lock);
     }
     this.dataLocks = locks;
-    this.stage = 'preamble';
+    this.eventCounts.preambleSuccess += 1;
+    this.setStage('preamble', 'PREAMBLE');
     return true;
   }
 
@@ -241,16 +319,22 @@ export class SharedOpticalReceiveCore {
     this.attempt += 1;
     const image = asImageData(this.normalized(frame));
     const observation = decodeManifestObservation(image, matrixSize, this.dataLocks, this.attempt);
-    this.dataLocks = observation.locks;
     this.manifestRecovery = summarizeManifestRecovery(this.attempt, observation.recovered, observation.diagnostics);
-    if (observation.recovered.length === 0) return this.manifest !== null; // invalid → rejected, no change
+    if (observation.recovered.length === 0) {
+      // No Manifest on this frame (dynamic symbol / beacon / invalid). Do NOT
+      // drift the geometry locks on a non-Manifest frame — keep them pristine
+      // for the next real Manifest. Remain in PREAMBLE, no throw, no reset.
+      return this.manifest !== null;
+    }
+    // A Manifest was decoded: accept the observation's tracked (refined) locks.
+    this.dataLocks = observation.locks;
 
     const next = observation.recovered[0];
     const key = sessionKey(next);
 
     if (this.activeSessionKey === key) {
       // Idempotent replay of the active session — do not reset progress.
-      if (this.stage !== 'complete') this.stage = 'receiving';
+      this.setStage('receiving', 'MANIFEST');
       return true;
     }
 
@@ -268,7 +352,7 @@ export class SharedOpticalReceiveCore {
     const seed = next.transport.fountainSeed;
     const sourceCount = Math.ceil(next.file.byteLength / blockSize);
     this.decoder = new FountainDecoder(sourceCount, blockSize, seed);
-    this.stage = 'receiving';
+    this.setStage('receiving', 'MANIFEST');
 
     const existing = this.previousCheckpoints.get(key);
     if (existing) this.restoreCheckpoint(existing);
@@ -319,7 +403,7 @@ export class SharedOpticalReceiveCore {
         this.stats.redundantSymbols += 1;
       }
     }
-    if (this.decoder.complete) this.stage = 'complete';
+    if (this.decoder.complete) this.setStage('complete', 'COMPLETE');
     return decoded;
   }
 
@@ -402,7 +486,7 @@ export class SharedOpticalReceiveCore {
       this.decoder.addSymbol(index, base64ToBytes(data));
     }
     this.stats = {...checkpoint.stats};
-    this.stage = this.decoder.complete ? 'complete' : 'receiving';
+    this.setStage(this.decoder.complete ? 'complete' : 'receiving', 'MANIFEST');
     return true;
   }
 }

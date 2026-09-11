@@ -38,7 +38,7 @@ try {
 
 // Unmistakable build identifier — must be visible on the phone to prove the
 // device is running the latest shared-receive package (not a stale cache).
-const BUILD_ID = 'tf012-r2-9a3f321';
+const BUILD_ID = 'tf012-r3-7728b0c';
 
 // Checkpoint persistence (bounded cadence — never per camera frame). The
 // platform-neutral core owns checkpoint export/import; this adapter only does
@@ -98,6 +98,11 @@ Page({
     orientationAttempts: 0,
     orientationSuccess: 0,
     manifestAcquisitions: 0,
+    preambleAttempts: 0,
+    preambleSuccess: 0,
+    preambleRejected: 0,
+    lastStageTransition: '—',
+    lastStageTransitionAt: '—',
     duplicates: 0,
     redundant: 0,
     rejected: 0,
@@ -736,6 +741,11 @@ Page({
       orientationAttempts: core ? core.eventCounts.orientationAttempts : 0,
       orientationSuccess: core ? core.eventCounts.orientationSuccess : 0,
       manifestAcquisitions: core ? core.eventCounts.manifestAcquisitions : 0,
+      preambleAttempts: core ? core.eventCounts.preambleAttempts : 0,
+      preambleSuccess: core ? core.eventCounts.preambleSuccess : 0,
+      preambleRejected: core ? core.eventCounts.preambleRejectedOrSkipped : 0,
+      lastStageTransition: core ? core.lastStageTransition : '—',
+      lastStageTransitionAt: core && core.lastStageTransitionAt ? new Date(core.lastStageTransitionAt).toLocaleTimeString() : '—',
       solvedBlocks: core ? (core.solvedCount + ' / ' + core.sourceCount) : '—',
       totalBlocks: core ? core.sourceCount : '—'
     };
@@ -1001,7 +1011,12 @@ Page({
         beaconDetections: core ? core.eventCounts.beaconProbes : 0,
         orientationAttempts: core ? core.eventCounts.orientationAttempts : 0,
         orientationSuccess: core ? core.eventCounts.orientationSuccess : 0,
-        manifestAcquisitions: core ? core.eventCounts.manifestAcquisitions : 0
+        manifestAcquisitions: core ? core.eventCounts.manifestAcquisitions : 0,
+        preambleAttempts: core ? core.eventCounts.preambleAttempts : 0,
+        preambleSuccess: core ? core.eventCounts.preambleSuccess : 0,
+        preambleRejectedOrSkipped: core ? core.eventCounts.preambleRejectedOrSkipped : 0,
+        lastStageTransition: core ? core.lastStageTransition : 'IDLE',
+        lastStageTransitionAt: core && core.lastStageTransitionAt ? new Date(core.lastStageTransitionAt).toISOString() : null
       },
       performance: {
         callbackFps: Number(callbackFps),

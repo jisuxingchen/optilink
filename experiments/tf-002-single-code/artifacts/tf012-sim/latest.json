@@ -1,7 +1,7 @@
 {
   "evidenceClass": "SIMULATED REAL-TIME FRAME-CADENCE STRESS",
-  "generatedAt": "2026-09-11T07:54:19.839Z",
-  "gitHead": "287cc25688b83d421b0fa83b96377113e1cb60a7",
+  "generatedAt": "2026-09-11T13:59:48.448Z",
+  "gitHead": "e0ed40d4814201fafc8dbde688a98b21f1d2cdb6",
   "senderEntry": "/tiled-physical-v5.html?role=sender&standalone=broadcast&sessions=2&replayEvery=16",
   "replayEvery": 16,
   "acquisitionBeacon": "orientation(64) + preamble(96) emitted at the start of every broadcast cycle",
@@ -17,73 +17,73 @@
   "budgetInventory": {
     "wrapMs": {
       "n": 10,
-      "avg": 51.48,
-      "p50": 49.7,
-      "p95": 55.8,
-      "max": 57.1
+      "avg": 59.86,
+      "p50": 59.7,
+      "p95": 63.3,
+      "max": 67.8
     },
     "beaconProbeAcceptMs": {
       "n": 10,
-      "avg": 26.9,
-      "p50": 22.9,
-      "p95": 30.5,
-      "max": 52.5
+      "avg": 46.57,
+      "p50": 40.7,
+      "p95": 48.7,
+      "max": 110
     },
     "beaconProbeRejectMs": {
       "n": 10,
-      "avg": 22.43,
-      "p50": 22.5,
-      "p95": 26.6,
-      "max": 28.1
+      "avg": 32.39,
+      "p50": 31.3,
+      "p95": 36.9,
+      "max": 40.5
     },
     "orientationFiducialMs": {
       "n": 5,
-      "avg": 720.86,
-      "p50": 714.9,
-      "p95": 726,
-      "max": 754.3
+      "avg": 1083.16,
+      "p50": 1044.3,
+      "p95": 1161.3,
+      "max": 1228.8
     },
     "preambleLockMs": {
       "n": 5,
-      "avg": 3145.14,
-      "p50": 3390.4,
-      "p95": 3422.1,
-      "max": 3845.9
+      "avg": 3236.02,
+      "p50": 2993.2,
+      "p95": 3275.4,
+      "max": 4194
     },
     "manifestDecodeMs": {
       "n": 5,
-      "avg": 104.2,
-      "p50": 101.3,
-      "p95": 109.9,
-      "max": 118.3
+      "avg": 87.88,
+      "p50": 85.5,
+      "p95": 91.6,
+      "max": 109.6
     },
     "dynamicDecodeMs": {
       "n": 5,
-      "avg": 96,
-      "p50": 98.7,
-      "p95": 99,
-      "max": 99.2
+      "avg": 86.02,
+      "p50": 89,
+      "p95": 89.7,
+      "max": 91
     },
     "checkpointMs": {
       "n": 5,
-      "avg": 0.26,
-      "p50": 0.2,
-      "p95": 0.3,
-      "max": 0.6
+      "avg": 0.18,
+      "p50": 0.1,
+      "p95": 0.2,
+      "max": 0.5
     },
     "reconstructMs": {
       "n": 1,
-      "avg": 0.3,
-      "p50": 0.3,
-      "p95": 0.3,
-      "max": 0.3
+      "avg": 0.5,
+      "p50": 0.5,
+      "p95": 0.5,
+      "max": 0.5
     },
     "sha256Ms": {
       "n": 6,
-      "avg": 2.933,
-      "p50": 1.1,
-      "p95": 4.5,
-      "max": 5.7
+      "avg": 2.767,
+      "p50": 1.8,
+      "p95": 4.2,
+      "max": 4.5
     },
     "note": "dynamicDecodeMs includes track + decode + Fountain addSymbol (items 8+9). CameraFrame callback rate, UI setData, and local file write are measured on-device (Mini Program adapter)."
   },
@@ -94,46 +94,46 @@
       "complete": true,
       "shaMatch": true,
       "reconstructedSha": "191e27f4a771896d849e8d66c60a89996b6b974c5177dfcae75819195f11d819",
-      "producerFps": 4.14,
-      "processedFps": 4.14,
+      "producerFps": 5.09,
+      "processedFps": 5.09,
       "producerFrames": 58,
       "processedFrames": 58,
       "skippedBusyFrames": 0,
       "replacedFrames": 0,
       "maxQueueDepth": 1,
-      "usefulSymbolRate": 9.14,
-      "elapsedMs": 14010.8,
-      "reconstructMs": 0.2,
-      "shaMs": 35.3,
-      "orientationMs": 1120.1,
+      "usefulSymbolRate": 11.23,
+      "elapsedMs": 11401.3,
+      "reconstructMs": 0.3,
+      "shaMs": 2.3,
+      "orientationMs": 1020.8,
       "stageTimes": {
         "idle": {
           "n": 1,
-          "avg": 1120.1,
-          "p50": 1120.1,
-          "p95": 1120.1,
-          "max": 1120.1
+          "avg": 1020.8,
+          "p50": 1020.8,
+          "p95": 1020.8,
+          "max": 1020.8
         },
         "oriented": {
           "n": 1,
-          "avg": 3392.3,
-          "p50": 3392.3,
-          "p95": 3392.3,
-          "max": 3392.3
+          "avg": 2690.5,
+          "p50": 2690.5,
+          "p95": 2690.5,
+          "max": 2690.5
         },
         "preamble": {
           "n": 1,
-          "avg": 103.8,
-          "p50": 103.8,
-          "p95": 103.8,
-          "max": 103.8
+          "avg": 87.1,
+          "p50": 87.1,
+          "p95": 87.1,
+          "max": 87.1
         },
         "receiving": {
           "n": 55,
-          "avg": 105.484,
-          "p50": 93.5,
-          "p95": 170.1,
-          "max": 208.8
+          "avg": 81.313,
+          "p50": 72,
+          "p95": 124,
+          "max": 148.9
         }
       },
       "coreStats": {
@@ -152,46 +152,46 @@
       "complete": true,
       "shaMatch": true,
       "reconstructedSha": "191e27f4a771896d849e8d66c60a89996b6b974c5177dfcae75819195f11d819",
-      "producerFps": 4.16,
-      "processedFps": 4.16,
+      "producerFps": 4.82,
+      "processedFps": 4.82,
       "producerFrames": 58,
       "processedFrames": 58,
       "skippedBusyFrames": 0,
       "replacedFrames": 0,
       "maxQueueDepth": 1,
-      "usefulSymbolRate": 9.19,
-      "elapsedMs": 13930.1,
+      "usefulSymbolRate": 10.63,
+      "elapsedMs": 12043.9,
       "reconstructMs": 0.1,
-      "shaMs": 2.9,
-      "orientationMs": 1235,
+      "shaMs": 0.5,
+      "orientationMs": 1033.9,
       "stageTimes": {
         "idle": {
           "n": 1,
-          "avg": 1235,
-          "p50": 1235,
-          "p95": 1235,
-          "max": 1235
+          "avg": 1033.9,
+          "p50": 1033.9,
+          "p95": 1033.9,
+          "max": 1033.9
         },
         "oriented": {
           "n": 1,
-          "avg": 3196.6,
-          "p50": 3196.6,
-          "p95": 3196.6,
-          "max": 3196.6
+          "avg": 2508.4,
+          "p50": 2508.4,
+          "p95": 2508.4,
+          "max": 2508.4
         },
         "preamble": {
           "n": 1,
-          "avg": 91,
-          "p50": 91,
-          "p95": 91,
-          "max": 91
+          "avg": 70.1,
+          "p50": 70.1,
+          "p95": 70.1,
+          "max": 70.1
         },
         "receiving": {
           "n": 55,
-          "avg": 105.633,
-          "p50": 94.4,
-          "p95": 154,
-          "max": 210.2
+          "avg": 91.789,
+          "p50": 74,
+          "p95": 169.4,
+          "max": 235.3
         }
       },
       "coreStats": {
@@ -210,46 +210,46 @@
       "complete": true,
       "shaMatch": true,
       "reconstructedSha": "191e27f4a771896d849e8d66c60a89996b6b974c5177dfcae75819195f11d819",
-      "producerFps": 4.28,
-      "processedFps": 4.28,
+      "producerFps": 3.67,
+      "processedFps": 3.67,
       "producerFrames": 58,
       "processedFrames": 58,
       "skippedBusyFrames": 0,
       "replacedFrames": 0,
       "maxQueueDepth": 1,
-      "usefulSymbolRate": 9.46,
-      "elapsedMs": 13536.1,
-      "reconstructMs": 0.1,
-      "shaMs": 2.9,
-      "orientationMs": 1245.6,
+      "usefulSymbolRate": 8.1,
+      "elapsedMs": 15798.5,
+      "reconstructMs": 0.2,
+      "shaMs": 0.9,
+      "orientationMs": 781.4,
       "stageTimes": {
         "idle": {
           "n": 1,
-          "avg": 1245.6,
-          "p50": 1245.6,
-          "p95": 1245.6,
-          "max": 1245.6
+          "avg": 781.4,
+          "p50": 781.4,
+          "p95": 781.4,
+          "max": 781.4
         },
         "oriented": {
           "n": 1,
-          "avg": 3670.2,
-          "p50": 3670.2,
-          "p95": 3670.2,
-          "max": 3670.2
+          "avg": 2586.5,
+          "p50": 2586.5,
+          "p95": 2586.5,
+          "max": 2586.5
         },
         "preamble": {
           "n": 1,
-          "avg": 87,
-          "p50": 87,
-          "p95": 87,
-          "max": 87
+          "avg": 203.5,
+          "p50": 203.5,
+          "p95": 203.5,
+          "max": 203.5
         },
         "receiving": {
           "n": 55,
-          "avg": 95.596,
-          "p50": 84.3,
-          "p95": 159.5,
-          "max": 233
+          "avg": 138.475,
+          "p50": 133.4,
+          "p95": 209.5,
+          "max": 431.1
         }
       },
       "coreStats": {
@@ -270,7 +270,7 @@
     "allBounded": true
   },
   "timings": {
-    "totalMs": 81830.2,
+    "totalMs": 80265,
     "timingNote": "DESKTOP / SIMULATION timing only"
   },
   "note": "SIMULATION EVIDENCE ONLY. Not physical raw optical ingress. Not Net Goodput."
