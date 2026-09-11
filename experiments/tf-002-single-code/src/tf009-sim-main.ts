@@ -15,6 +15,7 @@
  */
 import {SharedOpticalReceiveCore} from './optical-core/receive-core.ts';
 import {normalizeFrame} from './optical-core/orientation-acquisition.ts';
+import {sha256Hex} from './optical-core/sha256.ts';
 import type {PixelFrame} from './optical-core/pixel-frame.ts';
 
 const SAMPLE_W = 1280;
@@ -64,14 +65,6 @@ function capture(frame: HTMLIFrameElement): PixelFrame {
   const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const raw: PixelFrame = {width: canvas.width, height: canvas.height, data: image.data};
   return normalizeFrame(raw, 'native', SAMPLE_W, SAMPLE_H);
-}
-
-async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', bytes as unknown as BufferSource);
-  const view = new Uint8Array(digest);
-  let out = '';
-  for (let i = 0; i < view.length; i += 1) out += view[i].toString(16).padStart(2, '0');
-  return out;
 }
 
 type SenderHandle = {
@@ -131,7 +124,7 @@ async function main(): Promise<void> {
   if (!bytes) {
     throw new Error('reconstruction incomplete: ' + core.solvedCount + '/' + core.sourceCount);
   }
-  const reconstructedSha = await sha256Hex(bytes);
+  const reconstructedSha = sha256Hex(bytes);
   const manifestSha = core.manifest.file.sha256;
   const shaMatch = reconstructedSha === manifestSha;
 

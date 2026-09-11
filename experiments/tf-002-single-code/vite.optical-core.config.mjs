@@ -8,7 +8,7 @@ export default defineConfig({
     outDir: 'dist-optical-core',
     emptyOutDir: true,
     lib: {
-      entry: fileURLToPath(new URL('./src/optical-core/orientation-acquisition.ts', import.meta.url)),
+      entry: fileURLToPath(new URL('./src/optical-core/index.ts', import.meta.url)),
       name: 'OpticalCore',
       formats: ['cjs'],
       fileName: () => 'optical-core.js',
