@@ -22,6 +22,7 @@
 import {encodeFrameCellsV1,payloadCapacityForMatrixV1} from '../optigrid-v1.ts';
 import {
   acquireKnownTrainingLock,
+  acquireKnownTrainingLockFiducial,
   countKnownErrors,
   getPhysicalAcquisitionDiagnostics,
   resetPhysicalAcquisitionDiagnostics,
@@ -242,7 +243,7 @@ function tripletRejectReason(fid: FiducialLocatorDiagnostic | null | undefined):
   return 'triplet-ok';
 }
 
-function calibrationFromImage(image: PixelFrame, matrixSize: number, mode: OrientationMode): CalibrationResult {
+function calibrationFromImage(image: PixelFrame, matrixSize: number, mode: OrientationMode, fiducialOnly: boolean = false): CalibrationResult {
   const started = Date.now();
   const imageData = asImageData(image);
   type Tile = {
@@ -252,10 +253,11 @@ function calibrationFromImage(image: PixelFrame, matrixSize: number, mode: Orien
   const tiles: Tile[] = [];
   let lockMs = 0, errorsMs = 0, refineMs = 0;
 
+  const lockAcquire = fiducialOnly ? acquireKnownTrainingLockFiducial : acquireKnownTrainingLock;
   for (let tile = 0; tile < TILE_COUNT; tile++) {
     const cells = preambleCells(matrixSize, tile);
     const tLock = Date.now();
-    const lock = acquireKnownTrainingLock(imageData, matrixSize, cells, lane(tile));
+    const lock = lockAcquire(imageData, matrixSize, cells, lane(tile));
     lockMs += Date.now() - tLock;
     if (!lock) {
       tiles.push({tile, acquired: false, exact: false, bitErrors: Number.MAX_SAFE_INTEGER, bits: 0, score: 0, contrast: 0, lock: null});
@@ -370,7 +372,7 @@ const PRE_SCAN_H = 180;
  * "find the locking orientation" outcome while avoiding full-res work on both
  * orientations when one is clearly correct.
  */
-export function acquireOrientation(frame: PixelFrame, candidates?: OrientationMode[]): OrientationAcquisition {
+export function acquireOrientation(frame: PixelFrame, candidates?: OrientationMode[], options?: {fiducialOnly?: boolean}): OrientationAcquisition {
   const t0 = Date.now();
   const modes = candidates ?? orientationCandidates(frame);
 
@@ -406,7 +408,7 @@ export function acquireOrientation(frame: PixelFrame, candidates?: OrientationMo
     const n0 = Date.now();
     const normalized = normalizeFrame(frame, mode, SAMPLE_WIDTH, SAMPLE_HEIGHT);
     normalizeMs += Date.now() - n0;
-    const r = calibrationFromImage(normalized, ORIENTATION_MATRIX, mode);
+    const r = calibrationFromImage(normalized, ORIENTATION_MATRIX, mode, Boolean(options?.fiducialOnly));
     lockMs += r.stage.lockMs; refineMs += r.stage.refineMs; errorsMs += r.stage.errorsMs; calibrationMs += r.stage.calibrationMs;
     results.push(r);
     return r;

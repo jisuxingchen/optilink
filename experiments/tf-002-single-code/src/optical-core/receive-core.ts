@@ -31,14 +31,17 @@ import type {PixelFrame} from './pixel-frame.ts';
 import {
   acquireKnownTrainingLock,
   decodeWithPixelLock,
+  sampleLuma,
   trackReservedLock,
   type PixelLock,
 } from '../tiled-training-solver.ts';
+import {locateOrientationFiducials} from '../tiled-orientation-fiducial.ts';
 import {
   decodeManifestObservation,
   summarizeManifestRecovery,
   type ManifestRecoveryResult,
 } from '../tf007g-manifest-recovery.ts';
+import {OLTP_MANIFEST_SEQUENCE_BASE} from '../oltp-optical-session.ts';
 import type {OltpManifestV1} from '../oltp-manifest.ts';
 import {FountainDecoder, type FountainAddResult} from '../fountain.ts';
 import {base64ToBytes, bytesToBase64} from './base64.ts';
@@ -122,6 +125,36 @@ export class SharedOpticalReceiveCore {
     return normalizeFrame(frame, this.normalizedMode ?? 'native', SAMPLE_WIDTH, SAMPLE_HEIGHT);
   }
 
+  /**
+   * Cheap orientation-beacon probe (used only while idle during cold late join).
+   * Counts luma transitions along a scanline through the middle tile: the 64-cell
+   * acquisition beacon has ~36 transitions, while 96-cell frames (preamble /
+   * Manifest / symbols) have ~58+. This avoids running the expensive training
+   * lock on every non-beacon frame. A wrong answer is safe (one frame wasted).
+   */
+  private isLikelyOrientationBeacon(image: ImageData): boolean {
+    const fid = locateOrientationFiducials(image);
+    const triplet = fid.triplet;
+    if (!triplet || triplet.support !== 'triplet') return false;
+    const point = triplet.points[1];
+    const side = triplet.estimatedTileSide;
+    const cy = Math.max(1, Math.min(image.height - 2, Math.round(point.y)));
+    const x0 = Math.max(1, Math.round(point.x - side / 2));
+    const x1 = Math.min(image.width - 2, Math.round(point.x + side / 2));
+    let minL = 255, maxL = 0;
+    for (let x = x0; x <= x1; x += 1) { const l = sampleLuma(image, x, cy); minL = Math.min(minL, l); maxL = Math.max(maxL, l); }
+    if (maxL - minL < 60) return false;
+    const threshold = (minL + maxL) / 2;
+    let transitions = 0;
+    let prev = sampleLuma(image, x0, cy) < threshold;
+    for (let x = x0 + 1; x <= x1; x += 1) {
+      const cur = sampleLuma(image, x, cy) < threshold;
+      if (cur !== prev) transitions += 1;
+      prev = cur;
+    }
+    return transitions <= 48;
+  }
+
   get complete(): boolean {
     return this.decoder !== null && this.decoder.complete;
   }
@@ -151,8 +184,8 @@ export class SharedOpticalReceiveCore {
   }
 
   /** Stage 1: orientation acquisition (verdict + shared geometry locks). */
-  acquireOrientation(frame: PixelFrame): OrientationAcquisition {
-    this.orientation = acquireOrientation(frame);
+  acquireOrientation(frame: PixelFrame, options?: {fiducialOnly?: boolean}): OrientationAcquisition {
+    this.orientation = acquireOrientation(frame, undefined, options);
     if (this.orientation.locked && this.orientation.best && this.orientation.best.orientationMode) {
       this.normalizedMode = this.orientation.best.orientationMode;
       this.orientationLocks = this.orientation.best.tiles
@@ -239,6 +272,19 @@ export class SharedOpticalReceiveCore {
         this.stats.decodeFailures += 1;
         continue;
       }
+      // Manifest frames carry the 'MF' sequence namespace — they are NOT fountain
+      // symbols. During dynamic reception a manifest frame is an idempotent replay
+      // (same session) or a session switch (different session).
+      if ((symbol.sequence & 0xffff0000) === OLTP_MANIFEST_SEQUENCE_BASE) {
+        this.readManifest(frame, matrixSize);
+        return decoded;
+      }
+      // Acquisition beacon frames (orientation 64 / preamble 96) use the
+      // 0x54000000 sequence namespace — they are beacons for late-joining
+      // receivers, not fountain symbols. Skip them during dynamic reception.
+      if ((symbol.sequence & 0xff000000) === 0x54000000) {
+        continue;
+      }
       const result: FountainAddResult = this.decoder.addSymbol(symbol.sequence, symbol.payload);
       if (result === 'accepted') {
         this.stats.decodedSymbols += 1;
@@ -257,6 +303,31 @@ export class SharedOpticalReceiveCore {
   reconstruct(): Uint8Array | null {
     if (!this.decoder || !this.manifest || !this.decoder.complete) return null;
     return this.decoder.reconstruct(this.manifest.file.byteLength);
+  }
+
+  /**
+   * Drive the whole state machine with a single rendered frame. This is the
+   * COLD LATE JOIN entry point: a completely fresh receiver (no orientation,
+   * no locks, no manifest, no decoder) feeds every captured frame here and the
+   * core greedily attempts the current stage, advancing only when it succeeds.
+   * Failed stage attempts (e.g. a symbol frame before the next acquisition
+   * beacon) are retried on later frames. No sender restart, no ACK.
+   */
+  processFrame(frame: PixelFrame, matrixSize: number): void {
+    switch (this.stage) {
+      case 'idle': {
+        // Cold late join: only attempt the (expensive) orientation lock when the
+        // frame is likely the 64-cell acquisition beacon.
+        if (this.isLikelyOrientationBeacon(asImageData(this.normalized(frame)))) {
+          this.acquireOrientation(frame, {fiducialOnly: true});
+        }
+        break;
+      }
+      case 'oriented': this.lockPreamble(frame, matrixSize); break;
+      case 'preamble': this.readManifest(frame, matrixSize); break;
+      case 'receiving': this.acceptDynamicFrame(frame, matrixSize); break;
+      default: break; // complete
+    }
   }
 
   /** Export a serializable checkpoint of the active session (or null if none). */

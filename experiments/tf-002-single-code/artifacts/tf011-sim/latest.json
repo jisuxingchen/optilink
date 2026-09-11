@@ -1,17 +1,17 @@
 {
   "evidenceClass": "SIMULATED BROWSER PIXEL BROADCAST RESUME ROBUSTNESS",
-  "generatedAt": "2026-09-11T03:28:47.823Z",
-  "gitHead": "e8186976eb458ded8c9f7f77c2bd8d22cd49e5d9",
+  "generatedAt": "2026-09-11T05:28:51.485Z",
+  "gitHead": "b74d40c2d3c0dfd1d5ee250fa61a0a7703aaf8ac",
   "senderEntry": "/tiled-physical-v5.html?role=sender&standalone=broadcast&sessions=2&replayEvery=16",
   "replayEvery": 16,
   "networkPayloadPath": "NONE",
   "oracleInputs": [],
   "summary": {
-    "total": 8,
-    "passed": 8
+    "total": 13,
+    "passed": 13
   },
   "timings": {
-    "totalMs": 41350.5,
+    "totalMs": 181846.2,
     "timingNote": "DESKTOP / SIMULATION timing only"
   },
   "cases": [
@@ -185,6 +185,111 @@
         "rejectedFrames": 0
       },
       "detail": ""
+    },
+    {
+      "id": "CA-beacon",
+      "pass": true,
+      "shaMatch": true,
+      "reconstructedSha": "191e27f4a771896d849e8d66c60a89996b6b974c5177dfcae75819195f11d819",
+      "stats": {
+        "rendered": 58,
+        "captured": 58,
+        "dropped": 0,
+        "duplicated": 0
+      },
+      "coreStats": {
+        "capturedFrames": 55,
+        "decodedSymbols": 128,
+        "duplicateSymbols": 0,
+        "redundantSymbols": 1,
+        "decodeFailures": 0,
+        "trackFallbacks": 6,
+        "rejectedFrames": 0
+      }
+    },
+    {
+      "id": "CB-after-beacon",
+      "pass": true,
+      "shaMatch": true,
+      "reconstructedSha": "191e27f4a771896d849e8d66c60a89996b6b974c5177dfcae75819195f11d819",
+      "stats": {
+        "rendered": 99,
+        "captured": 99,
+        "dropped": 0,
+        "duplicated": 0
+      },
+      "coreStats": {
+        "capturedFrames": 76,
+        "decodedSymbols": 130,
+        "duplicateSymbols": 0,
+        "redundantSymbols": 47,
+        "decodeFailures": 0,
+        "trackFallbacks": 9,
+        "rejectedFrames": 0
+      }
+    },
+    {
+      "id": "CC-mid-dynamic",
+      "pass": true,
+      "shaMatch": true,
+      "reconstructedSha": "191e27f4a771896d849e8d66c60a89996b6b974c5177dfcae75819195f11d819",
+      "stats": {
+        "rendered": 87,
+        "captured": 87,
+        "dropped": 0,
+        "duplicated": 0
+      },
+      "coreStats": {
+        "capturedFrames": 76,
+        "decodedSymbols": 130,
+        "duplicateSymbols": 0,
+        "redundantSymbols": 47,
+        "decodeFailures": 0,
+        "trackFallbacks": 9,
+        "rejectedFrames": 0
+      }
+    },
+    {
+      "id": "CD-before-manifest-replay",
+      "pass": true,
+      "shaMatch": true,
+      "reconstructedSha": "191e27f4a771896d849e8d66c60a89996b6b974c5177dfcae75819195f11d819",
+      "stats": {
+        "rendered": 80,
+        "captured": 80,
+        "dropped": 0,
+        "duplicated": 0
+      },
+      "coreStats": {
+        "capturedFrames": 76,
+        "decodedSymbols": 130,
+        "duplicateSymbols": 0,
+        "redundantSymbols": 47,
+        "decodeFailures": 0,
+        "trackFallbacks": 9,
+        "rejectedFrames": 0
+      }
+    },
+    {
+      "id": "CE-worst-case",
+      "pass": true,
+      "shaMatch": true,
+      "reconstructedSha": "191e27f4a771896d849e8d66c60a89996b6b974c5177dfcae75819195f11d819",
+      "stats": {
+        "rendered": 97,
+        "captured": 97,
+        "dropped": 0,
+        "duplicated": 0
+      },
+      "coreStats": {
+        "capturedFrames": 76,
+        "decodedSymbols": 130,
+        "duplicateSymbols": 0,
+        "redundantSymbols": 47,
+        "decodeFailures": 0,
+        "trackFallbacks": 9,
+        "rejectedFrames": 0
+      }
     }
   ],
   "note": "SIMULATION EVIDENCE ONLY. Not physical raw optical ingress. Not Net Goodput."

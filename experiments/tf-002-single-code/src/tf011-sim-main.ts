@@ -125,6 +125,46 @@ type CaseResult = {
   detail?: string;
 };
 
+function buildBeaconCycle(replayEvery: number, cycles: number): Array<{kind: 'orientation' | 'preamble' | 'manifest' | 'symbols'; index: number}> {
+  const out: Array<{kind: 'orientation' | 'preamble' | 'manifest' | 'symbols'; index: number}> = [];
+  let sym = 0;
+  for (let c = 0; c < cycles; c += 1) {
+    out.push({kind: 'orientation', index: 0});
+    out.push({kind: 'preamble', index: 0});
+    for (let rep = 0; rep < 3; rep += 1) out.push({kind: 'manifest', index: rep});
+    for (let i = 0; i < replayEvery; i += 1) { out.push({kind: 'symbols', index: sym}); sym += 1; }
+  }
+  return out;
+}
+
+// COLD late join: a completely fresh receiver (no orientation/locks/manifest/decoder)
+// joins a running broadcast at an arbitrary offset and must recover autonomously.
+function coldRun(id: string, sender: SenderHandle, frame: HTMLIFrameElement, startOffset: number): CaseResult {
+  try {
+    const core = new SharedOpticalReceiveCore();
+    const schedule = buildBeaconCycle(sender.replayEvery, 6);
+    let rendered = 0;
+    for (let i = startOffset; i < schedule.length; i += 1) {
+      rendered += 1;
+      const d = schedule[i];
+      if (d.kind === 'orientation') sender.renderOrientation();
+      else if (d.kind === 'preamble') sender.renderPreamble();
+      else if (d.kind === 'manifest') sender.renderManifest(d.index);
+      else sender.renderSymbols(d.index);
+      core.processFrame(capture(frame), MATRIX);
+      if (core.complete) {
+        const bytes = core.reconstruct();
+        const sha = bytes ? sha256Hex(bytes) : null;
+        const shaMatch = sha !== null && sha === sender.payloads[0].sha256;
+        return {id, pass: shaMatch, shaMatch, reconstructedSha: sha, stats: {rendered, captured: rendered, dropped: 0, duplicated: 0}, coreStats: {...core.stats}};
+      }
+    }
+    return {id, pass: false, shaMatch: false, reconstructedSha: null, stats: {rendered, captured: rendered, dropped: 0, duplicated: 0}, coreStats: {...core.stats}, detail: 'cold join did not complete'};
+  } catch (error) {
+    return {id, pass: false, shaMatch: false, reconstructedSha: null, stats: {rendered: 0, captured: 0, dropped: 0, duplicated: 0}, coreStats: {}, detail: String(error)};
+  }
+}
+
 function runCase(
   id: string,
   core: SharedOpticalReceiveCore,
@@ -247,6 +287,21 @@ async function main(): Promise<void> {
     cases.push({id: 'H-invalid-manifest', pass: preserved, shaMatch: false, reconstructedSha: null, stats: {rendered: 0, captured: 0, dropped: 0, duplicated: 0}, coreStats: {...core.stats}, detail: preserved ? '' : 'session was replaced by invalid manifest'});
   }
 
+  // COLD late join matrix: fresh receiver (no orientation/locks/manifest/decoder)
+  // joins the running broadcast at every join point and recovers autonomously.
+  const cycleLen = 5 + sender.replayEvery;
+  const coldPoints: Array<[string, number]> = [
+    ['CA-beacon', 0],
+    ['CB-after-beacon', 1],
+    ['CC-mid-dynamic', 5 + Math.floor(sender.replayEvery / 2)],
+    ['CD-before-manifest-replay', cycleLen - 1],
+    ['CE-worst-case', 3],
+  ];
+  for (const [label, offset] of coldPoints) {
+    log('cold join: ' + label);
+    cases.push(coldRun(label, sender, frame, offset));
+  }
+
   const totalMs = Math.round((performance.now() - startedAt) * 10) / 10;
   const result = {
     done: true,
@@ -256,6 +311,12 @@ async function main(): Promise<void> {
     networkPayloadPath: 'NONE',
     oracleInputs: [],
     replayEvery: sender.replayEvery,
+    acquisitionBeacon: 'orientation(64) + preamble(96) emitted at the start of every broadcast cycle',
+    evidenceCategories: {
+      browserPixelIntegration: ['A-start-0', 'B-late-join', 'C-20pct-drop', 'D-30pct-dup', 'E-checkpoint-restore', 'CA-beacon', 'CB-after-beacon', 'CC-mid-dynamic', 'CD-before-manifest-replay', 'CE-worst-case'],
+      sharedCoreProtocolUnit: ['F-session-isolation', 'G-repeated-manifest', 'H-invalid-manifest'],
+      note: 'F/G/H exercise shared-core session/state logic (also driven through real sender pixels here). H success = correct rejection + session preservation (no shaMatch required).',
+    },
     cases,
     summary: {total: cases.length, passed: cases.filter(c => c.pass).length},
     timings: {totalMs, timingNote: 'DESKTOP / SIMULATION timing only'},

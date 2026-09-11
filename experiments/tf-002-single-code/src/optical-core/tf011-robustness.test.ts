@@ -270,3 +270,93 @@ test('H: invalid / stale Manifest rejected; current valid session preserved', ()
   assert.equal(core.activeSessionKey, sessionKey(stale.manifest), 'explicit session switch to new valid session');
   assert.ok(core.previousCheckpoints.has(key), 'H checkpoint preserved on switch');
 });
+
+// ---- COLD LATE JOIN (receiver may join at any time) ----
+
+type BeaconKind = 'orientation' | 'preamble' | 'manifest' | 'symbols';
+
+function* beaconBroadcast(replayEvery: number, maxSymFrames: number): Generator<{kind: BeaconKind; index: number}> {
+  let sym = 0;
+  while (sym < maxSymFrames) {
+    yield {kind: 'orientation', index: 0};
+    yield {kind: 'preamble', index: 0};
+    for (let rep = 0; rep < 3; rep += 1) yield {kind: 'manifest', index: rep};
+    for (let i = 0; i < replayEvery && sym < maxSymFrames; i += 1) {
+      yield {kind: 'symbols', index: sym};
+      sym += 1;
+    }
+  }
+}
+
+function beaconFrame(fixture: SessionFixture, kind: BeaconKind, index: number): PixelFrame {
+  if (kind === 'orientation') return normalizeFrame(render1920([0, 1, 2].map(t => preambleCells(64, t)), 64), 'native', 1280, 720);
+  if (kind === 'preamble') return normalizeFrame(render1920([0, 1, 2].map(t => preambleCells(MATRIX, t)), MATRIX), 'native', 1280, 720);
+  return fixture.frame(kind, index);
+}
+
+function coldJoin(fixture: SessionFixture, replayEvery: number, startOffset: number): {complete: boolean; renderedFrames: number; reconstructedSha: string | null} {
+  // Completely fresh receiver — no orientation, no PixelLocks, no Manifest, no decoder, no checkpoint.
+  const core = new SharedOpticalReceiveCore();
+  const schedule = [...beaconBroadcast(replayEvery, MAX_SYM_FRAMES)];
+  let rendered = 0;
+  for (let i = startOffset; i < schedule.length; i += 1) {
+    rendered += 1;
+    core.processFrame(beaconFrame(fixture, schedule[i].kind, schedule[i].index), MATRIX);
+    if (core.complete) {
+      const bytes = core.reconstruct();
+      return {complete: true, renderedFrames: rendered, reconstructedSha: bytes ? sha256Hex(bytes) : null};
+    }
+  }
+  return {complete: false, renderedFrames: rendered, reconstructedSha: null};
+}
+
+test('COLD late join matrix: fresh receiver at any join point → exact SHA', () => {
+  const fixture = new SessionFixture('cold', 0xc0c0);
+  const replayEvery = 16;
+  const cycleLen = 5 + replayEvery; // orientation + preamble + 3 manifest + N symbols
+  const joinPoints: Array<[string, number]> = [
+    ['A-beacon', 0],
+    ['B-after-beacon', 1],
+    ['C-mid-dynamic', 5 + Math.floor(replayEvery / 2)],
+    ['D-before-manifest-replay', cycleLen - 1],
+    ['E-worst-case', 3],
+  ];
+  for (const [label, offset] of joinPoints) {
+    const r = coldJoin(fixture, replayEvery, offset);
+    assert.equal(r.complete, true, `${label} cold join completes`);
+    assert.equal(r.reconstructedSha, fixture.sha, `${label} exact SHA`);
+  }
+});
+
+test('replay interval comparison 16/32/64 (cold join, worst-case point)', () => {
+  const fixture = new SessionFixture('replay', 0xd0d0);
+  for (const replayEvery of [16, 32, 64]) {
+    const r = coldJoin(fixture, replayEvery, 3);
+    assert.equal(r.complete, true, `replayEvery=${replayEvery} completes`);
+    assert.equal(r.reconstructedSha, fixture.sha, `replayEvery=${replayEvery} exact SHA`);
+    console.log(`[tf011-replay] replayEvery=${replayEvery} renderedFramesUntilReconstruct=${r.renderedFrames}`);
+  }
+});
+
+test('repair-heavy checkpoint: unsolved equations discarded safely → exact SHA', () => {
+  const fixture = new SessionFixture('repair', 0xbaba);
+  const core = new SharedOpticalReceiveCore();
+  orientAndPreamble(core);
+  core.readManifest(fixture.frame('manifest', 0), MATRIX); // establish session before symbols
+  // Miss degree-1 symbols 0..47; collect through the repair phase (ids >= 128).
+  for (let i = 16; i < 50; i += 1) core.acceptDynamicFrame(fixture.frame('symbols', i), MATRIX);
+  assert.ok(core.solvedCount > 0, 'progress made');
+  assert.equal(core.complete, false, 'not complete at checkpoint');
+
+  const cp = core.exportCheckpoint();
+  assert.ok(cp && cp.solvedBlocks.length > 0, 'checkpoint exported');
+  const restored = JSON.parse(JSON.stringify(cp)) as typeof cp;
+
+  const core2 = new SharedOpticalReceiveCore();
+  assert.equal(core2.restoreCheckpoint(restored), true, 'restore');
+  for (let i = 50; i < 240 && !core2.complete; i += 1) core2.acceptDynamicFrame(fixture.frame('symbols', i), MATRIX);
+  assert.equal(core2.complete, true, 'resume completes');
+  const bytes = core2.reconstruct();
+  assert.ok(bytes, 'resume reconstruction available');
+  assert.equal(sha256Hex(bytes), fixture.sha, 'exact SHA after repair-heavy resume');
+});

@@ -31,13 +31,15 @@ test('TF-011 broadcast/resume/session robustness (real sender → pixels → mat
   expect(result.oracleInputs).toEqual([]);
 
   const byId = new Map(result.cases.map((c) => [c.id, c]));
-  for (const id of ['A-start-0', 'B-late-join', 'C-20pct-drop', 'D-30pct-dup', 'E-checkpoint-restore', 'F-session-isolation', 'G-repeated-manifest', 'H-invalid-manifest']) {
+  const allCases = ['A-start-0', 'B-late-join', 'C-20pct-drop', 'D-30pct-dup', 'E-checkpoint-restore', 'F-session-isolation', 'G-repeated-manifest', 'H-invalid-manifest', 'CA-beacon', 'CB-after-beacon', 'CC-mid-dynamic', 'CD-before-manifest-replay', 'CE-worst-case'];
+  for (const id of allCases) {
     const c = byId.get(id);
     expect(c, `missing case ${id}`).toBeTruthy();
     expect(c.pass, `${id} (${c.detail || ''})`).toBe(true);
   }
-  // SHA-exact cases must carry a matching digest.
-  for (const id of ['A-start-0', 'B-late-join', 'C-20pct-drop', 'D-30pct-dup', 'E-checkpoint-restore', 'F-session-isolation', 'G-repeated-manifest']) {
+  // SHA-exact cases must carry a matching digest (H is rejection-only, no shaMatch).
+  const shaCases = ['A-start-0', 'B-late-join', 'C-20pct-drop', 'D-30pct-dup', 'E-checkpoint-restore', 'F-session-isolation', 'G-repeated-manifest', 'CA-beacon', 'CB-after-beacon', 'CC-mid-dynamic', 'CD-before-manifest-replay', 'CE-worst-case'];
+  for (const id of shaCases) {
     expect(byId.get(id).shaMatch, `${id} shaMatch`).toBe(true);
     expect(byId.get(id).reconstructedSha).toMatch(/^[0-9a-f]{64}$/);
   }
