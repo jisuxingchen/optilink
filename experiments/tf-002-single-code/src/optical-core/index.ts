@@ -7,7 +7,7 @@
  * implementation — one algorithm, two platform adapters.
  */
 export * from './orientation-acquisition.ts';
-export {SharedOpticalReceiveCore} from './receive-core.ts';
-export type {ReceiveStage, DynamicFrameStats} from './receive-core.ts';
+export {SharedOpticalReceiveCore, sessionKey} from './receive-core.ts';
+export type {ReceiveStage, DynamicFrameStats, ReceiveCheckpoint} from './receive-core.ts';
 export {sha256, sha256Hex} from './sha256.ts';
 export type {PixelFrame} from './pixel-frame.ts';

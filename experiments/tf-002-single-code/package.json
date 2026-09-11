@@ -20,7 +20,8 @@
     "bench:temporal": "playwright test tiled-temporal.spec.mjs --config=playwright.config.mjs --reporter=line",
     "bench:physical-selftest": "playwright test tiled-physical-selftest.spec.mjs tiled-locator-selftest.spec.mjs tiled-buffered-selftest.spec.mjs tiled-orientation-selftest.spec.mjs --workers=1 --config=playwright.config.mjs --reporter=line",
     "test:tf008-sim": "playwright test tf008-sim.spec.mjs --config=playwright.tf008-sim.config.mjs --workers=1 --reporter=line",
-    "test:tf009-sim": "playwright test tf009-sim.spec.mjs --config=playwright.tf009-sim.config.mjs --workers=1 --reporter=line"
+    "test:tf009-sim": "playwright test tf009-sim.spec.mjs --config=playwright.tf009-sim.config.mjs --workers=1 --reporter=line",
+    "test:tf011-sim": "playwright test tf011-sim.spec.mjs --config=playwright.tf011-sim.config.mjs --workers=1 --reporter=line"
   },
   "dependencies": {
     "@zxing/browser": "0.2.1",

@@ -233,6 +233,21 @@ export class FountainDecoder {
     return output;
   }
 
+  /**
+   * Snapshot of the currently solved source blocks (index + block bytes).
+   * This is a STABLE, serializable representation — unlike the internal
+   * equations/adjacency structures — and is sufficient to deterministically
+   * rebuild decoder progress by re-adding each block as a degree-1 symbol.
+   */
+  solvedBlocksSnapshot(): Array<{index: number; block: Uint8Array}> {
+    const out: Array<{index: number; block: Uint8Array}> = [];
+    for (let i = 0; i < this.solvedBlocks.length; i += 1) {
+      const block = this.solvedBlocks[i];
+      if (block) out.push({index: i, block: block.slice()});
+    }
+    return out;
+  }
+
   private solveBlock(index: number, payload: Uint8Array): void {
     const queue: Array<{index: number; payload: Uint8Array}> = [{index, payload: payload.slice()}];
     while (queue.length) {

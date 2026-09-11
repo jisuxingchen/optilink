@@ -54,6 +54,8 @@
     <view class="section">shared receive pipeline</view>
     <view class="pipeline-error" wx:if="{{receivePipelineError}}">{{receivePipelineError}}</view>
     <view class="row"><text class="k">self-check</text><text class="v">{{receiveSelfCheck}}</text></view>
+    <view class="row"><text class="k">product state</text><text class="v">{{productStage}}</text></view>
+    <view class="row"><text class="k">file</text><text class="v">{{fileName}}</text></view>
     <view class="row"><text class="k">stage</text><text class="v">{{receiveStage}}</text></view>
     <view class="row"><text class="k">selected transform</text><text class="v">{{receiveSelectedTransform}}</text></view>
     <view class="row"><text class="k">triplet valid</text><text class="v">{{receiveTripletValid}}</text></view>

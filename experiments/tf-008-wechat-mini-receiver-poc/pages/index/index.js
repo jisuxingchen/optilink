@@ -30,6 +30,24 @@ const opticalCore = require('../../utils/optical-core.js');
 // device is running the latest shared-receive package (not a stale cache).
 const BUILD_ID = 'tf010-r1';
 
+// Checkpoint persistence (bounded cadence — never per camera frame). The
+// platform-neutral core owns checkpoint export/import; this adapter only does
+// storage I/O behind a small swappable interface.
+const CHECKPOINT_KEY = 'optilink.tf011.receiveCheckpoint.v1';
+const CHECKPOINT_EVERY_TICKS = 4; // ~2s at UI_REFRESH_MS=500
+
+const storageAdapter = {
+  save(key, value) {
+    try { wx.setStorageSync(key, value); return true; } catch (err) { return false; }
+  },
+  load(key) {
+    try { return wx.getStorageSync(key) || null; } catch (err) { return null; }
+  },
+  remove(key) {
+    try { wx.removeStorageSync(key); } catch (err) { /* ignore */ }
+  }
+};
+
 Page({
   data: {
     // lifecycle
@@ -44,6 +62,8 @@ Page({
     networkPath: 'NONE',
 
     // receive mode state (SharedOpticalReceiveCore)
+    productStage: 'Waiting for transfer',
+    fileName: '—',
     receiveStage: 'IDLE',
     receiveSelectedTransform: '—',
     receiveTripletValid: '—',
@@ -140,6 +160,7 @@ Page({
   receiveFramesSkipped: 0,
   receiveTimes: [],            // ms per processed frame
   receiveFinalized: false,     // reconstruction + SHA already finalized
+  checkpointTick: 0,           // bounded checkpoint cadence counter
 
   onLoad() {
     this.collectDeviceEvidence();
@@ -155,6 +176,12 @@ Page({
     this.appendLog('OptiLink shared receive pipeline ready. Payload is OPTICAL-ONLY.');
     this.appendLog('Network payload path: NONE (no network APIs used).');
     this.runReceiveSelfCheck();
+    this.restorePersistedCheckpoint();
+  },
+
+  onHide() {
+    // App going to background: checkpoint if an incomplete session is active.
+    this.persistCheckpoint();
   },
 
   onUnload() {
@@ -247,6 +274,7 @@ Page({
     this.receiveFramesSkipped = 0;
     this.receiveTimes = [];
     this.receiveFinalized = false;
+    this.checkpointTick = 0;
     this.windowStartAt = Date.now();
     this.windowReceived = 0;
     this.windowProcessed = 0;
@@ -278,6 +306,8 @@ Page({
       normalizeP95Ms: '—',
       normalizeFps: '0.0',
       normalizeSamples: 0,
+      productStage: 'Waiting for transfer',
+      fileName: '—',
       receiveStage: 'IDLE',
       receiveSelectedTransform: '—',
       receiveTripletValid: '—',
@@ -474,6 +504,30 @@ Page({
     }
   },
 
+  // Persist the active incomplete session as a checkpoint (bounded, not per frame).
+  persistCheckpoint() {
+    const core = this.receiveCore;
+    if (!core || core.complete || !core.manifest) return;
+    const cp = core.exportCheckpoint();
+    if (!cp) return;
+    const ok = storageAdapter.save(CHECKPOINT_KEY, JSON.stringify(cp));
+    if (ok) this.appendLog('checkpoint saved: ' + cp.solvedCount + '/' + cp.totalBlocks);
+  },
+
+  // Restore an incomplete session from storage on cold start.
+  restorePersistedCheckpoint() {
+    const raw = storageAdapter.load(CHECKPOINT_KEY);
+    if (!raw) return;
+    let cp;
+    try { cp = JSON.parse(raw); } catch (err) { storageAdapter.remove(CHECKPOINT_KEY); return; }
+    if (!cp || cp.version !== 1) { storageAdapter.remove(CHECKPOINT_KEY); return; }
+    if (this.receiveCore && this.receiveCore.restoreCheckpoint(cp)) {
+      this.appendLog('checkpoint restored: ' + cp.solvedCount + '/' + cp.totalBlocks);
+    } else {
+      storageAdapter.remove(CHECKPOINT_KEY);
+    }
+  },
+
   // ---- periodic tick -----------------------------------------------------
   onTick() {
     if (this.data.frozen) return;
@@ -563,6 +617,9 @@ Page({
     const bufferBytes = this.data.frameBufferBytes || 0;
     const ingressMBps = ((bufferBytes * Number(callbackFps)) / 1e6).toFixed(3);
     const core = this.receiveCore;
+    const productStage = core
+      ? (core.complete ? 'Verifying SHA-256' : core.stage === 'receiving' ? 'Receiving' : core.stage === 'idle' ? 'Waiting for transfer' : 'Detecting')
+      : 'Waiting for transfer';
 
     const patch = {
       callbackFps,
@@ -574,6 +631,7 @@ Page({
       avgProcessMs: avgMs,
       p95ProcessMs: p95 != null ? p95.toFixed(2) + ' ms' : '—',
       ingressMBps,
+      productStage,
       receiveStage: core ? core.stage.toUpperCase() : 'UNAVAILABLE',
       decodedSymbols: core ? core.stats.decodedSymbols : 0,
       solvedBlocks: core ? (core.solvedCount + ' / ' + core.sourceCount) : '—',
@@ -594,6 +652,14 @@ Page({
     if (core && core.manifest) {
       patch.manifestStatus = 'RECOVERED';
       patch.manifestFileSize = core.manifest.file.byteLength + ' B';
+      patch.fileName = core.manifest.file.name;
+    }
+
+    // Bounded checkpoint cadence (every CHECKPOINT_EVERY_TICKS ticks, not per frame).
+    this.checkpointTick += 1;
+    if (this.checkpointTick >= CHECKPOINT_EVERY_TICKS) {
+      this.checkpointTick = 0;
+      this.persistCheckpoint();
     }
 
     patch.receivePipelineError = (this.data.running && this.receiveFramesReceived > 4 && this.receiveFramesProcessed === 0)
