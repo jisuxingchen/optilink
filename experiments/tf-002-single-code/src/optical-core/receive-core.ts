@@ -41,6 +41,7 @@ import {
 } from '../tf007g-manifest-recovery.ts';
 import type {OltpManifestV1} from '../oltp-manifest.ts';
 import {FountainDecoder, type FountainAddResult} from '../fountain.ts';
+import {base64ToBytes, bytesToBase64} from './base64.ts';
 
 export type ReceiveStage = 'idle' | 'oriented' | 'preamble' | 'receiving' | 'complete';
 
@@ -51,12 +52,53 @@ export type DynamicFrameStats = {
   redundantSymbols: number;
   decodeFailures: number;
   trackFallbacks: number;
+  rejectedFrames: number;
+};
+
+export type ReceiveCheckpoint = {
+  version: 1;
+  sessionKey: string;
+  manifest: OltpManifestV1;
+  solvedBlocks: Array<{index: number; data: string}>; // base64 per solved block
+  solvedCount: number;
+  totalBlocks: number;
+  normalizedMode: OrientationMode | null;
+  dataLocks: PixelLock[]; // serializable geometric lock (stable struct)
+  stats: DynamicFrameStats;
+  updatedAt: number;
 };
 
 const TILE_COUNT = 3;
 
+const EMPTY_STATS: DynamicFrameStats = {
+  capturedFrames: 0,
+  decodedSymbols: 0,
+  duplicateSymbols: 0,
+  redundantSymbols: 0,
+  decodeFailures: 0,
+  trackFallbacks: 0,
+  rejectedFrames: 0,
+};
+
 function asImageData(frame: PixelFrame): ImageData {
   return frame as unknown as ImageData;
+}
+
+/**
+ * Canonical session identity for an OLTP Manifest. A dynamic symbol is only
+ * ever routed to the decoder of the session whose Manifest produced this key.
+ */
+export function sessionKey(manifest: OltpManifestV1): string {
+  return [
+    manifest.protocol,
+    manifest.version,
+    manifest.sessionId,
+    manifest.file.sha256,
+    manifest.file.byteLength,
+    manifest.transport.matrixSize,
+    manifest.transport.fountainSourceBlockBytes,
+    manifest.transport.fountainSeed,
+  ].join('|');
 }
 
 export class SharedOpticalReceiveCore {
@@ -65,14 +107,10 @@ export class SharedOpticalReceiveCore {
   normalizedMode: OrientationMode | null = null;
   manifest: OltpManifestV1 | null = null;
   manifestRecovery: ManifestRecoveryResult | null = null;
-  stats: DynamicFrameStats = {
-    capturedFrames: 0,
-    decodedSymbols: 0,
-    duplicateSymbols: 0,
-    redundantSymbols: 0,
-    decodeFailures: 0,
-    trackFallbacks: 0,
-  };
+  activeSessionKey: string | null = null;
+  stats: DynamicFrameStats = {...EMPTY_STATS};
+  /** Checkpoints of prior incomplete sessions, keyed by sessionKey. */
+  readonly previousCheckpoints = new Map<string, ReceiveCheckpoint>();
 
   private orientationLocks: PixelLock[] = [];
   private dataLocks: PixelLock[] = [];
@@ -94,6 +132,22 @@ export class SharedOpticalReceiveCore {
 
   get sourceCount(): number {
     return this.decoder ? this.decoder.sourceCount : 0;
+  }
+
+  /** Reset to idle for a fresh deterministic scenario (keeps no decoder state). */
+  reset(): void {
+    this.stage = 'idle';
+    this.orientation = null;
+    this.normalizedMode = null;
+    this.manifest = null;
+    this.manifestRecovery = null;
+    this.activeSessionKey = null;
+    this.orientationLocks = [];
+    this.dataLocks = [];
+    this.decoder = null;
+    this.attempt = 0;
+    this.stats = {...EMPTY_STATS};
+    this.previousCheckpoints.clear();
   }
 
   /** Stage 1: orientation acquisition (verdict + shared geometry locks). */
@@ -134,21 +188,42 @@ export class SharedOpticalReceiveCore {
     const observation = decodeManifestObservation(image, matrixSize, this.dataLocks, this.attempt);
     this.dataLocks = observation.locks;
     this.manifestRecovery = summarizeManifestRecovery(this.attempt, observation.recovered, observation.diagnostics);
-    if (observation.recovered.length > 0 && !this.manifest) {
-      this.manifest = observation.recovered[0];
-      const blockSize = this.manifest.transport.fountainSourceBlockBytes;
-      const seed = this.manifest.transport.fountainSeed;
-      const sourceCount = Math.ceil(this.manifest.file.byteLength / blockSize);
-      this.decoder = new FountainDecoder(sourceCount, blockSize, seed);
-      this.stage = 'receiving';
+    if (observation.recovered.length === 0) return this.manifest !== null; // invalid → rejected, no change
+
+    const next = observation.recovered[0];
+    const key = sessionKey(next);
+
+    if (this.activeSessionKey === key) {
+      // Idempotent replay of the active session — do not reset progress.
+      if (this.stage !== 'complete') this.stage = 'receiving';
       return true;
     }
-    return this.manifest !== null;
+
+    // Different session: preserve the current incomplete checkpoint, then switch.
+    if (this.activeSessionKey && this.decoder && !this.decoder.complete) {
+      const cp = this.exportCheckpoint();
+      if (cp) this.previousCheckpoints.set(this.activeSessionKey, cp);
+    }
+
+    this.manifest = next;
+    this.activeSessionKey = key;
+    const blockSize = next.transport.fountainSourceBlockBytes;
+    const seed = next.transport.fountainSeed;
+    const sourceCount = Math.ceil(next.file.byteLength / blockSize);
+    this.decoder = new FountainDecoder(sourceCount, blockSize, seed);
+    this.stage = 'receiving';
+
+    const existing = this.previousCheckpoints.get(key);
+    if (existing) this.restoreCheckpoint(existing);
+    return true;
   }
 
   /** Stage 4: decode one rendered dynamic frame (3 symbols) into the fountain decoder. */
   acceptDynamicFrame(frame: PixelFrame, matrixSize: number): number {
-    if (this.stage !== 'receiving' || !this.decoder) return 0;
+    if (this.stage !== 'receiving' || !this.decoder || !this.activeSessionKey) {
+      this.stats.rejectedFrames += 1; // late join / no valid manifest yet
+      return 0;
+    }
     this.stats.capturedFrames += 1;
     const image = asImageData(this.normalized(frame));
     let decoded = 0;
@@ -182,5 +257,55 @@ export class SharedOpticalReceiveCore {
   reconstruct(): Uint8Array | null {
     if (!this.decoder || !this.manifest || !this.decoder.complete) return null;
     return this.decoder.reconstruct(this.manifest.file.byteLength);
+  }
+
+  /** Export a serializable checkpoint of the active session (or null if none). */
+  exportCheckpoint(): ReceiveCheckpoint | null {
+    if (!this.manifest || !this.decoder || !this.activeSessionKey) return null;
+    return {
+      version: 1,
+      sessionKey: this.activeSessionKey,
+      manifest: this.manifest,
+      solvedBlocks: this.decoder.solvedBlocksSnapshot().map(({index, block}) => ({index, data: bytesToBase64(block)})),
+      solvedCount: this.decoder.solvedCount,
+      totalBlocks: this.decoder.sourceCount,
+      normalizedMode: this.normalizedMode,
+      dataLocks: this.dataLocks.map(lock => ({
+        quad: {tl: {...lock.quad.tl}, tr: {...lock.quad.tr}, br: {...lock.quad.br}, bl: {...lock.quad.bl}},
+        phaseX: lock.phaseX, phaseY: lock.phaseY, threshold: lock.threshold,
+        score: lock.score, contrast: lock.contrast, bitErrors: lock.bitErrors, bits: lock.bits,
+      })),
+      stats: {...this.stats},
+      updatedAt: Date.now(),
+    };
+  }
+
+  /**
+   * Restore from a checkpoint. Rebuilds decoder progress deterministically by
+   * re-adding each persisted solved block as a degree-1 source symbol — it does
+   * NOT assume the FountainDecoder internals are serializable. Geometric locks
+   * and transform are restored directly (stable, serializable structs).
+   */
+  restoreCheckpoint(checkpoint: ReceiveCheckpoint): boolean {
+    if (!checkpoint || checkpoint.version !== 1 || !checkpoint.manifest) return false;
+    const key = sessionKey(checkpoint.manifest);
+    this.manifest = checkpoint.manifest;
+    this.activeSessionKey = key;
+    this.normalizedMode = checkpoint.normalizedMode;
+    this.dataLocks = checkpoint.dataLocks.map(lock => ({
+      quad: {tl: {...lock.quad.tl}, tr: {...lock.quad.tr}, br: {...lock.quad.br}, bl: {...lock.quad.bl}},
+      phaseX: lock.phaseX, phaseY: lock.phaseY, threshold: lock.threshold,
+      score: lock.score, contrast: lock.contrast, bitErrors: lock.bitErrors, bits: lock.bits,
+    }));
+    const blockSize = checkpoint.manifest.transport.fountainSourceBlockBytes;
+    const seed = checkpoint.manifest.transport.fountainSeed;
+    const sourceCount = Math.ceil(checkpoint.manifest.file.byteLength / blockSize);
+    this.decoder = new FountainDecoder(sourceCount, blockSize, seed);
+    for (const {index, data} of checkpoint.solvedBlocks) {
+      this.decoder.addSymbol(index, base64ToBytes(data));
+    }
+    this.stats = {...checkpoint.stats};
+    this.stage = this.decoder.complete ? 'complete' : 'receiving';
+    return true;
   }
 }
