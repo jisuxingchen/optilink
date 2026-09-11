@@ -29,6 +29,10 @@ Terminology / 术语
 | G5 | Single-Code Display | 单码屏幕显示 |
 | G6 | CameraFrame Capture | 相机帧采集 |
 | G7 | Single-Code Detection & Decode | 单码定位与解码 |
+| G7a | Candidate Detection | 候选区域检测 |
+| G7b | Code Bounding Box | 码边界定位 |
+| G7c | Geometry Lock | 几何锁定 |
+| G7d | CRC Decode | CRC 解码 |
 | G8 | Chunk Reception | 分片接收 |
 | G9 | Deduplication & Validation | 去重与校验 |
 | G10 | All Chunks Received | 分片收齐 |
@@ -150,19 +154,84 @@ Terminology / 术语
 
 ## G7 — Single-Code Detection & Decode / 单码定位与解码
 
-- **Input / 输入**: one camera frame.
-- **Output / 输出**: a geometric lock (centre, side, tilt, 90° frame rotation,
-  sub-cell phase, binarisation threshold) plus a CRC-verified OptiGrid frame.
-- **Observable metrics / 可观测指标**: reserved-pattern score, contrast, locate
-  failures, decode attempts, successful decodes, **CRC failures**.
-- **PASS condition / 通过条件**: a CRC-valid frame is produced. The CRC is the
-  acceptance oracle, so a wrong geometric lock can never yield a chunk.
-- **FAIL interpretation / 失败含义**: locate failures → the code is not found
-  (framing/contrast/backlight); CRC failures with a good score → blur, glare,
-  motion, or too few pixels per cell.
-- **Evidence / 证据**: `single-baseline-pixels.test.ts` tests 1–4, 8, 10–11 (all
-  four frame rotations, tilt, size/position variation, blur + sensor noise,
-  blank/low-contrast rejection).
+G7 is measured as four independently observable sub-stages. A frame that fails is
+reported at the exact sub-stage it reached, with its best failed score — a bare
+`locate-failed` is no longer an acceptable outcome.
+
+### G7a — Candidate Detection / 候选区域检测
+
+- **Input / 输入**: one camera frame (`PixelFrame`, RGBA).
+- **Output / 输出**: global luma statistics and a ranked list of candidate code
+  regions (dark connected components + dark structures re-segmented inside the
+  dominant bright page/screen region).
+- **Observable metrics / 可观测指标**: luma min/max/mean, channel means R/G/B/A,
+  binarisation threshold, contrast, local-variation ratio, dark pixel ratio,
+  mask geometry, connected-component count, per-candidate bbox / area / fill
+  ratio / aspect / span / frame fraction / detector source, largest-component
+  box, bright-region box, rejection reason.
+- **PASS condition / 通过条件**: at least one candidate region spans ≥
+  `SINGLE_BASELINE_MIN_CANDIDATE_SPAN_PX` (96 px) at a frame contrast ≥
+  `SINGLE_BASELINE_MIN_REGION_CONTRAST` (24).
+- **FAIL interpretation / 失败含义**: `low-contrast:*` → the frame carries almost
+  no optical signal (washed out, camera covered, wrong target);
+  `no-dark-pixels:*` → nothing dark was seen;
+  `no-candidate-region:*` → dark structure exists but no region is large enough,
+  i.e. the code is out of frame or far too small.
+- **Evidence / 证据**: `single-baseline-g7.test.ts`; physical counters
+  `g7FramesAnalysed`, `g7aPassCount`, `regionLumaMin/Max/Mean`,
+  `regionContrast`, `regionDarkPixelRatio`, `regionComponentCount`,
+  `regionCandidateCount`, `regionRejection`.
+
+### G7b — Code Bounding Box / 码边界定位
+
+- **Input / 输入**: the G7a candidate list.
+- **Output / 输出**: a reported verdict on whether the best candidate looks like a
+  code (`spanPx ≥ 2 × matrix`, aspect within [0.5, 2.0]) plus its geometry.
+- **Observable metrics / 可观测指标**: candidate centre X/Y, width/height, aspect
+  ratio, fraction of the camera frame occupied, estimated code side in pixels,
+  fill ratio, detector source, and the reason when the verdict is FAIL.
+- **PASS condition / 通过条件**: the best candidate is square-ish and ≥2 px/cell
+  (`≥192 px` at matrix 96).
+- **FAIL interpretation / 失败含义**: a non-square candidate means the code's dark
+  modules **merged** with a larger dark region (bezel, room, dark UI) or
+  **fragmented**. G7b is **report-only**: it never aborts the frame, because the
+  OptiGrid CRC — not a shape heuristic — is the acceptance oracle. A G7b FAIL with
+  a later G7d PASS is a valid decode.
+- **Evidence / 证据**: `single-baseline-g7.test.ts` (dark room larger than the
+  code, dark UI block, merged/fragmented cases); metrics `g7bPass`, `g7bReason`,
+  `g7bPassCount`, `regionLargest*`.
+
+### G7c — Geometry Lock / 几何锁定
+
+- **Input / 输入**: candidate bounding boxes.
+- **Output / 输出**: refined geometric locks (centre, side, tilt, 90° frame
+  rotation, sub-cell phase, binarisation threshold) with a reserved-pattern score.
+- **Observable metrics / 可观测指标**: seed count, best seed score/rotation/side,
+  refinement count, **best refined score even when it fails**, best refined rotation,
+  pixels-per-cell, phase X/Y, refined contrast.
+- **PASS condition / 通过条件**: at least one candidate refined (a lock was
+  produced). Final acceptance is G7d.
+- **FAIL interpretation / 失败含义**: `bestRefinedPixelsPerCell` far above the
+  expected code scale with near-zero reserved contrast → the candidate is the
+  **wrong region**; a near-miss score (0.6–0.99) with plausible px/cell and high
+  contrast → the **right region with wrong geometry** (perspective, or a quad that
+  is not projective); `pixelsPerCell < 3` → a **physical limit** (get closer).
+- **Evidence / 证据**: `single-baseline-g7.test.ts`; metrics `g7cPass`,
+  `g7cReason`, `refinementBest*`, `seedBest*`.
+
+### G7d — CRC Decode / CRC 解码
+
+- **Input / 输入**: a refined geometric lock.
+- **Output / 输出**: an OptiGrid v1 frame validated by its own CRC32.
+- **Observable metrics / 可观测指标**: CRC attempts, CRC success, CRC failure,
+  decoded sequence, decoded chunk index.
+- **PASS condition / 通过条件**: a CRC-valid frame. A wrong geometric lock can never
+  produce a chunk.
+- **FAIL interpretation / 失败含义**: separate from G7a/G7b/G7c by construction —
+  `crcFailures` only counts frames that HAD a lock.
+- **Evidence / 证据**: `single-baseline-g7.test.ts`, `single-baseline-pixels.test.ts`;
+  metrics `g7dPass`, `crcDecodeAttempts`, `crcSuccess`, `crcFailure`,
+  `decodedSequence`, `decodedChunkIndex`, `g7dPassCount`.
 
 ## G8 — Chunk Reception / 分片接收
 
@@ -283,15 +352,57 @@ Terminology / 术语
 | 3/3 exact tile decode | **PASS** | all three tiles decoded exactly |
 | Preamble stage (96) | **FAIL** | cold-join robustness work in TF-012 r3 did not make it reliable |
 
-**Single-Code Baseline path / 单码基线路径**
+**Single-Code Baseline — r4 real-phone run (Motorola XT2321-2, Android 16, WeChat 8.0.72, 720×1280 RGBA)**
+
+| Gate | r4 physical result | Measured |
+| --- | --- | --- |
+| G6 CameraFrame Capture / 相机帧采集 | **PHYSICAL PASS** | 5272 frames, 69.97 FPS callback and processing, 14.178 ms avg / 38 ms p95 per frame |
+| G7a Candidate Detection / 候选区域检测 | **PHYSICAL FAIL** | 5272 / 5272 frames stopped here (`locateFailures = 5272`) |
+| G7b Code Bounding Box / 码边界定位 | **NOT REACHED** | r4 had no G7b sub-stage and no metrics |
+| G7c Geometry Lock / 几何锁定 | **NOT REACHED** | `reservedPatternScore = 0`, `observedCodeWidthPx = 0` |
+| G7d CRC Decode / CRC 解码 | **NOT REACHED** | `crcFailures = 0` — no lock was ever produced, so this is **not** a CRC failure |
+| G8–G13 | **NOT REACHED** | no chunk was ever received; no reconstruction, SHA or display claim |
+
+**Why r4 failed, exactly.** The r4 locator returned a single `locate-failed` for
+every frame. Two distinct hard stops produced that, both only visible now that
+G7a–G7d are instrumented:
+
+1. `locateDarkRegionBounds` aborted the whole frame when the frame luma span was
+   below 60 (`low-contrast`) — a washed-out screen (auto-exposure on a bright
+   display) or a camera that is not actually looking at the code reads as a
+   uniform field, and every such frame became an unexplainable `locate-failed`.
+2. When the largest connected dark region was **not** the code — which is the
+   normal case for a phone pointed at a monitor, because the dark room, bezel or
+   desk around the bright screen is far larger than the code's black modules — the
+   geometric seeds were derived from that wrong region and every seed was rejected
+   (`contrast ≤ 0` against the reserved pattern), producing zero refinement
+   attempts and therefore zero CRC attempts.
+
+Both are reproduced by monitor-capture fixtures in
+`src/optical-core/single-baseline-g7.test.ts` and both are addressed in r5.
+
+**Single-Code Baseline — r5 (software)**
 
 | Gate | Status | Note |
 | --- | --- | --- |
 | G1–G4 (software) | **PASS** | 706-byte payload, 708-byte capacity, 16 chunks, SHA exact |
-| G5 (sender) | **PASS** | browser acceptance test: Start / Stop / cycle, every canvas is a valid OptiGrid |
-| G6–G13 (software, rendered pixels) | **PASS** | joins mid-cycle, duplicates, blur+noise, SHA MATCH — simulation only |
-| G6–G13 (real phone) | **NOT YET TESTED** | the only remaining step; see `docs/TF012_SINGLE_CODE_BASELINE.md` |
+| G5 (sender) | **PASS** | browser acceptance: cyclic Start/Stop/cycle + static diagnostic hold; every canvas is a CRC-valid OptiGrid |
+| G6 (software) | **PASS** | frame plumbing, bounded pipeline, geometry metrics |
+| G7a (software) | **PASS** | candidate detection survives washout, dark room/bezel/UI larger than the code, cast, gradient, blur, moiré, noise |
+| G7b (software) | **PASS** | report-only verdict, never aborts the frame |
+| G7c (software) | **PASS** | cell-unit refinement from ranked candidates; failed attempts keep their best score |
+| G7d (software) | **PASS** | CRC decode of chunk 0 under all fixtures in the "must decode" set |
+| G6–G13 (real phone) | **NOT YET TESTED** | next PO run is the **static chunk-0 G7 bring-up**, see `docs/TF012_SINGLE_CODE_BASELINE.md` |
 
-The baseline intentionally **bypasses** Preamble, Manifest, Fountain and 3-tile
-composition until basic physical single-code file transfer is proven on a real
-phone.
+**Known r5 limits, measured (not hidden)**
+
+| Condition | Result | Signature |
+| --- | --- | --- |
+| ≥50 % brightness ramp across the frame **plus** moiré | not decoded | `bestRefinedPixelsPerCell > 8` and `bestRefinedContrast < 20` → wrong region (global threshold limit) |
+| Strong depth perspective (synthetic 0.12 trapezoid) | not decoded | `bestRefinedScore ≈ 0.77`, plausible px/cell, high contrast → right region, insufficient geometry model |
+| Code smaller than ~30 % of the frame | not decoded | `bestRefinedPixelsPerCell < 3` → physical limit, get closer |
+
+The proposed replacement for the first case is a gray-frame/checkerboard-border
+detector (G7a-2) that derives the code boundary from the alternating border cells
+instead of a global threshold. It is **not** implemented yet: the r5 physical
+diagnostics must first show whether the real scene is in that class.

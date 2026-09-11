@@ -40,7 +40,7 @@ try {
 
 // Unmistakable build identifier — must be visible on the phone to prove the
 // device is running the latest shared-receive package (not a stale cache).
-const BUILD_ID = 'tf012-r4-2f76aa7';
+const BUILD_ID = 'tf012-r5-dev';
 
 // Checkpoint persistence (bounded cadence — never per camera frame). The
 // platform-neutral core owns checkpoint export/import; this adapter only does
@@ -146,6 +146,37 @@ Page({
     baselineContentPreview: '',
     baselinePreviewLines: 0,
     baselineSelfCheck: '—',
+
+    // G7 locator diagnostics (G7a candidate → G7b bounding box → G7c geometry → G7d CRC)
+    g7aPass: '—',
+    g7aCount: '0 / 0',
+    g7aLuma: '—',
+    g7aContrast: '—',
+    g7aThreshold: '—',
+    g7aDarkRatio: '—',
+    g7aLocalVariation: '—',
+    g7aChannels: '—',
+    g7aComponents: '—',
+    g7aCandidates: '—',
+    g7aCandidateSpans: '—',
+    g7aLargestBox: '—',
+    g7aBrightRegion: '—',
+    g7aRejection: '—',
+    g7bPass: '—',
+    g7bReason: '—',
+    g7cPass: '—',
+    g7cSeeds: '—',
+    g7cBestSeed: '—',
+    g7cRefined: '—',
+    g7cBestRefined: '—',
+    g7cGeometry: '—',
+    g7cReason: '—',
+    g7dPass: '—',
+    g7dCrc: '—',
+    g7dSequence: '—',
+    g7dChunkIndex: '—',
+    g7Stage: '—',
+    g7StageReason: '—',
 
     // live metrics
     frameWidth: 0,
@@ -490,8 +521,7 @@ Page({
       baselineContentPreview: '',
       baselinePreviewLines: 0
     });
-    this.appendLog('metrics reset');
-  },
+    this.appendLog('metrics reset');  },
 
   toggleHeavy() {
     this.setData({ heavy: !this.data.heavy });
@@ -1038,6 +1068,55 @@ Page({
       baselineFileName: receiver && receiver.fileName ? receiver.fileName : '—',
       baselineFileSize: receiver && receiver.totalFileBytes ? receiver.totalFileBytes + ' B' : '—',
       baselineReconstructMethod: receiver && receiver.reconstructionMethod ? receiver.reconstructionMethod : '—',
+      g7aPass: metrics ? (metrics.g7aPassCount > 0 ? 'PASS' : (metrics.regionRejection ? 'FAIL' : '—')) : '—',
+      g7aCount: metrics ? (metrics.g7aPassCount + ' / ' + metrics.g7FramesAnalysed) : '0 / 0',
+      g7aLuma: metrics
+        ? ('min ' + metrics.regionLumaMin.toFixed(0) + ' · max ' + metrics.regionLumaMax.toFixed(0)
+          + ' · mean ' + metrics.regionLumaMean.toFixed(0))
+        : '—',
+      g7aContrast: metrics ? metrics.regionContrast.toFixed(1) : '—',
+      g7aThreshold: metrics ? metrics.regionThreshold.toFixed(1) : '—',
+      g7aDarkRatio: metrics ? (metrics.regionDarkPixelRatio * 100).toFixed(2) + '%' : '—',
+      g7aLocalVariation: metrics ? (metrics.regionLocalVariationRatio * 100).toFixed(2) + '%' : '—',
+      g7aChannels: metrics
+        ? ('R' + metrics.regionChannelMeanR.toFixed(0) + ' G' + metrics.regionChannelMeanG.toFixed(0)
+          + ' B' + metrics.regionChannelMeanB.toFixed(0) + ' A' + metrics.regionChannelMeanA.toFixed(0))
+        : '—',
+      g7aComponents: metrics ? String(metrics.regionComponentCount) : '—',
+      g7aCandidates: metrics ? String(metrics.regionCandidateCount) : '—',
+      g7aCandidateSpans: metrics && metrics.regionCandidateSpansPx ? metrics.regionCandidateSpansPx : '—',
+      g7aLargestBox: metrics
+        ? ('x' + metrics.regionLargestX.toFixed(0) + ' y' + metrics.regionLargestY.toFixed(0)
+          + ' ' + metrics.regionLargestWidth.toFixed(0) + '×' + metrics.regionLargestHeight.toFixed(0)
+          + ' area' + metrics.regionLargestArea + ' fill' + metrics.regionLargestFillRatio.toFixed(2)
+          + ' aspect' + metrics.regionLargestAspect.toFixed(2))
+        : '—',
+      g7aBrightRegion: metrics
+        ? ((metrics.regionCandidateSpansPx || '').indexOf('bright-subregion') >= 0 ? 'used' : 'not used')
+        : '—',
+      g7aRejection: metrics && metrics.regionRejection ? metrics.regionRejection : 'none',
+      g7bPass: metrics ? (metrics.g7bPass ? 'PASS' : 'FAIL') : '—',
+      g7bReason: metrics && metrics.g7bReason ? metrics.g7bReason : (metrics && metrics.g7bPass ? 'ok' : '—'),
+      g7cPass: metrics ? (metrics.g7cPass ? 'PASS' : 'FAIL') : '—',
+      g7cSeeds: metrics ? String(metrics.seedCount) : '—',
+      g7cBestSeed: metrics ? metrics.seedBestScore.toFixed(3) + ' (rot ' + metrics.seedBestRotation + ')' : '—',
+      g7cRefined: metrics ? String(metrics.refinementCount) : '—',
+      g7cBestRefined: metrics
+        ? (metrics.refinementBestScore.toFixed(3) + ' (rot ' + metrics.refinementBestRotation + ')')
+        : '—',
+      g7cGeometry: metrics
+        ? (metrics.refinementBestPixPerCell.toFixed(2) + ' px/cell · phase '
+          + metrics.refinementBestPhaseX.toFixed(2) + '/' + metrics.refinementBestPhaseY.toFixed(2))
+        : '—',
+      g7cReason: metrics && metrics.g7cReason ? metrics.g7cReason : (metrics && metrics.g7cPass ? 'ok' : '—'),
+      g7dPass: metrics ? (metrics.g7dPass ? 'PASS' : 'FAIL') : '—',
+      g7dCrc: metrics
+        ? ('attempts ' + metrics.crcDecodeAttempts + ' · ok ' + metrics.crcSuccess + ' · fail ' + metrics.crcFailure)
+        : '—',
+      g7dSequence: metrics && metrics.decodedSequence >= 0 ? '0x' + (metrics.decodedSequence >>> 0).toString(16) : '—',
+      g7dChunkIndex: metrics && metrics.decodedChunkIndex >= 0 ? String(metrics.decodedChunkIndex) : '—',
+      g7Stage: metrics ? metrics.locatorStage : '—',
+      g7StageReason: metrics && metrics.locatorStageReason ? metrics.locatorStageReason : '—',
       baselinePipelineError: (this.data.running && this.baselineFramesReceived > 4 && this.baselineFramesProcessed === 0)
         ? 'ERROR: BASELINE PIPELINE NOT RUNNING'
         : ''
@@ -1245,6 +1324,72 @@ Page({
         shaResult: reconstruction ? (reconstruction.match ? 'MATCH' : 'MISMATCH') : this.data.baselineShaStatus,
         previewLines: this.data.baselinePreviewLines,
         preview: this.data.baselineContentPreview
+      },
+      // TF-012 r5: G7 is split so a physical failure is attributable to one sub-stage.
+      locator: {
+        g7aCandidateDetection: {
+          pass: this.data.g7aPass,
+          framesAnalysed: metrics ? metrics.g7FramesAnalysed : 0,
+          passCount: metrics ? metrics.g7aPassCount : 0,
+          lumaMin: metrics ? Number(metrics.regionLumaMin.toFixed(2)) : null,
+          lumaMax: metrics ? Number(metrics.regionLumaMax.toFixed(2)) : null,
+          lumaMean: metrics ? Number(metrics.regionLumaMean.toFixed(2)) : null,
+          contrast: metrics ? Number(metrics.regionContrast.toFixed(2)) : null,
+          binarisationThreshold: metrics ? Number(metrics.regionThreshold.toFixed(2)) : null,
+          darkPixelRatio: metrics ? Number(metrics.regionDarkPixelRatio.toFixed(4)) : null,
+          localVariationRatio: metrics ? Number(metrics.regionLocalVariationRatio.toFixed(4)) : null,
+          channelMeans: metrics ? {
+            r: Number(metrics.regionChannelMeanR.toFixed(1)),
+            g: Number(metrics.regionChannelMeanG.toFixed(1)),
+            b: Number(metrics.regionChannelMeanB.toFixed(1)),
+            a: Number(metrics.regionChannelMeanA.toFixed(1))
+          } : null,
+          componentCount: metrics ? metrics.regionComponentCount : null,
+          candidateCount: metrics ? metrics.regionCandidateCount : null,
+          candidateSpans: metrics ? metrics.regionCandidateSpansPx : null,
+          largestComponent: metrics ? {
+            x: metrics.regionLargestX,
+            y: metrics.regionLargestY,
+            width: metrics.regionLargestWidth,
+            height: metrics.regionLargestHeight,
+            area: metrics.regionLargestArea,
+            fillRatio: Number(metrics.regionLargestFillRatio.toFixed(3)),
+            aspect: Number(metrics.regionLargestAspect.toFixed(3))
+          } : null,
+          rejection: metrics && metrics.regionRejection ? metrics.regionRejection : null
+        },
+        g7bCodeBoundingBox: {
+          pass: metrics ? metrics.g7bPass : null,
+          passCount: metrics ? metrics.g7bPassCount : 0,
+          reason: metrics && metrics.g7bReason ? metrics.g7bReason : null
+        },
+        g7cGeometryLock: {
+          pass: metrics ? metrics.g7cPass : null,
+          passCount: metrics ? metrics.g7cPassCount : 0,
+          seedCount: metrics ? metrics.seedCount : null,
+          bestSeedScore: metrics ? Number(metrics.seedBestScore.toFixed(4)) : null,
+          bestSeedRotation: metrics ? metrics.seedBestRotation : null,
+          refinementCount: metrics ? metrics.refinementCount : null,
+          bestRefinedScore: metrics ? Number(metrics.refinementBestScore.toFixed(4)) : null,
+          bestRefinedRotation: metrics ? metrics.refinementBestRotation : null,
+          bestRefinedPixelsPerCell: metrics ? Number(metrics.refinementBestPixPerCell.toFixed(3)) : null,
+          bestRefinedPhaseX: metrics ? Number(metrics.refinementBestPhaseX.toFixed(3)) : null,
+          bestRefinedPhaseY: metrics ? Number(metrics.refinementBestPhaseY.toFixed(3)) : null,
+          reason: metrics && metrics.g7cReason ? metrics.g7cReason : null
+        },
+        g7dCrcDecode: {
+          pass: metrics ? metrics.g7dPass : null,
+          passCount: metrics ? metrics.g7dPassCount : 0,
+          crcAttempts: metrics ? metrics.crcDecodeAttempts : null,
+          crcSuccess: metrics ? metrics.crcSuccess : null,
+          crcFailure: metrics ? metrics.crcFailure : null,
+          decodedSequence: metrics && metrics.decodedSequence >= 0 ? metrics.decodedSequence : null,
+          decodedChunkIndex: metrics && metrics.decodedChunkIndex >= 0 ? metrics.decodedChunkIndex : null
+        },
+        deepestStage: metrics ? metrics.locatorStage : null,
+        stageReason: metrics ? metrics.locatorStageReason : null,
+        locatorFailures: metrics ? metrics.locateFailures : null,
+        crcFailures: metrics ? metrics.crcFailures : null
       },
       device: {
         model: this.data.model,

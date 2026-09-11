@@ -2,10 +2,12 @@
 
 **Status:** READY for PO physical action (after exact-head CI green + Technical
 Review PASS).
-**Build:** `tf012-r4-2f76aa7` · build content commit `2f76aa7` · branch
-`spike/tf-012-physical-performance` · Issue #53 · PR #54.
-(The follow-up commit that pins this buildId string changes nothing else in the
-baseline; `utils/optical-core.js` is rebuilt from the same source.)
+**Build:** `tf012-r5-<shortsha>` · branch `spike/tf-012-physical-performance` ·
+Issue #53 · PR #54.
+**r4 physical evidence (kept):** G6 CameraFrame = **PHYSICAL PASS**;
+G7 = **PHYSICAL FAIL** with `locateFailures = 5272 / 5272` and `crcFailures = 0`;
+G7b–G13 = NOT REACHED. See `docs/OPTILINK_DATA_FLOW_GATES.md` → Current physical
+status for the exact failure mechanism and the r5 fixes.
 
 ## What this is / 这是什么
 
@@ -49,6 +51,56 @@ fileId, chunkIndex, fileNameBytes, fileName, fileSha256 (32 raw bytes), then 640
 bytes of file data.
 
 ## PO test steps / PO 测试步骤
+
+### NEXT TEST (r5) — static chunk-0 G7 bring-up / 单码静态定位测试
+
+The r4 physical run proved **G6 = PHYSICAL PASS** and then failed inside the
+locator on **5272 / 5272 frames** with no explanation (`locateFailures = 5272`,
+`crcFailures = 0`). G7 is now split into G7a→G7d with per-frame metrics, and the
+sender has a static diagnostic mode. **Do not run the 16-chunk transfer yet.**
+
+1. **Sender command**
+   ```
+   cd experiments/tf-002-single-code
+   npm run dev:single-baseline-sender
+   ```
+2. **Sender URL** — this holds ONE chunk forever, no cycling:
+   ```
+   http://<PC-LAN-IP>:5319/single-baseline.html?diagnostic=chunk0
+   ```
+3. **Expected sender screen**: one large OptiGrid, panel shows
+   `TF-012 Single-Code Baseline · Diagnostic 诊断模式`,
+   `Diagnostic Mode / 诊断模式 = Static hold / 静态固定`,
+   `Held Chunk / 固定切片 = 0`, `Hold time = static (diagnostic)`,
+   `Current chunk = 0 / 15`, status `Stopped / 已停止`
+4. **Click Start / 开始** → status becomes `Holding / 固定中` and the code stays on
+   chunk 0 (it must never advance)
+5. **Mini Program**: mode **Single-Code Baseline / 单码基线** → **Start Camera**
+6. **Aim** so the whole code plus its white border is inside the frame, roughly
+   square to the screen, close enough that the code fills a good part of the frame
+7. **Read the `G7 locator diagnostics` panel** and screenshot it. What matters:
+   - `deepest stage / 最深阶段` → `G7a`, `G7b`, `G7c` or `G7d`
+   - `G7a Candidate Detection` PASS/FAIL + `frame luma min/max/mean`,
+     `contrast`, `dark pixel ratio`, `dark components`, `candidates`,
+     `candidate spans`, `largest region`, `G7a rejection`
+   - `G7b Code Bounding Box` PASS/FAIL + reason
+   - `G7c Geometry Lock` PASS/FAIL + `seeds`, `best seed score`,
+     `best refined score (incl. failed)`, `geometry` (px/cell, phase)
+   - `G7d OptiGrid CRC Decode` PASS/FAIL + `CRC attempts/ok/fail`,
+     `decoded sequence`, `decoded chunkIndex`
+8. **PASS target for this run**: at least one frame shows
+   `G7a PASS`, `G7b PASS`, `G7c PASS`, `G7d PASS`, `decoded chunkIndex = 0`.
+   Partial progress is also useful evidence — e.g. "G7a PASS (candidates 2,
+   contrast 130) but G7c FAIL bestRefined 0.5 px/cell 12" tells us exactly what to
+   fix next.
+9. **Then**: `Freeze Test Result` → `Copy Result`
+10. **Send back**: the full JSON, a screenshot of the G7 diagnostics panel, a
+    screenshot of the sender screen, and radios ON/OFF
+
+Only after a static chunk-0 CRC decode succeeds do we resume the 16-chunk cyclic
+transfer test below.
+
+### AFTER G7 WORKS — 16-chunk cyclic transfer / 16 片循环传输
 
 ### 1. One sender command
 
@@ -138,8 +190,9 @@ Run from `experiments/tf-002-single-code`:
 | --- | --- |
 | `node --test src/optical-core/single-baseline.test.ts` | G1–G4, G8–G13 protocol + receiver logic (16 tests) |
 | `node --test src/optical-core/single-baseline-pixels.test.ts` | G6–G13 rendered-pixel end-to-end, all 4 frame rotations, tilt, blur + sensor noise (12 tests) |
-| `node --test src/optical-core/single-baseline-mini.test.ts` | Mini Program boot/baseline-mode smoke, network scan, oracle scan (4 tests) |
-| `npm run test:single-baseline-sender` | G5 sender Start/Stop/cycle in a real browser, every canvas CRC-decoded |
+| `node --test src/optical-core/single-baseline-g7.test.ts` | G7a–G7d against monitor-capture fixtures: washout, dark room/bezel/UI larger than the code, cast, illumination gradient, blur, moiré, noise, perspective, small code (10 tests) |
+| `node --test src/optical-core/single-baseline-mini.test.ts` | Mini Program boot/baseline-mode smoke, G7 UI wiring, network scan, oracle scan (4 tests) |
+| `npm run test:single-baseline-sender` | G5 sender Start/Stop/cycle **and** static diagnostic hold in a real browser; every canvas CRC-decoded |
 | `npm test` | the full existing regression suite |
 
 ## Physical capability metrics to record / 需记录的物理能力指标

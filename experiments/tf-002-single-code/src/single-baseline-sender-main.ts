@@ -49,6 +49,11 @@ const matrixCell = $<HTMLElement>('matrixSize');
 const holdTimeCell = $<HTMLElement>('holdTime');
 const cycleCountCell = $<HTMLElement>('cycleCount');
 const statusTextCell = $<HTMLElement>('statusText');
+const diagnosticRow = $<HTMLElement>('diagnosticRow');
+const heldChunkRow = $<HTMLElement>('heldChunkRow');
+const diagnosticModeCell = $<HTMLElement>('diagnosticMode');
+const heldChunkCell = $<HTMLElement>('heldChunk');
+const panelTitle = $<HTMLElement>('panelTitle');
 
 const contextMaybe = canvas.getContext('2d', {alpha: false});
 if (!contextMaybe) throw new Error('canvas 2D context unavailable');
@@ -57,6 +62,24 @@ const context: CanvasRenderingContext2D = contextMaybe;
 const transfer = buildSingleBaselineTransfer();
 const matrixSize = transfer.matrixSize;
 const totalCells = matrixSize + quietCells * 2;
+
+/**
+ * Diagnostic mode (?diagnostic=chunk0): hold ONE known chunk indefinitely so the
+ * receiver's G7a→G7d locator can be brought up without any cycle timing
+ * dependency. The encoding is byte-identical to the cyclic baseline — only the
+ * advance-on-timer behaviour is disabled.
+ */
+function parseHeldChunk(raw: string | null): number | null {
+  if (raw === null) return null;
+  const match = /^(?:chunk)?([0-9]+)$/iu.exec(raw.trim());
+  if (!match) return 0;
+  const index = Number.parseInt(match[1], 10);
+  if (!Number.isFinite(index)) return 0;
+  return Math.min(transfer.totalChunks - 1, Math.max(0, index));
+}
+
+const heldChunk = parseHeldChunk(params.get('diagnostic'));
+const diagnosticMode = heldChunk !== null;
 
 let cursor = 0;
 let cycleCount = 0;
@@ -97,16 +120,19 @@ function drawChunk(chunkIndex: number): void {
 }
 
 function updateReadout(): void {
-  const current = cursor % transfer.totalChunks;
+  const current = diagnosticMode ? (heldChunk as number) : cursor % transfer.totalChunks;
   currentChunkCell.textContent = `${current} / ${transfer.totalChunks - 1}`;
   cycleCountCell.textContent = String(cycleCount);
-  statusTextCell.textContent = broadcasting ? 'Broadcasting / 广播中' : 'Stopped / 已停止';
-  broadcastStatus.textContent = broadcasting ? 'Broadcasting / 广播中' : 'Stopped / 已停止';
+  const label = diagnosticMode
+    ? (broadcasting ? 'Holding / 固定中' : 'Stopped / 已停止')
+    : (broadcasting ? 'Broadcasting / 广播中' : 'Stopped / 已停止');
+  statusTextCell.textContent = label;
+  broadcastStatus.textContent = label;
   broadcastStatus.className = broadcasting ? 'live' : 'stopped';
 }
 
 function renderCurrent(): void {
-  drawChunk(cursor % transfer.totalChunks);
+  drawChunk(diagnosticMode ? (heldChunk as number) : cursor % transfer.totalChunks);
   updateReadout();
 }
 
@@ -135,11 +161,17 @@ function step(): void {
 
 function startBroadcast(): void {
   stopBroadcast();
-  cursor = 0;
   cycleCount = 0;
   broadcasting = true;
   startButton.disabled = true;
   stopButton.disabled = false;
+  if (diagnosticMode) {
+    // Static diagnostic mode: ONE known chunk, held indefinitely, no timer.
+    cursor = heldChunk as number;
+    renderCurrent();
+    return;
+  }
+  cursor = 0;
   renderCurrent();
   timer = window.setInterval(step, holdMs);
 }
@@ -175,7 +207,14 @@ totalChunksCell.textContent = String(transfer.totalChunks);
 chunkDataCell.textContent = `${transfer.chunkDataBytes} bytes`;
 chunkPayloadCell.textContent = `${transfer.payloadBytes} / ${transfer.optigridCapacityBytes} bytes`;
 matrixCell.textContent = `${matrixSize} × ${matrixSize}`;
-holdTimeCell.textContent = `${holdMs} ms`;
+holdTimeCell.textContent = diagnosticMode ? 'static (diagnostic)' : `${holdMs} ms`;
+if (diagnosticMode) {
+  diagnosticRow.hidden = false;
+  heldChunkRow.hidden = false;
+  diagnosticModeCell.textContent = 'Static hold / 静态固定';
+  heldChunkCell.textContent = String(heldChunk);
+  panelTitle.textContent = 'TF-012 Single-Code Baseline · Diagnostic 诊断模式';
+}
 updateReadout();
 
 layout();
@@ -197,8 +236,10 @@ renderCurrent();
     reconstructionMethod: SINGLE_BASELINE_RECONSTRUCTION_METHOD,
     holdMs,
     quietCells,
+    diagnosticMode,
+    heldChunk: diagnosticMode ? heldChunk : null,
   },
-  state: () => ({broadcasting, cursor, cycleCount, holdMs}),
+  state: () => ({broadcasting, cursor: diagnosticMode ? (heldChunk as number) : cursor, cycleCount, holdMs, diagnosticMode}),
   start: startBroadcast,
   stop: stopAndFreeze,
   showChunk: (index: number) => {

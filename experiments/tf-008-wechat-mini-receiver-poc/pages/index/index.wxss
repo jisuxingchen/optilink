@@ -117,6 +117,13 @@
   color: #fff;
 }
 
+/* TF-012 r5 G7 diagnostics: thin separator between sub-stage blocks. */
+.hr {
+  height: 1rpx;
+  background: #1f2937;
+  margin: 12rpx 0;
+}
+
 .panel {
   background: #111827;
   border: 1rpx solid #1f2937;

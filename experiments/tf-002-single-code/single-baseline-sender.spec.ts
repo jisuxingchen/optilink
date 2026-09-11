@@ -15,12 +15,12 @@ import {decodeFrameCellsV1} from './src/optigrid-v1.ts';
 
 const transfer = buildSingleBaselineTransfer();
 
-type SenderState = {broadcasting: boolean; cursor: number; cycleCount: number; holdMs: number};
+type SenderState = {broadcasting: boolean; cursor: number; cycleCount: number; holdMs: number; diagnosticMode?: boolean};
 
 declare global {
   interface Window {
     __SINGLE_BASELINE_SENDER__: {
-      payload: {quietCells: number};
+      payload: {quietCells: number; diagnosticMode: boolean; heldChunk: number | null};
       state: () => SenderState;
       showChunk: (index: number) => void;
     };
@@ -134,4 +134,39 @@ test('sender renders ONE valid OptiGrid per chunk and cycles deterministically',
   expect(Buffer.from(await sampleCanvasCells(page)).toString('base64')).toBe(hashes[0]);
   await page.locator('#stopButton').click();
   expect((await state(page)).broadcasting).toBe(false);
+});
+
+test('diagnostic mode holds ONE known chunk indefinitely (?diagnostic=chunk0)', async ({page}) => {
+  await page.goto('/single-baseline.html?diagnostic=chunk0');
+
+  // The UI declares diagnostic mode and the held chunk.
+  await expect(page.locator('#panelTitle')).toHaveText('TF-012 Single-Code Baseline · Diagnostic 诊断模式');
+  await expect(page.locator('#diagnosticMode')).toHaveText('Static hold / 静态固定');
+  await expect(page.locator('#heldChunk')).toHaveText('0');
+  await expect(page.locator('#holdTime')).toHaveText('static (diagnostic)');
+  await expect(page.locator('#currentChunk')).toHaveText('0 / 15');
+  expect((await state(page)).diagnosticMode).toBe(true);
+
+  // The held canvas is a real, CRC-valid chunk-0 OptiGrid (same encoding as baseline).
+  const before = Buffer.from(await sampleCanvasCells(page)).toString('base64');
+  const decoded = decodeFrameCellsV1(Uint8Array.from(Buffer.from(before, 'base64')), SINGLE_BASELINE_MATRIX);
+  expect(decoded).not.toBeNull();
+  expect(decoded!.sequence & 0xffff).toBe(0);
+
+  // Start holds it: no timer, no advance, cycle count stays 0.
+  await page.locator('#startButton').click();
+  await expect(page.locator('#statusText')).toHaveText('Holding / 固定中');
+  const started = await state(page);
+  expect(started.broadcasting).toBe(true);
+  expect(started.cycleCount).toBe(0);
+  expect(started.cursor).toBe(0);
+  await page.waitForTimeout(2500);
+  const held = await state(page);
+  expect(held.cursor).toBe(0);
+  expect(held.cycleCount).toBe(0);
+  expect(Buffer.from(await sampleCanvasCells(page)).toString('base64')).toBe(before);
+
+  await page.locator('#stopButton').click();
+  expect((await state(page)).broadcasting).toBe(false);
+  await expect(page.locator('#statusText')).toHaveText('Stopped / 已停止');
 });

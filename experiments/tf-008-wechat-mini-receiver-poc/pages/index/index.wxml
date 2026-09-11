@@ -135,6 +135,43 @@
     <text class="preview">{{baselineContentPreview}}</text>
   </view>
 
+  <view class="panel" wx:if="{{mode === 'baseline'}}">
+    <view class="section">G7 locator diagnostics · G7 定位诊断</view>
+    <view class="row"><text class="k">deepest stage / 最深阶段</text><text class="v">{{g7Stage}}</text></view>
+    <view class="row"><text class="k">stage reason / 阶段原因</text><text class="v">{{g7StageReason}}</text></view>
+    <view class="hr"></view>
+    <view class="row"><text class="k">G7a Candidate Detection / 候选区域检测</text><text class="v">{{g7aPass}}</text></view>
+    <view class="row"><text class="k">G7a frames pass / 通过帧数</text><text class="v">{{g7aCount}}</text></view>
+    <view class="row"><text class="k">frame luma min/max/mean</text><text class="v">{{g7aLuma}}</text></view>
+    <view class="row"><text class="k">contrast / 对比度</text><text class="v">{{g7aContrast}}</text></view>
+    <view class="row"><text class="k">binarisation threshold / 二值化阈值</text><text class="v">{{g7aThreshold}}</text></view>
+    <view class="row"><text class="k">dark pixel ratio / 暗像素比例</text><text class="v">{{g7aDarkRatio}}</text></view>
+    <view class="row"><text class="k">local variation / 局部起伏</text><text class="v">{{g7aLocalVariation}}</text></view>
+    <view class="row"><text class="k">channel means R/G/B/A</text><text class="v">{{g7aChannels}}</text></view>
+    <view class="row"><text class="k">dark components / 连通域数</text><text class="v">{{g7aComponents}}</text></view>
+    <view class="row"><text class="k">candidates / 候选区域数</text><text class="v">{{g7aCandidates}}</text></view>
+    <view class="row"><text class="k">candidate spans / 候选尺寸</text><text class="v">{{g7aCandidateSpans}}</text></view>
+    <view class="row"><text class="k">largest region / 最大暗区</text><text class="v">{{g7aLargestBox}}</text></view>
+    <view class="row"><text class="k">bright re-segmentation</text><text class="v">{{g7aBrightRegion}}</text></view>
+    <view class="row"><text class="k">G7a rejection / 拒绝原因</text><text class="v">{{g7aRejection}}</text></view>
+    <view class="hr"></view>
+    <view class="row"><text class="k">G7b Code Bounding Box / 码边界定位</text><text class="v">{{g7bPass}}</text></view>
+    <view class="row"><text class="k">G7b reason / 判定依据</text><text class="v">{{g7bReason}}</text></view>
+    <view class="hr"></view>
+    <view class="row"><text class="k">G7c Geometry Lock / 几何锁定</text><text class="v">{{g7cPass}}</text></view>
+    <view class="row"><text class="k">seeds / 粗定位种子</text><text class="v">{{g7cSeeds}}</text></view>
+    <view class="row"><text class="k">best seed score / 最佳粗分</text><text class="v">{{g7cBestSeed}}</text></view>
+    <view class="row"><text class="k">refined attempts / 精定位次数</text><text class="v">{{g7cRefined}}</text></view>
+    <view class="row"><text class="k">best refined score (incl. failed) / 最佳精分</text><text class="v">{{g7cBestRefined}}</text></view>
+    <view class="row"><text class="k">geometry / 几何</text><text class="v">{{g7cGeometry}}</text></view>
+    <view class="row"><text class="k">G7c reason / 失败原因</text><text class="v">{{g7cReason}}</text></view>
+    <view class="hr"></view>
+    <view class="row"><text class="k">G7d OptiGrid CRC Decode / CRC 解码</text><text class="v">{{g7dPass}}</text></view>
+    <view class="row"><text class="k">CRC attempts/ok/fail</text><text class="v">{{g7dCrc}}</text></view>
+    <view class="row"><text class="k">decoded sequence / 序列号</text><text class="v">{{g7dSequence}}</text></view>
+    <view class="row"><text class="k">decoded chunkIndex / 切片号</text><text class="v">{{g7dChunkIndex}}</text></view>
+  </view>
+
   <view class="panel" wx:if="{{mode === 'benchmark'}}">
     <view class="section">luminance / contrast (sampled pixels)</view>
     <view class="row"><text class="k">mean luma</text><text class="v">{{meanLuma}}</text></view>

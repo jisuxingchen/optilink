@@ -37,7 +37,7 @@
   </div>
 
   <section id="panel">
-    <h1>TF-012 Single-Code Baseline · 单码基线</h1>
+    <h1 id="panelTitle">TF-012 Single-Code Baseline · 单码基线</h1>
     <p class="sub">
       Stateless cyclic broadcaster 无状态循环广播：chunk 0 → 15 → 0 … 无限循环。
       Receiver may join at ANY time 接收端可在任意时刻加入。No ACK, no feedback, no network payload.
@@ -59,6 +59,8 @@
       <tr><td class="k">Chunk payload / 每片载荷</td><td class="v" id="chunkPayload">—</td></tr>
       <tr><td class="k">Matrix / 矩阵</td><td class="v" id="matrixSize">—</td></tr>
       <tr><td class="k">Hold time / 保持时间</td><td class="v" id="holdTime">—</td></tr>
+      <tr id="diagnosticRow" hidden><td class="k">Diagnostic Mode / 诊断模式</td><td class="v" id="diagnosticMode">—</td></tr>
+      <tr id="heldChunkRow" hidden><td class="k">Held Chunk / 固定切片</td><td class="v" id="heldChunk">—</td></tr>
       <tr><td class="k">Cycle count / 循环次数</td><td class="v" id="cycleCount">0</td></tr>
       <tr><td class="k">Status / 状态</td><td class="v" id="statusText">Stopped / 已停止</td></tr>
     </table>

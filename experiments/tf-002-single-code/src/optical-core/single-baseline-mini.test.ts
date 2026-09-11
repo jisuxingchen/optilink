@@ -56,7 +56,7 @@ test('16 · Mini Program page boot smoke (Page() registers with baseline surface
   const page = captured as unknown as Record<string, unknown>;
   const data = page.data as Record<string, unknown>;
   assert.equal(data.mode, 'receive', 'default mode is the shared receive pipeline');
-  assert.match(String(data.buildId), /^tf012-r4-/, 'buildId uses the tf012-r4 prefix');
+  assert.match(String(data.buildId), /^tf012-r5-/, 'buildId uses the tf012-r5 prefix');
   assert.equal(data.baselineStatus, 'WAITING / 等待', 'baseline status is part of the initial data');
   assert.equal(data.baselineReceivedChunks, '0 / 16', 'baseline chunk counter is part of the initial data');
   assert.ok('baselineSelfCheck' in data, 'baseline self-check field present');
@@ -71,6 +71,18 @@ test('16 · Mini Program page boot smoke (Page() registers with baseline surface
   assert.match(PAGE_WXML, /baselineMissingChunks/u, 'the baseline panel shows missing chunks');
   assert.match(PAGE_WXML, /baselineShaStatus/u, 'the baseline panel shows the SHA result');
   assert.match(PAGE_WXML, /baselineContentPreview/u, 'the baseline panel shows the reconstructed content');
+  // TF-012 r5: G7 is split into observable sub-stages on the phone.
+  for (const g7 of ['G7a Candidate Detection / 候选区域检测', 'G7b Code Bounding Box / 码边界定位', 'G7c Geometry Lock / 几何锁定', 'G7d OptiGrid CRC Decode / CRC 解码']) {
+    assert.ok(PAGE_WXML.includes(g7), 'baseline panel shows ' + g7);
+  }
+  for (const field of ['g7Stage', 'g7StageReason', 'g7aLuma', 'g7aContrast', 'g7aThreshold', 'g7aDarkRatio', 'g7aComponents', 'g7aCandidates', 'g7aCandidateSpans', 'g7aLargestBox', 'g7aRejection', 'g7bPass', 'g7bReason', 'g7cSeeds', 'g7cBestSeed', 'g7cRefined', 'g7cBestRefined', 'g7cGeometry', 'g7cReason', 'g7dPass', 'g7dCrc', 'g7dSequence', 'g7dChunkIndex']) {
+    assert.ok(PAGE_WXML.includes(field), 'baseline panel shows ' + field);
+    assert.ok(field in data, 'page data exposes ' + field);
+  }
+  assert.match(PAGE_JS, /locator: \{/u, 'the frozen result carries a locator section');
+  for (const section of ['g7aCandidateDetection', 'g7bCodeBoundingBox', 'g7cGeometryLock', 'g7dCrcDecode']) {
+    assert.ok(PAGE_JS.includes(section), 'frozen result carries ' + section);
+  }
 });
 
 test('17 · Mini Program baseline mode smoke uses the shared core only', () => {

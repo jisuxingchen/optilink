@@ -549,36 +549,238 @@ function refineParams(frame: PixelFrame, matrixSize: number, seed: QuadParams, s
   return {params: current, score: best};
 }
 
-type DarkBounds = {minX: number; minY: number; maxX: number; maxY: number; area: number};
+export type DarkBounds = {minX: number; minY: number; maxX: number; maxY: number; area: number};
+
+/** Bounding box + area of one connected region in the coarse mask grid space. */
+type Component = {area: number; minGX: number; maxGX: number; minGY: number; maxGY: number};
 
 /**
- * Bounding box of the largest connected dark region (the code's black modules).
- * Uses a coarse max-pooled mask so that a checkerboard border stays connected
- * under 8-connectivity, and so a light control panel with dark glyphs elsewhere
- * on the screen cannot steal the bounding box.
+ * G7a minimum luminance contrast for a frame to be analysable at all. Deliberately
+ * permissive (24): a low-contrast frame is still analysed and REPORTED instead of
+ * being silently rejected, because the reserved-pattern score and the OptiGrid CRC
+ * are the real acceptance oracles.
  */
-export function locateDarkRegionBounds(frame: PixelFrame): DarkBounds | null {
+export const SINGLE_BASELINE_MIN_REGION_CONTRAST = 24;
+/** A dark component must span at least this many camera pixels to become a candidate. */
+export const SINGLE_BASELINE_MIN_CANDIDATE_SPAN_PX = 96;
+/** How many ranked candidate regions are geometrically searched per frame. */
+export const SINGLE_BASELINE_MAX_REGION_CANDIDATES = 3;
+
+/** One candidate code region derived from the coarse dark-component mask (G7a). */
+export type SingleBaselineRegionCandidate = {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  /** Mask cells in this connected component. */
+  area: number;
+  /** Dark mask cells inside this bbox divided by the bbox area (≈0.5 for a checkerboard code, ≈1.0 for a solid dark region). */
+  fillRatio: number;
+  /** bbox width / bbox height. */
+  aspect: number;
+  /** Longest bbox edge in camera pixels. */
+  spanPx: number;
+  /** spanPx / min(frameWidth, frameHeight). */
+  frameFraction: number;
+  /** Code-likeness rank (higher is tried first). */
+  rank: number;
+  /** Which detector produced this candidate. */
+  source: 'dark-component' | 'bright-subregion';
+};
+
+/**
+ * Per-frame G7a/G7b diagnostics. Every field is measured on the real camera
+ * frame; nothing here is derived from a sender-side oracle.
+ */
+export type SingleBaselineRegionDiagnostics = {
+  frameWidth: number;
+  frameHeight: number;
+  sampleStride: number;
+  sampledPixels: number;
+  lumaMin: number;
+  lumaMax: number;
+  lumaMean: number;
+  channelMeanR: number;
+  channelMeanG: number;
+  channelMeanB: number;
+  channelMeanA: number;
+  /** Fraction of neighbouring sampled pairs whose luma differs by more than 24 (structure detector). */
+  localVariationRatio: number;
+  threshold: number;
+  contrast: number;
+  darkPixelCount: number;
+  darkPixelRatio: number;
+  maskWidth: number;
+  maskHeight: number;
+  maskStep: number;
+  maskArea: number;
+  maskDarkCells: number;
+  componentCount: number;
+  largestArea: number;
+  largestFractionOfMask: number;
+  /** Bounding box of the LARGEST dark component, in camera pixels. */
+  largestX: number;
+  largestY: number;
+  largestWidth: number;
+  largestHeight: number;
+  largestAspect: number;
+  largestFillRatio: number;
+  candidateCount: number;
+  candidates: SingleBaselineRegionCandidate[];
+  /** Bounding box of the dominant bright region (page/screen), in camera pixels. */
+  brightRegionX: number;
+  brightRegionY: number;
+  brightRegionWidth: number;
+  brightRegionHeight: number;
+  /** True when a dark re-segmentation inside the dominant bright region was run. */
+  brightSubregionUsed: boolean;
+  /** Empty when G7a produced candidates; otherwise the exact reason it did not. */
+  rejection: string;
+  g7aPass: boolean;
+};
+
+export type DarkRegionAnalysis = {
+  bounds: DarkBounds | null;
+  candidates: SingleBaselineRegionCandidate[];
+  diagnostics: SingleBaselineRegionDiagnostics;
+};
+
+function emptyRegionDiagnostics(width: number, height: number): SingleBaselineRegionDiagnostics {
+  return {
+    frameWidth: width,
+    frameHeight: height,
+    sampleStride: 1,
+    sampledPixels: 0,
+    lumaMin: 255,
+    lumaMax: 0,
+    lumaMean: 0,
+    channelMeanR: 0,
+    channelMeanG: 0,
+    channelMeanB: 0,
+    channelMeanA: 0,
+    localVariationRatio: 0,
+    threshold: 0,
+    contrast: 0,
+    darkPixelCount: 0,
+    darkPixelRatio: 0,
+    maskWidth: 0,
+    maskHeight: 0,
+    maskStep: 0,
+    maskArea: 0,
+    maskDarkCells: 0,
+    componentCount: 0,
+    largestArea: 0,
+    largestFractionOfMask: 0,
+    largestX: 0,
+    largestY: 0,
+    largestWidth: 0,
+    largestHeight: 0,
+    largestAspect: 0,
+    largestFillRatio: 0,
+    candidateCount: 0,
+    candidates: [],
+    brightRegionX: 0,
+    brightRegionY: 0,
+    brightRegionWidth: 0,
+    brightRegionHeight: 0,
+    brightSubregionUsed: false,
+    rejection: '',
+    g7aPass: false,
+  };
+}
+
+/**
+ * G7a Candidate Detection / 候选区域检测 + G7b Code Bounding Box / 码边界定位.
+ *
+ * A coarse max-pooled dark mask keeps a checkerboard border connected under
+ * 8-connectivity. ALL dark components are measured and the most code-like ones
+ * (square-ish bbox, ~half-dark interior fill, enough pixels) are ranked as
+ * candidates, because in a real monitor photo the largest connected dark region
+ * is not necessarily the code (dark bezel, dark room, dark UI or a dark desk can
+ * each be larger). The reason for every rejection is recorded.
+ */
+export function analyzeDarkRegions(frame: PixelFrame): DarkRegionAnalysis {
   const width = frame.width;
   const height = frame.height;
-  if (width < 32 || height < 32) return null;
+  const diagnostics = emptyRegionDiagnostics(width, height);
+  if (width < 32 || height < 32) {
+    diagnostics.rejection = 'frame-too-small:' + width + 'x' + height;
+    return {bounds: null, candidates: [], diagnostics};
+  }
+
+  // ---- pass 1: global luma statistics (min/max/mean, channels, structure) ----
   const stride = Math.max(1, Math.floor(Math.min(width, height) / 256));
+  const data = frame.data;
   let minLuma = 255;
   let maxLuma = 0;
+  let sum = 0;
+  let count = 0;
+  let rSum = 0;
+  let gSum = 0;
+  let bSum = 0;
+  let aSum = 0;
+  let varied = 0;
+  let pairs = 0;
   for (let y = 0; y < height; y += stride) {
+    let previous = -1;
     for (let x = 0; x < width; x += stride) {
-      const value = lumaAt(frame, x, y);
+      const offset = (y * width + x) * 4;
+      const r = data[offset];
+      const g = data[offset + 1];
+      const b = data[offset + 2];
+      const a = offset + 3 < data.length ? data[offset + 3] : 0;
+      const value = r * 0.2126 + g * 0.7152 + b * 0.0722;
       if (value < minLuma) minLuma = value;
       if (value > maxLuma) maxLuma = value;
+      sum += value;
+      count += 1;
+      rSum += r;
+      gSum += g;
+      bSum += b;
+      aSum += a;
+      if (previous >= 0) {
+        pairs += 1;
+        if (Math.abs(value - previous) > 24) varied += 1;
+      }
+      previous = value;
     }
   }
-  if (maxLuma - minLuma < 60) return null;
+  diagnostics.sampleStride = stride;
+  diagnostics.sampledPixels = count;
+  diagnostics.lumaMin = minLuma;
+  diagnostics.lumaMax = maxLuma;
+  diagnostics.lumaMean = count ? sum / count : 0;
+  diagnostics.channelMeanR = count ? rSum / count : 0;
+  diagnostics.channelMeanG = count ? gSum / count : 0;
+  diagnostics.channelMeanB = count ? bSum / count : 0;
+  diagnostics.channelMeanA = count ? aSum / count : 0;
+  diagnostics.localVariationRatio = pairs ? varied / pairs : 0;
+  diagnostics.contrast = maxLuma - minLuma;
+  if (!(diagnostics.contrast >= SINGLE_BASELINE_MIN_REGION_CONTRAST)) {
+    diagnostics.rejection = 'low-contrast:' + diagnostics.contrast.toFixed(1);
+    return {bounds: null, candidates: [], diagnostics};
+  }
   const threshold = (minLuma + maxLuma) / 2;
+  diagnostics.threshold = threshold;
 
+  // ---- pass 2: dark sample statistics at that threshold ----
+  let darkPixels = 0;
+  for (let y = 0; y < height; y += stride) {
+    for (let x = 0; x < width; x += stride) {
+      if (lumaAt(frame, x, y) < threshold) darkPixels += 1;
+    }
+  }
+  diagnostics.darkPixelCount = darkPixels;
+  diagnostics.darkPixelRatio = count ? darkPixels / count : 0;
+
+  // ---- pass 3: coarse max-pooled dark mask ----
   const step = Math.max(1, Math.floor(Math.min(width, height) / 160));
   const maskWidth = Math.max(1, Math.floor(width / step));
   const maskHeight = Math.max(1, Math.floor(height / step));
-  const mask = new Uint8Array(maskWidth * maskHeight);
+  const maskArea = maskWidth * maskHeight;
+  const mask = new Uint8Array(maskArea);
   const offsets = [-step / 4, 0, step / 4];
+  let maskDarkCells = 0;
   for (let gy = 0; gy < maskHeight; gy += 1) {
     for (let gx = 0; gx < maskWidth; gx += 1) {
       const cx = gx * step + step / 2;
@@ -590,13 +792,26 @@ export function locateDarkRegionBounds(frame: PixelFrame): DarkBounds | null {
           if (value < darkest) darkest = value;
         }
       }
-      mask[gy * maskWidth + gx] = darkest < threshold ? 1 : 0;
+      const dark = darkest < threshold ? 1 : 0;
+      mask[gy * maskWidth + gx] = dark;
+      if (dark) maskDarkCells += 1;
     }
   }
+  diagnostics.maskWidth = maskWidth;
+  diagnostics.maskHeight = maskHeight;
+  diagnostics.maskStep = step;
+  diagnostics.maskArea = maskArea;
+  diagnostics.maskDarkCells = maskDarkCells;
+  if (!maskDarkCells) {
+    diagnostics.rejection = 'no-dark-pixels:' + diagnostics.darkPixelRatio.toFixed(4);
+    return {bounds: null, candidates: [], diagnostics};
+  }
 
-  const label = new Int32Array(maskWidth * maskHeight).fill(-1);
-  const stack = new Int32Array(maskWidth * maskHeight);
-  let best: DarkBounds | null = null;
+  // ---- pass 4: connected components (8-connectivity) ----
+  const label = new Int32Array(maskArea).fill(-1);
+  const stack = new Int32Array(maskArea);
+  const components: Component[] = [];
+  let largest: Component | null = null;
   for (let start = 0; start < mask.length; start += 1) {
     if (!mask[start] || label[start] >= 0) continue;
     let top = 0;
@@ -628,14 +843,259 @@ export function locateDarkRegionBounds(frame: PixelFrame): DarkBounds | null {
         }
       }
     }
-    if (!best || area > best.area) {
-      best = {minX: minGX * step, minY: minGY * step, maxX: (maxGX + 1) * step - 1, maxY: (maxGY + 1) * step - 1, area};
+    const component: Component = {area, minGX, maxGX, minGY, maxGY};
+    components.push(component);
+    if (!largest || area > largest.area) largest = component;
+  }
+  diagnostics.componentCount = components.length;
+  if (!largest) {
+    diagnostics.rejection = 'no-dark-component';
+    return {bounds: null, candidates: [], diagnostics};
+  }
+  const spanOf = (component: Component): number => Math.max(component.maxGX - component.minGX + 1, component.maxGY - component.minGY + 1) * step;
+  const fillOf = (component: Component, source: Uint8Array): number => {
+    let dark = 0;
+    let total = 0;
+    for (let gy = component.minGY; gy <= component.maxGY; gy += 1) {
+      for (let gx = component.minGX; gx <= component.maxGX; gx += 1) {
+        total += 1;
+        if (source[gy * maskWidth + gx]) dark += 1;
+      }
+    }
+    return total ? dark / total : 0;
+  };
+  const bounds: DarkBounds = {
+    minX: largest.minGX * step,
+    minY: largest.minGY * step,
+    maxX: (largest.maxGX + 1) * step - 1,
+    maxY: (largest.maxGY + 1) * step - 1,
+    area: largest.area,
+  };
+  diagnostics.largestArea = largest.area;
+  diagnostics.largestFractionOfMask = maskArea ? largest.area / maskArea : 0;
+  diagnostics.largestX = bounds.minX;
+  diagnostics.largestY = bounds.minY;
+  diagnostics.largestWidth = bounds.maxX - bounds.minX + 1;
+  diagnostics.largestHeight = bounds.maxY - bounds.minY + 1;
+  diagnostics.largestAspect = diagnostics.largestHeight ? diagnostics.largestWidth / diagnostics.largestHeight : 0;
+  diagnostics.largestFillRatio = fillOf(largest, mask);
+
+  // ---- rank the code-like candidates (G7b) ----
+  const minSpan = Math.min(width, height);
+  const candidates: SingleBaselineRegionCandidate[] = [];
+  const pushCandidate = (component: Component, source: Uint8Array, sourceKind: 'dark-component' | 'bright-subregion'): void => {
+    const spanPx = spanOf(component);
+    if (spanPx < SINGLE_BASELINE_MIN_CANDIDATE_SPAN_PX) return;
+    const componentWidth = (component.maxGX - component.minGX + 1) * step;
+    const componentHeight = (component.maxGY - component.minGY + 1) * step;
+    const aspect = componentHeight ? componentWidth / componentHeight : 0;
+    const fillRatio = fillOf(component, source);
+    let rank = 0;
+    if (aspect >= 0.6 && aspect <= 1.7) rank += 3;
+    if (fillRatio >= 0.15 && fillRatio <= 0.85) rank += 3;
+    if (spanPx >= SINGLE_BASELINE_MATRIX * 2) rank += 2;
+    // A dark structure bounded by the bright page/screen is the expected code
+    // location, so it outranks a raw dark blob of the same shape.
+    if (sourceKind === 'bright-subregion') rank += 1;
+    candidates.push({
+      minX: component.minGX * step,
+      minY: component.minGY * step,
+      maxX: (component.maxGX + 1) * step - 1,
+      maxY: (component.maxGY + 1) * step - 1,
+      area: component.area,
+      fillRatio,
+      aspect,
+      spanPx,
+      frameFraction: minSpan ? spanPx / minSpan : 0,
+      rank,
+      source: sourceKind,
+    });
+  };
+  for (const component of components) pushCandidate(component, mask, 'dark-component');
+
+  // ---- extra candidates: dark structures INSIDE the dominant bright region ----
+  // A real monitor photo puts the code on a bright page/screen. The dark modules
+  // can (a) merge with the dark room/bezel across the screen edge, or (b) fragment
+  // because of a screen cast or a strong illumination gradient. Re-segmenting the
+  // dark cells INSIDE the largest bright component, with a LOCAL threshold,
+  // recovers a clean code bounding box in both cases.
+  diagnostics.brightSubregionUsed = false;
+  const brightComponent = largestComponentOf(invertMask(mask), maskWidth, maskHeight, maskArea * 0.02);
+  if (brightComponent) {
+    const brightBounds = {
+      minX: brightComponent.minGX * step,
+      minY: brightComponent.minGY * step,
+      maxX: (brightComponent.maxGX + 1) * step - 1,
+      maxY: (brightComponent.maxGY + 1) * step - 1,
+      area: brightComponent.area,
+    };
+    diagnostics.brightRegionX = brightBounds.minX;
+    diagnostics.brightRegionY = brightBounds.minY;
+    diagnostics.brightRegionWidth = brightBounds.maxX - brightBounds.minX + 1;
+    diagnostics.brightRegionHeight = brightBounds.maxY - brightBounds.minY + 1;
+    const subregion = segmentDarkWithinBrightRegion(frame, brightBounds, step);
+    diagnostics.brightSubregionUsed = true;
+    if (subregion) pushCandidate(subregion, subregion.mask, 'bright-subregion');
+  }
+
+  candidates.sort((a, b) => (b.rank - a.rank) || (b.area - a.area));
+  // Drop near-duplicate boxes (the dark-component and bright-subregion detectors
+  // usually find the same code) so refinement budget is not wasted twice.
+  const deduped: SingleBaselineRegionCandidate[] = [];
+  for (const candidate of candidates) {
+    const duplicate = deduped.some((kept) => {
+      const centreX = (kept.minX + kept.maxX) / 2;
+      const centreY = (kept.minY + kept.maxY) / 2;
+      const otherX = (candidate.minX + candidate.maxX) / 2;
+      const otherY = (candidate.minY + candidate.maxY) / 2;
+      const tolerance = Math.max(kept.spanPx, candidate.spanPx) * 0.12;
+      const spanRatio = Math.max(kept.spanPx, candidate.spanPx) / Math.max(1, Math.min(kept.spanPx, candidate.spanPx));
+      return Math.abs(centreX - otherX) <= tolerance
+        && Math.abs(centreY - otherY) <= tolerance
+        && spanRatio <= 1.18;
+    });
+    if (!duplicate) deduped.push(candidate);
+  }
+  diagnostics.candidates = deduped.slice(0, SINGLE_BASELINE_MAX_REGION_CANDIDATES);
+  diagnostics.candidateCount = diagnostics.candidates.length;
+  if (!candidates.length) {
+    diagnostics.rejection = 'no-candidate-region:components=' + components.length
+      + ' largestArea=' + largest.area
+      + ' largestSpanPx=' + spanOf(largest).toFixed(0)
+      + ' minCandidateSpanPx=' + SINGLE_BASELINE_MIN_CANDIDATE_SPAN_PX;
+    return {bounds, candidates: [], diagnostics};
+  }
+  diagnostics.g7aPass = true;
+  return {bounds, candidates: diagnostics.candidates, diagnostics};
+}
+
+/** Invert a binary mask (1 ↔ 0). Used to derive the bright (page/screen) mask. */
+function invertMask(mask: Uint8Array): Uint8Array {
+  const out = new Uint8Array(mask.length);
+  for (let i = 0; i < mask.length; i += 1) out[i] = mask[i] ? 0 : 1;
+  return out;
+}
+
+/** Largest 8-connected component of a binary mask (area floor in mask cells). */
+function largestComponentOf(binary: Uint8Array, maskWidth: number, maskHeight: number, minArea: number): Component | null {
+  const label = new Int32Array(binary.length).fill(-1);
+  const stack = new Int32Array(binary.length);
+  let best: Component | null = null;
+  for (let start = 0; start < binary.length; start += 1) {
+    if (!binary[start] || label[start] >= 0) continue;
+    let top = 0;
+    stack[top++] = start;
+    label[start] = start;
+    let area = 0;
+    let minGX = maskWidth;
+    let maxGX = -1;
+    let minGY = maskHeight;
+    let maxGY = -1;
+    while (top > 0) {
+      const cell = stack[--top];
+      const gx = cell % maskWidth;
+      const gy = (cell - gx) / maskWidth;
+      area += 1;
+      if (gx < minGX) minGX = gx;
+      if (gx > maxGX) maxGX = gx;
+      if (gy < minGY) minGY = gy;
+      if (gy > maxGY) maxGY = gy;
+      for (let dy = -1; dy <= 1; dy += 1) {
+        for (let dx = -1; dx <= 1; dx += 1) {
+          const nx = gx + dx;
+          const ny = gy + dy;
+          if (nx < 0 || ny < 0 || nx >= maskWidth || ny >= maskHeight) continue;
+          const next = ny * maskWidth + nx;
+          if (!binary[next] || label[next] >= 0) continue;
+          label[next] = start;
+          stack[top++] = next;
+        }
+      }
+    }
+    if (area >= minArea && (!best || area > best.area)) best = {area, minGX, maxGX, minGY, maxGY};
+  }
+  return best;
+}
+
+/**
+ * Re-segment the dark cells inside one bright region (the page/screen) with a
+ * LOCAL threshold, and return the largest dark component found there together
+ * with the mask it was derived from.
+ */
+function segmentDarkWithinBrightRegion(
+  frame: PixelFrame,
+  brightBounds: DarkBounds,
+  step: number,
+): (Component & {mask: Uint8Array}) | null {
+  const width = frame.width;
+  const height = frame.height;
+  const margin = step * 2;
+  const minX = Math.max(0, brightBounds.minX - margin);
+  const minY = Math.max(0, brightBounds.minY - margin);
+  const maxX = Math.min(width - 1, brightBounds.maxX + margin);
+  const maxY = Math.min(height - 1, brightBounds.maxY + margin);
+  const stride = Math.max(1, Math.floor(Math.min(maxX - minX, maxY - minY) / 256) || 1);
+  let localMin = 255;
+  let localMax = 0;
+  for (let y = minY; y <= maxY; y += stride) {
+    for (let x = minX; x <= maxX; x += stride) {
+      const value = lumaAt(frame, x, y);
+      if (value < localMin) localMin = value;
+      if (value > localMax) localMax = value;
     }
   }
-  if (!best) return null;
-  const maskArea = maskWidth * maskHeight;
-  if (best.area < Math.max(4, maskArea * 0.01)) return null;
-  return best;
+  if (localMax - localMin < SINGLE_BASELINE_MIN_REGION_CONTRAST) return null;
+  const localThreshold = (localMin + localMax) / 2;
+  const spanX = Math.max(1, Math.floor((maxX - minX + 1) / step));
+  const spanY = Math.max(1, Math.floor((maxY - minY + 1) / step));
+  const mask = new Uint8Array(spanX * spanY);
+  const offsets = [-step / 4, 0, step / 4];
+  for (let gy = 0; gy < spanY; gy += 1) {
+    for (let gx = 0; gx < spanX; gx += 1) {
+      const cx = minX + gx * step + step / 2;
+      const cy = minY + gy * step + step / 2;
+      let darkest = 255;
+      for (const oy of offsets) {
+        for (const ox of offsets) {
+          const value = lumaAt(frame, cx + ox, cy + oy);
+          if (value < darkest) darkest = value;
+        }
+      }
+      mask[gy * spanX + gx] = darkest < localThreshold ? 1 : 0;
+    }
+  }
+  const component = largestComponentOf(mask, spanX, spanY, 8);
+  if (!component) return null;
+  const shifted: Component = {
+    area: component.area,
+    minGX: Math.floor(minX / step) + component.minGX,
+    maxGX: Math.floor(minX / step) + component.maxGX,
+    minGY: Math.floor(minY / step) + component.minGY,
+    maxGY: Math.floor(minY / step) + component.maxGY,
+  };
+  // Re-index the sub-mask into the parent grid so the shared helpers can be used.
+  const parent = new Uint8Array((Math.floor(width / step) + 1) * (Math.floor(height / step) + 1));
+  const baseGX = Math.floor(minX / step);
+  const baseGY = Math.floor(minY / step);
+  for (let gy = 0; gy < spanY; gy += 1) {
+    for (let gx = 0; gx < spanX; gx += 1) {
+      if (!mask[gy * spanX + gx]) continue;
+      const parentGX = baseGX + gx;
+      const parentGY = baseGY + gy;
+      if (parentGX < 0 || parentGY < 0 || parentGX >= Math.floor(width / step) || parentGY >= Math.floor(height / step)) continue;
+      parent[parentGY * Math.floor(width / step) + parentGX] = 1;
+    }
+  }
+  return {...shifted, mask: parent};
+}
+
+/**
+ * Backwards-compatible wrapper: bounding box of the LARGEST connected dark region.
+ * Kept for tests and diagnostics; the locator itself uses `analyzeDarkRegions`,
+ * which also ranks smaller code-like regions.
+ */
+export function locateDarkRegionBounds(frame: PixelFrame): DarkBounds | null {
+  return analyzeDarkRegions(frame).bounds;
 }
 
 /**
@@ -654,14 +1114,12 @@ export type SingleBaselineGeometricSeed = {params: QuadParams; score: number};
 const TRACK_STAGES: ReadonlyArray<RefineStage> = [REFINE_STAGES[1], REFINE_STAGES[2]];
 
 /**
- * Ordered geometric seeds from the dark-region bounding box. All four 90°
- * frame rotations are seeded because the correct one cannot be told apart by
- * the reserved pattern alone (that pattern is symmetric under transpose) — the
+ * Ordered geometric seeds for one candidate bounding box. All four 90° frame
+ * rotations are seeded because the correct one cannot be told apart by the
+ * reserved pattern alone (that pattern is symmetric under transpose) — the
  * OptiGrid CRC decides, so the receiver simply tries them in score order.
  */
-export function locateSingleBaselineCodeSeeds(frame: PixelFrame, matrixSize = SINGLE_BASELINE_MATRIX): SingleBaselineGeometricSeed[] {
-  const bounds = locateDarkRegionBounds(frame);
-  if (!bounds) return [];
+export function seedsForBounds(frame: PixelFrame, matrixSize: number, bounds: DarkBounds): SingleBaselineGeometricSeed[] {
   const cx = (bounds.minX + bounds.maxX + 1) / 2;
   const cy = (bounds.minY + bounds.maxY + 1) / 2;
   const span = Math.max(bounds.maxX - bounds.minX + 1, bounds.maxY - bounds.minY + 1);
@@ -682,20 +1140,106 @@ export function locateSingleBaselineCodeSeeds(frame: PixelFrame, matrixSize = SI
   return seeds;
 }
 
+/** Seeds for the largest dark region (kept for diagnostics and tests). */
+export function locateSingleBaselineCodeSeeds(frame: PixelFrame, matrixSize = SINGLE_BASELINE_MATRIX): SingleBaselineGeometricSeed[] {
+  const bounds = locateDarkRegionBounds(frame);
+  if (!bounds) return [];
+  return seedsForBounds(frame, matrixSize, bounds);
+}
+
+/** Per-frame G7b/G7c/G7d diagnostics (G7a comes from `analyzeDarkRegions`). */
+export type SingleBaselineCaptureDiagnostics = {
+  /** Null when the frame was served by the tracking fast path (no region analysis needed). */
+  region: SingleBaselineRegionDiagnostics | null;
+  seedCount: number;
+  seedBestScore: number;
+  seedBestRotation: number;
+  seedBestSidePx: number;
+  seedBestAngleDeg: number;
+  refinementCount: number;
+  refinementBestScore: number;
+  refinementBestRotation: number;
+  refinementBestSidePx: number;
+  refinementBestPixPerCell: number;
+  refinementBestPhaseX: number;
+  refinementBestPhaseY: number;
+  refinementBestThreshold: number;
+  refinementBestContrast: number;
+  g7bPass: boolean;
+  g7bReason: string;
+  g7cPass: boolean;
+  g7cReason: string;
+  crcAttempts: number;
+  crcSuccess: number;
+  crcFailure: number;
+  decodedSequence: number;
+  decodedChunkIndex: number;
+  g7dPass: boolean;
+  /** Deepest G7 sub-stage this frame reached. */
+  stage: 'G7a' | 'G7b' | 'G7c' | 'G7d';
+  stageReason: string;
+};
+
 export type SingleBaselineCapture = {
   decoded: OptiGridV1DecodedFrame | null;
   /** Best refined geometric lock (present even when the CRC decode fails). */
   lock: SingleCodeLock | null;
-  /** Geometric attempts considered (1 tracking + up to 4 acquisition). */
+  /** Geometric attempts considered (1 tracking + up to MAX candidates × 4 rotations). */
   candidates: number;
   /** Attempts that passed the refinement stage. */
   refined: number;
+  diagnostics: SingleBaselineCaptureDiagnostics;
 };
 
 /**
- * Full single-code capture: locate → refine → CRC-decode. The tracking seed
- * (previous lock) is tried first, so a steady stream of held frames stays
- * cheap; acquisition seeds are only used when tracking fails.
+ * Refinement attempts are capped so one frame stays bounded no matter how many
+ * candidate regions were found. The highest-scoring seeds are tried first.
+ */
+export const SINGLE_BASELINE_MAX_REFINEMENT_ATTEMPTS = 6;
+
+function emptyCaptureDiagnostics(): SingleBaselineCaptureDiagnostics {
+  return {
+    region: null,
+    seedCount: 0,
+    seedBestScore: 0,
+    seedBestRotation: 0,
+    seedBestSidePx: 0,
+    seedBestAngleDeg: 0,
+    refinementCount: 0,
+    refinementBestScore: 0,
+    refinementBestRotation: 0,
+    refinementBestSidePx: 0,
+    refinementBestPixPerCell: 0,
+    refinementBestPhaseX: 0,
+    refinementBestPhaseY: 0,
+    refinementBestThreshold: 0,
+    refinementBestContrast: 0,
+    g7bPass: false,
+    g7bReason: '',
+    g7cPass: false,
+    g7cReason: '',
+    crcAttempts: 0,
+    crcSuccess: 0,
+    crcFailure: 0,
+    decodedSequence: -1,
+    decodedChunkIndex: -1,
+    g7dPass: false,
+    stage: 'G7a',
+    stageReason: '',
+  };
+}
+
+/**
+ * Full single-code capture with G7a→G7d diagnostics:
+ *
+ *   G7a candidate detection  → analyzeDarkRegions (luma stats, dark ratio, components, ranked candidates)
+ *   G7b bounding box         → the top candidate must be square-ish and ≥2 px/cell
+ *   G7c geometry lock        → coarse seeds + cell-unit refinement per candidate
+ *   G7d CRC decode           → OptiGrid v1 CRC is the acceptance oracle
+ *
+ * The tracking seed (previous lock) is tried first, so a steady stream of held
+ * frames stays cheap. Every sub-stage records its own best value and the exact
+ * reason it did not advance, so a failed frame is fully explainable.
  */
 export function captureSingleBaselineCode(
   frame: PixelFrame,
@@ -703,13 +1247,68 @@ export function captureSingleBaselineCode(
   options?: SingleBaselineLocateOptions,
 ): SingleBaselineCapture {
   const previous = options?.previous ?? null;
+  const diagnostics = emptyCaptureDiagnostics();
+
   // Fast path: a static display keeps the same geometry, so try the previous
   // lock directly before spending anything on refinement. The OptiGrid CRC
   // verifies the result, so this can never accept a stale geometry.
   if (previous) {
+    diagnostics.crcAttempts += 1;
     const direct = decodeSingleBaselineLock(frame, matrixSize, previous);
-    if (direct) return {decoded: direct, lock: previous, candidates: 1, refined: 0};
+    if (direct) {
+      diagnostics.g7bPass = true;
+      diagnostics.g7cPass = true;
+      diagnostics.g7dPass = true;
+      diagnostics.crcSuccess = 1;
+      diagnostics.decodedSequence = direct.sequence;
+      diagnostics.decodedChunkIndex = direct.sequence & 0xffff;
+      diagnostics.stage = 'G7d';
+      diagnostics.stageReason = 'tracked-lock';
+      return {decoded: direct, lock: previous, candidates: 1, refined: 0, diagnostics};
+    }
+    diagnostics.crcFailure = 1;
   }
+
+  // ---- G7a: candidate detection ----
+  const region = analyzeDarkRegions(frame);
+  diagnostics.region = region.diagnostics;
+  if (!region.diagnostics.g7aPass) {
+    diagnostics.stage = 'G7a';
+    diagnostics.stageReason = region.diagnostics.rejection || 'no-candidate-region';
+    return {decoded: null, lock: null, candidates: 0, refined: 0, diagnostics};
+  }
+
+  // ---- G7b: code-plausible bounding box (reported opinion, never a silent stop) ----
+  // G7b is deliberately REPORT-ONLY for gating: a candidate that is not square-ish
+  // is a strong hint that the code's dark modules merged with the background or
+  // fragmented, but the OptiGrid CRC — not a shape heuristic — is the acceptance
+  // oracle. Aborting here is what turned every r4 physical frame into an
+  // unexplained "locate-failed"; now G7c/G7d are always attempted and measured.
+  const primary = region.candidates[0];
+  const minSidePx = matrixSize * 2;
+  diagnostics.g7bPass = primary.spanPx >= minSidePx && primary.aspect >= 0.5 && primary.aspect <= 2;
+  if (!diagnostics.g7bPass) {
+    diagnostics.g7bReason = 'candidate-not-code-like:spanPx=' + primary.spanPx.toFixed(0)
+      + ' aspect=' + primary.aspect.toFixed(2)
+      + ' fill=' + primary.fillRatio.toFixed(2)
+      + ' source=' + primary.source
+      + ' minSidePx=' + minSidePx;
+  }
+
+  // ---- G7c inputs: seeds from every ranked candidate, best score first ----
+  const seeds: Array<SingleBaselineGeometricSeed & {candidate: number}> = [];
+  region.candidates.forEach((candidate, index) => {
+    for (const seed of seedsForBounds(frame, matrixSize, candidate)) seeds.push({...seed, candidate: index});
+  });
+  seeds.sort((a, b) => b.score - a.score);
+  diagnostics.seedCount = seeds.length;
+  if (seeds.length) {
+    diagnostics.seedBestScore = seeds[0].score;
+    diagnostics.seedBestRotation = seeds[0].params.rotation;
+    diagnostics.seedBestSidePx = seeds[0].params.side;
+    diagnostics.seedBestAngleDeg = seeds[0].params.angle * 180 / Math.PI;
+  }
+
   const attempts: Array<{params: QuadParams; stages: ReadonlyArray<RefineStage>}> = [];
   if (previous) {
     attempts.push({
@@ -725,9 +1324,11 @@ export function captureSingleBaselineCode(
       stages: TRACK_STAGES,
     });
   }
-  for (const seed of locateSingleBaselineCodeSeeds(frame, matrixSize)) {
+  for (const seed of seeds.slice(0, SINGLE_BASELINE_MAX_REFINEMENT_ATTEMPTS)) {
     attempts.push({params: seed.params, stages: REFINE_STAGES});
   }
+
+  // ---- G7c + G7d: refine, then let the OptiGrid CRC decide ----
   let bestLock: SingleCodeLock | null = null;
   let decoded: OptiGridV1DecodedFrame | null = null;
   let refined = 0;
@@ -737,14 +1338,47 @@ export function captureSingleBaselineCode(
     refined += 1;
     const lock = lockFromParams(candidate.params, candidate.score, matrixSize);
     if (!bestLock || lock.score > bestLock.score) bestLock = lock;
+    if (lock.score > diagnostics.refinementBestScore) {
+      diagnostics.refinementBestScore = lock.score;
+      diagnostics.refinementBestRotation = lock.rotation;
+      diagnostics.refinementBestSidePx = lock.sidePx;
+      diagnostics.refinementBestPixPerCell = lock.pixPerCellX;
+      diagnostics.refinementBestPhaseX = lock.phaseX;
+      diagnostics.refinementBestPhaseY = lock.phaseY;
+      diagnostics.refinementBestThreshold = lock.threshold;
+      diagnostics.refinementBestContrast = lock.contrast;
+    }
+    diagnostics.crcAttempts += 1;
     const frameDecoded = decodeSingleBaselineLock(frame, matrixSize, lock);
     if (frameDecoded) {
       decoded = frameDecoded;
       bestLock = lock;
+      diagnostics.crcSuccess = 1;
+      diagnostics.decodedSequence = frameDecoded.sequence;
+      diagnostics.decodedChunkIndex = frameDecoded.sequence & 0xffff;
       break;
     }
+    diagnostics.crcFailure = 1;
   }
-  return {decoded, lock: bestLock, candidates: attempts.length, refined};
+  diagnostics.refinementCount = refined;
+  diagnostics.g7cPass = refined > 0;
+  if (!diagnostics.g7cPass) {
+    diagnostics.g7cReason = 'no-refined-lock:candidates=' + region.candidates.length
+      + ' seeds=' + seeds.length
+      + ' bestSeedScore=' + diagnostics.seedBestScore.toFixed(4);
+    diagnostics.stage = 'G7c';
+    diagnostics.stageReason = diagnostics.g7cReason;
+    return {decoded: null, lock: null, candidates: attempts.length, refined, diagnostics};
+  }
+  diagnostics.g7dPass = decoded !== null;
+  diagnostics.stage = decoded ? 'G7d' : 'G7c';
+  diagnostics.stageReason = decoded
+    ? 'crc-pass'
+    : 'crc-fail:bestScore=' + diagnostics.refinementBestScore.toFixed(4)
+      + ' bestRotation=' + diagnostics.refinementBestRotation
+      + ' pixPerCell=' + diagnostics.refinementBestPixPerCell.toFixed(2)
+      + ' contrast=' + diagnostics.refinementBestContrast.toFixed(1);
+  return {decoded, lock: bestLock, candidates: attempts.length, refined, diagnostics};
 }
 
 function lockFromParams(params: QuadParams, score: ReservedScore, matrixSize: number): SingleCodeLock {
@@ -931,6 +1565,67 @@ export type SingleBaselineMetrics = {
   threshold: number;
   contrast: number;
   rotation: number;
+
+  // ---- G7a Candidate Detection / 候选区域检测 (last analysed frame) ----
+  regionLumaMin: number;
+  regionLumaMax: number;
+  regionLumaMean: number;
+  regionContrast: number;
+  regionThreshold: number;
+  regionDarkPixelRatio: number;
+  regionLocalVariationRatio: number;
+  regionChannelMeanR: number;
+  regionChannelMeanG: number;
+  regionChannelMeanB: number;
+  regionChannelMeanA: number;
+  regionComponentCount: number;
+  regionCandidateCount: number;
+  regionRejection: string;
+  regionLargestX: number;
+  regionLargestY: number;
+  regionLargestWidth: number;
+  regionLargestHeight: number;
+  regionLargestArea: number;
+  regionLargestFillRatio: number;
+  regionLargestAspect: number;
+  regionCandidateSpansPx: string;
+
+  // ---- G7b Code Bounding Box / 码边界定位 ----
+  g7bPass: number;
+  g7bReason: string;
+
+  // ---- G7c Geometry Lock / 几何锁定 ----
+  seedCount: number;
+  seedBestScore: number;
+  seedBestRotation: number;
+  seedBestSidePx: number;
+  refinementCount: number;
+  refinementBestScore: number;
+  refinementBestRotation: number;
+  refinementBestPixPerCell: number;
+  refinementBestPhaseX: number;
+  refinementBestPhaseY: number;
+  g7cPass: number;
+  g7cReason: string;
+
+  // ---- G7d CRC Decode / CRC 解码 ----
+  crcDecodeAttempts: number;
+  crcSuccess: number;
+  crcFailure: number;
+  decodedSequence: number;
+  decodedChunkIndex: number;
+  g7dPass: number;
+
+  /** Deepest G7 sub-stage reached on the last analysed frame. */
+  locatorStage: string;
+  locatorStageReason: string;
+
+  // ---- cumulative G7 sub-stage counters (frames that reached each stage) ----
+  g7FramesAnalysed: number;
+  g7aPassCount: number;
+  g7bPassCount: number;
+  g7cPassCount: number;
+  g7dPassCount: number;
 };
 
 export type SingleBaselineReconstruction = {
@@ -970,6 +1665,55 @@ function emptyMetrics(): SingleBaselineMetrics {
     threshold: 0,
     contrast: 0,
     rotation: 0,
+    regionLumaMin: 0,
+    regionLumaMax: 0,
+    regionLumaMean: 0,
+    regionContrast: 0,
+    regionThreshold: 0,
+    regionDarkPixelRatio: 0,
+    regionLocalVariationRatio: 0,
+    regionChannelMeanR: 0,
+    regionChannelMeanG: 0,
+    regionChannelMeanB: 0,
+    regionChannelMeanA: 0,
+    regionComponentCount: 0,
+    regionCandidateCount: 0,
+    regionRejection: '',
+    regionLargestX: 0,
+    regionLargestY: 0,
+    regionLargestWidth: 0,
+    regionLargestHeight: 0,
+    regionLargestArea: 0,
+    regionLargestFillRatio: 0,
+    regionLargestAspect: 0,
+    regionCandidateSpansPx: '',
+    g7bPass: 0,
+    g7bReason: '',
+    seedCount: 0,
+    seedBestScore: 0,
+    seedBestRotation: 0,
+    seedBestSidePx: 0,
+    refinementCount: 0,
+    refinementBestScore: 0,
+    refinementBestRotation: 0,
+    refinementBestPixPerCell: 0,
+    refinementBestPhaseX: 0,
+    refinementBestPhaseY: 0,
+    g7cPass: 0,
+    g7cReason: '',
+    crcDecodeAttempts: 0,
+    crcSuccess: 0,
+    crcFailure: 0,
+    decodedSequence: -1,
+    decodedChunkIndex: -1,
+    g7dPass: 0,
+    locatorStage: 'G7a',
+    locatorStageReason: '',
+    g7FramesAnalysed: 0,
+    g7aPassCount: 0,
+    g7bPassCount: 0,
+    g7cPassCount: 0,
+    g7dPassCount: 0,
   };
 }
 
@@ -1042,9 +1786,72 @@ export class SingleCodeBaselineReceiver {
     return missing;
   }
 
+  /**
+   * Copy the per-frame G7a→G7d locator diagnostics into the metric surface and
+   * bump the cumulative sub-stage counters. This is what turns a bare
+   * "locate-failed" into an explainable physical measurement: on the phone the
+   * PO can see exactly which sub-stage stopped and why.
+   */
+  private applyCaptureDiagnostics(diagnostics: SingleBaselineCaptureDiagnostics): void {
+    const metrics = this.metrics;
+    const region = diagnostics.region;
+    if (region) {
+      metrics.g7FramesAnalysed += 1;
+      metrics.regionLumaMin = region.lumaMin;
+      metrics.regionLumaMax = region.lumaMax;
+      metrics.regionLumaMean = region.lumaMean;
+      metrics.regionContrast = region.contrast;
+      metrics.regionThreshold = region.threshold;
+      metrics.regionDarkPixelRatio = region.darkPixelRatio;
+      metrics.regionLocalVariationRatio = region.localVariationRatio;
+      metrics.regionChannelMeanR = region.channelMeanR;
+      metrics.regionChannelMeanG = region.channelMeanG;
+      metrics.regionChannelMeanB = region.channelMeanB;
+      metrics.regionChannelMeanA = region.channelMeanA;
+      metrics.regionComponentCount = region.componentCount;
+      metrics.regionCandidateCount = region.candidateCount;
+      metrics.regionRejection = region.rejection;
+      metrics.regionLargestX = region.largestX;
+      metrics.regionLargestY = region.largestY;
+      metrics.regionLargestWidth = region.largestWidth;
+      metrics.regionLargestHeight = region.largestHeight;
+      metrics.regionLargestArea = region.largestArea;
+      metrics.regionLargestFillRatio = region.largestFillRatio;
+      metrics.regionLargestAspect = region.largestAspect;
+      metrics.regionCandidateSpansPx = region.candidates
+        .map((candidate) => candidate.spanPx.toFixed(0) + '@fill' + candidate.fillRatio.toFixed(2) + '@' + candidate.source)
+        .join(' ');
+      if (region.g7aPass) metrics.g7aPassCount += 1;
+    }
+    metrics.g7bPass = diagnostics.g7bPass ? 1 : 0;
+    metrics.g7bReason = diagnostics.g7bReason;
+    metrics.seedCount = diagnostics.seedCount;
+    metrics.seedBestScore = diagnostics.seedBestScore;
+    metrics.seedBestRotation = diagnostics.seedBestRotation;
+    metrics.seedBestSidePx = diagnostics.seedBestSidePx;
+    metrics.refinementCount = diagnostics.refinementCount;
+    metrics.refinementBestScore = diagnostics.refinementBestScore;
+    metrics.refinementBestRotation = diagnostics.refinementBestRotation;
+    metrics.refinementBestPixPerCell = diagnostics.refinementBestPixPerCell;
+    metrics.refinementBestPhaseX = diagnostics.refinementBestPhaseX;
+    metrics.refinementBestPhaseY = diagnostics.refinementBestPhaseY;
+    metrics.g7cPass = diagnostics.g7cPass ? 1 : 0;
+    metrics.g7cReason = diagnostics.g7cReason;
+    metrics.crcDecodeAttempts = diagnostics.crcAttempts;
+    metrics.crcSuccess = diagnostics.crcSuccess;
+    metrics.crcFailure = diagnostics.crcFailure;
+    metrics.decodedSequence = diagnostics.decodedSequence;
+    metrics.decodedChunkIndex = diagnostics.decodedChunkIndex;
+    metrics.g7dPass = diagnostics.g7dPass ? 1 : 0;
+    metrics.locatorStage = diagnostics.stage;
+    metrics.locatorStageReason = diagnostics.stageReason;
+    if (diagnostics.g7bPass) metrics.g7bPassCount += 1;
+    if (diagnostics.g7cPass) metrics.g7cPassCount += 1;
+    if (diagnostics.g7dPass) metrics.g7dPassCount += 1;
+  }
+
   /** G6 → G9: locate, decode and ingest one camera frame. */
-  ingestFrame(frame: PixelFrame, matrixSize = SINGLE_BASELINE_MATRIX, now = Date.now()): SingleBaselineFrameResult {
-    if (this.stage === 'complete' || this.stage === 'reconstructing' || this.stage === 'verifying') {
+  ingestFrame(frame: PixelFrame, matrixSize = SINGLE_BASELINE_MATRIX, now = Date.now()): SingleBaselineFrameResult {    if (this.stage === 'complete' || this.stage === 'reconstructing' || this.stage === 'verifying') {
       this.metrics.postCompleteFrames += 1;
       return {located: false, decoded: false, result: 'ignored-complete', chunkIndex: -1};
     }
@@ -1055,6 +1862,7 @@ export class SingleCodeBaselineReceiver {
     this.metrics.decodeAttempts += 1;
 
     const capture = captureSingleBaselineCode(frame, matrixSize, {previous: this.lock});
+    this.applyCaptureDiagnostics(capture.diagnostics);
     const lock = capture.lock;
     if (!lock) {
       this.metrics.locateFailures += 1;
