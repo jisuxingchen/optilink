@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>TF-009 Browser Pixel Reconstruction Harness</title>
+  <style>
+    :root { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    body { margin: 0; padding: 16px; background: #0f1720; color: #d8e5ef; }
+    h1 { font-size: 18px; margin: 0 0 8px; }
+    p.hint { font-size: 12px; color: #7c93a9; margin: 0 0 12px; max-width: 900px; }
+    .row { display: flex; gap: 16px; align-items: flex-start; }
+    iframe { width: 640px; height: 360px; border: 1px solid #334155; background: #000; }
+    #status { white-space: pre-wrap; background: #0f1720; border: 1px solid #334155;
+      border-radius: 8px; padding: 12px; font-size: 12px; max-height: 360px; overflow: auto; }
+  </style>
+</head>
+<body>
+  <h1>TF-009 SIM — full browser pixel reconstruction</h1>
+  <p class="hint">
+    Receiver input is rendered pixels only. No sender internals, no oracle, no
+    network payload path. SHA-256 is verified over reconstructed bytes.
+  </p>
+  <div class="row">
+    <iframe id="senderFrame" src="/tiled-physical-v5.html?role=sender&standalone=file" title="real sender"></iframe>
+    <pre id="status">starting…</pre>
+  </div>
+  <script type="module" src="/src/tf009-sim-main.ts"></script>
+</body>
+</html>
