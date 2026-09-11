@@ -1,0 +1,55 @@
+{
+  "evidenceClass": "SIMULATED BROWSER PIXEL END-TO-END RECONSTRUCTION",
+  "generatedAt": "2026-09-11T01:43:55.675Z",
+  "gitHead": "e20d1838c5b3ced3577d827fef72982a4eba4694",
+  "senderEntry": "/tiled-physical-v5.html?role=sender&standalone=file",
+  "receiverPipeline": "rendered pixels → PixelFrame → SharedOpticalReceiveCore (orientation→preamble→manifest→symbols) → FountainDecoder → SHA-256",
+  "networkPayloadPath": "NONE",
+  "oracleInputs": [],
+  "sourcePayloadSize": 65536,
+  "sourceSha256": "191e27f4a771896d849e8d66c60a89996b6b974c5177dfcae75819195f11d819",
+  "reconstructedSize": 65536,
+  "reconstructedSha256": "191e27f4a771896d849e8d66c60a89996b6b974c5177dfcae75819195f11d819",
+  "shaMatch": true,
+  "orientation": {
+    "mode": "native",
+    "locked": true,
+    "support": "triplet",
+    "tripletValid": true,
+    "lockMode": "triplet-seeded",
+    "exactTiles": 3,
+    "projectionSafe": true,
+    "selectedTransform": "native"
+  },
+  "manifest": {
+    "protocol": "OLTP",
+    "version": 1,
+    "file": {
+      "name": "tf009-64k.bin",
+      "byteLength": 65536
+    },
+    "matrixSize": 96,
+    "fountainSourceBlockBytes": 512,
+    "fountainSeed": 1946159361
+  },
+  "frameStats": {
+    "renderedFrames": 43,
+    "capturedFrames": 43,
+    "decodedSymbols": 128,
+    "duplicateSymbols": 0,
+    "redundantSymbols": 1,
+    "decodeFailures": 0,
+    "trackFallbacks": 0
+  },
+  "reconstruction": {
+    "solvedBlocks": 128,
+    "totalBlocks": 128
+  },
+  "timings": {
+    "totalMs": 6600.8,
+    "dynamicMs": 4008.9,
+    "timingNote": "DESKTOP / SIMULATION timing only"
+  },
+  "simulatedReconstructedThroughputBytesPerSecond": 9928,
+  "note": "SIMULATION EVIDENCE ONLY. Not physical raw optical ingress. Not Net Goodput."
+}

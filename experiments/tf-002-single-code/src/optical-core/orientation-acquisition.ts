@@ -76,6 +76,7 @@ export type TileStatus = {
   contrast: number;
   refined?: boolean;
   beforeRefineErrors?: number;
+  lock?: PixelLock | null;  // shared geometry lock, available when acquired
 };
 
 export type CalibrationResult = {
@@ -118,12 +119,13 @@ export type OrientationAcquisition = {
   profile: StageProfile;
 };
 
-// --- sender-side preamble encoding (deterministic, shared with the PC sender) ---
-function preambleSequence(matrixSize: number, tile: number): number {
+// --- sender-side preamble encoding (deterministic, shared with the PC sender
+// and the platform-neutral receive core) ---
+export function preambleSequence(matrixSize: number, tile: number): number {
   return (0x54000000 | ((matrixSize & 0xff) << 8) | (tile & 0xff)) >>> 0;
 }
 
-function payloadFor(sequence: number, length: number, tile: number): Uint8Array {
+export function payloadFor(sequence: number, length: number, tile: number): Uint8Array {
   const output = new Uint8Array(length);
   let x = (sequence ^ 0x71d2c3a5 ^ (tile * 0x9e3779b9)) >>> 0;
   for (let i = 0; i < output.length; i++) {
@@ -133,13 +135,13 @@ function payloadFor(sequence: number, length: number, tile: number): Uint8Array 
   return output;
 }
 
-function preambleCells(matrixSize: number, tile: number): Uint8Array {
+export function preambleCells(matrixSize: number, tile: number): Uint8Array {
   const sequence = preambleSequence(matrixSize, tile);
   const bytes = payloadCapacityForMatrixV1(matrixSize);
   return encodeFrameCellsV1(matrixSize, sequence, payloadFor(sequence, bytes, tile));
 }
 
-function lane(tile: number): {x: number; y: number; width: number; height: number} {
+export function lane(tile: number): {x: number; y: number; width: number; height: number} {
   return {x: tile * SAMPLE_WIDTH / TILE_COUNT, y: 0, width: SAMPLE_WIDTH / TILE_COUNT, height: SAMPLE_HEIGHT};
 }
 
@@ -318,6 +320,7 @@ function calibrationFromImage(image: PixelFrame, matrixSize: number, mode: Orien
       contrast: t.contrast,
       refined: t.refined,
       beforeRefineErrors: t.beforeRefineErrors,
+      lock: t.lock ?? null,
     })),
     exactTiles,
     totalBitErrors,
