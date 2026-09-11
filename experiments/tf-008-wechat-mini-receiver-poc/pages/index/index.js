@@ -28,7 +28,7 @@ const opticalCore = require('../../utils/optical-core.js');
 
 // Unmistakable build identifier — must be visible on the phone to prove the
 // device is running the latest shared-receive package (not a stale cache).
-const BUILD_ID = 'tf010-r1';
+const BUILD_ID = 'tf012-r1-4798fde';
 
 // Checkpoint persistence (bounded cadence — never per camera frame). The
 // platform-neutral core owns checkpoint export/import; this adapter only does
@@ -80,6 +80,20 @@ Page({
     receiveSelfCheck: '—',
     receivePipelineError: '',
     tileStatus: [],
+
+    // TF-012 physical metric counters (Phase 12)
+    beaconDetections: 0,
+    orientationAttempts: 0,
+    orientationSuccess: 0,
+    manifestAcquisitions: 0,
+    duplicates: 0,
+    redundant: 0,
+    rejected: 0,
+    replaced: 0,
+    reconstructionMs: '—',
+    shaMs: '—',
+    fileWriteMs: '—',
+    networkType: '—',
 
     // live metrics
     frameWidth: 0,
@@ -154,13 +168,18 @@ Page({
 
   // receive mode internal state
   receiveCore: null,           // SharedOpticalReceiveCore instance
-  receiveBusy: false,          // at most one frame in flight (no unbounded queue)
+  receiveBusy: false,          // one frame actively processing (no unbounded queue)
+  receivePending: null,        // bounded slot: at most one latest pending frame
   receiveFramesReceived: 0,
   receiveFramesProcessed: 0,
   receiveFramesSkipped: 0,
+  receiveFramesReplaced: 0,    // pending-slot overwrites (older frame dropped)
   receiveTimes: [],            // ms per processed frame
+  receiveStageTimes: {},       // per-stage ms samples
   receiveFinalized: false,     // reconstruction + SHA already finalized
   checkpointTick: 0,           // bounded checkpoint cadence counter
+  frameW: 0, frameH: 0, frameBytes: 0,  // batched frame geometry (no per-frame setData)
+  reconstructMs: 0, shaMs: 0, fileWriteMs: 0,
 
   onLoad() {
     this.collectDeviceEvidence();
@@ -269,12 +288,21 @@ Page({
       ? new opticalCore.SharedOpticalReceiveCore()
       : null;
     this.receiveBusy = false;
+    this.receivePending = null;
     this.receiveFramesReceived = 0;
     this.receiveFramesProcessed = 0;
     this.receiveFramesSkipped = 0;
+    this.receiveFramesReplaced = 0;
     this.receiveTimes = [];
+    this.receiveStageTimes = {};
     this.receiveFinalized = false;
     this.checkpointTick = 0;
+    this.frameW = 0;
+    this.frameH = 0;
+    this.frameBytes = 0;
+    this.reconstructMs = 0;
+    this.shaMs = 0;
+    this.fileWriteMs = 0;
     this.windowStartAt = Date.now();
     this.windowReceived = 0;
     this.windowProcessed = 0;
@@ -323,7 +351,18 @@ Page({
       localFilePath: '—',
       receiveSelfCheck: '—',
       receivePipelineError: '',
-      tileStatus: []
+      tileStatus: [],
+      beaconDetections: 0,
+      orientationAttempts: 0,
+      orientationSuccess: 0,
+      manifestAcquisitions: 0,
+      duplicates: 0,
+      redundant: 0,
+      rejected: 0,
+      replaced: 0,
+      reconstructionMs: '—',
+      shaMs: '—',
+      fileWriteMs: '—'
     });
     this.appendLog('metrics reset');
   },
@@ -385,18 +424,18 @@ Page({
     const height = frame.height;
     const buffer = frame.data; // ArrayBuffer (RGBA, 4 bytes/px)
 
+    // Batch frame geometry on the instance — the UI tick refreshes these. No
+    // per-frame setData (setData is the dominant main-thread UI cost and must
+    // stay out of the camera callback hot path).
+    this.frameW = width;
+    this.frameH = height;
+    this.frameBytes = buffer.byteLength;
+
     if (this.data.mode === 'receive') {
       this.processReceiveFrame(buffer, width, height);
     } else {
       this.processBenchmarkFrame(buffer, width, height);
     }
-
-    this.setData({
-      frameWidth: width,
-      frameHeight: height,
-      frameBufferBytes: buffer.byteLength,
-      frameFormat: 'RGBA (4 bytes/px)'
-    });
   },
 
   // Benchmark mode: cheap luma stat every frame + optional normalization.
@@ -421,40 +460,58 @@ Page({
     this.windowProcessed++;
   },
 
-  // Receive mode: drive the shared SharedOpticalReceiveCore state machine.
-  // At most one frame is processed at a time (no unbounded queue); later frames
-  // are skipped while work is in flight. Payload stays local.
+  // Receive mode: bounded latest-frame pipeline (Phase 2).
+  //   CameraFrame callback → bounded slot → SharedOpticalReceiveCore.processFrame.
+  // At most ONE frame is actively processing and ONE latest frame is pending.
+  // A newer frame overwrites the pending slot while busy (framesReplaced).
+  // No unbounded queue is ever built. Payload stays local.
   processReceiveFrame(buffer, width, height) {
-    if (this.receiveBusy) { this.receiveFramesSkipped++; return; }
     this.receiveFramesReceived++;
     if (!this.receiveCore) {
       this.recordError('receive_core_unavailable');
       return;
     }
+    if (this.receiveBusy) {
+      // Bounded latest-frame slot: keep only the newest pending frame.
+      this.receivePending = { buffer, width, height };
+      this.receiveFramesReplaced++;
+      return;
+    }
+    this.receiveBusy = true;
+    this.runReceiveFrame({ buffer, width, height });
+  },
+
+  runReceiveFrame(entry) {
     const core = this.receiveCore;
     const t0 = Date.now();
-    this.receiveBusy = true;
     try {
-      const frame = { width, height, data: new Uint8ClampedArray(buffer) };
-      if (core.stage === 'idle') {
-        core.acquireOrientation(frame);
-      } else if (core.stage === 'oriented') {
-        core.lockPreamble(frame, RECEIVE_MATRIX);
-      } else if (core.stage === 'preamble') {
-        core.readManifest(frame, RECEIVE_MATRIX);
-      } else if (core.stage === 'receiving') {
-        core.acceptDynamicFrame(frame, RECEIVE_MATRIX);
-        if (core.complete && !this.receiveFinalized) this.finalizeReconstruction();
-      }
-      this.receiveTimes.push(Date.now() - t0);
+      const frame = { width: entry.width, height: entry.height, data: new Uint8ClampedArray(entry.buffer) };
+      const stageBefore = core.stage;
+      // Single greedy entry point: cold late join uses the cheap beacon gate,
+      // advanced stages run preamble/manifest/dynamic. Manifest/preamble/
+      // acquisition frames are routed (or skipped) inside the shared core —
+      // the adapter never decodes payload bits itself.
+      core.processFrame(frame, RECEIVE_MATRIX);
+      const elapsed = Date.now() - t0;
+      if (!this.receiveStageTimes[stageBefore]) this.receiveStageTimes[stageBefore] = [];
+      this.receiveStageTimes[stageBefore].push(elapsed);
+      if (this.receiveStageTimes[stageBefore].length > PROCESS_TIME_CAP) this.receiveStageTimes[stageBefore].shift();
+      this.receiveTimes.push(elapsed);
       if (this.receiveTimes.length > PROCESS_TIME_CAP) this.receiveTimes.shift();
       this.receiveFramesProcessed++;
       this.processedFrames++;
       this.windowProcessed++;
+      if (core.complete && !this.receiveFinalized) this.finalizeReconstruction();
     } catch (err) {
       this.recordError('receive_failed:' + (err && err.message));
     } finally {
-      this.receiveBusy = false;
+      const next = this.receivePending;
+      if (next) {
+        this.receivePending = null;
+        this.runReceiveFrame(next);
+      } else {
+        this.receiveBusy = false;
+      }
     }
   },
 
@@ -465,7 +522,9 @@ Page({
     this.receiveFinalized = true;
     let bytes;
     try {
+      const r0 = Date.now();
       bytes = core.reconstruct();
+      this.reconstructMs = Date.now() - r0;
     } catch (err) {
       this.recordError('reconstruct_failed:' + (err && err.message));
       return;
@@ -474,11 +533,15 @@ Page({
       this.recordError('reconstruct_incomplete:' + core.solvedCount + '/' + core.sourceCount);
       return;
     }
+    const s0 = Date.now();
     const reconstructedSha = opticalCore.sha256Hex(bytes);
+    this.shaMs = Date.now() - s0;
     const manifestSha = core.manifest && core.manifest.file ? core.manifest.file.sha256 : null;
     const match = manifestSha !== null && reconstructedSha === manifestSha;
     this.setData({
       reconstructionStatus: 'RECONSTRUCTED ' + bytes.length + ' B',
+      reconstructionMs: this.reconstructMs + ' ms',
+      shaMs: this.shaMs + ' ms',
       shaStatus: match ? 'MATCH' : (manifestSha === null ? 'NO MANIFEST SHA' : 'MISMATCH'),
       manifestFileSize: core.manifest ? (core.manifest.file.byteLength + ' B') : '—'
     });
@@ -488,13 +551,15 @@ Page({
   writeReconstructedFile(bytes, sha, match) {
     try {
       const fs = wx.getFileSystemManager();
-      const path = wx.env.USER_DATA_PATH + '/tf010-reconstructed-' + (match ? 'match' : 'mismatch') + '.bin';
+      const path = wx.env.USER_DATA_PATH + '/tf012-reconstructed-' + (match ? 'match' : 'mismatch') + '.bin';
       const data = bytes.slice().buffer;
+      const w0 = Date.now();
       fs.writeFile({
         filePath: path,
         data,
         success: () => {
-          this.setData({ localFilePath: path });
+          this.fileWriteMs = Date.now() - w0;
+          this.setData({ localFilePath: path, fileWriteMs: this.fileWriteMs + ' ms' });
           this.appendLog('reconstructed file written: ' + path + ' sha=' + sha);
         },
         fail: (err) => this.recordError('write_file_failed:' + (err && err.errMsg ? err.errMsg : JSON.stringify(err)))
@@ -566,7 +631,7 @@ Page({
     const avgProcessMs = this.percentileFormat(this.processTimes, 'avg');
     const p95ProcessMs = this.percentile(this.processTimes, 0.95);
 
-    const bufferBytes = this.data.frameBufferBytes || 0;
+    const bufferBytes = this.frameBytes || 0;
     const ingressMBps = ((bufferBytes * Number(callbackFps)) / 1e6).toFixed(3);
 
     const patch = {
@@ -614,7 +679,7 @@ Page({
       ? (this.receiveTimes.reduce((a, b) => a + b, 0) / this.receiveTimes.length).toFixed(2) + ' ms'
       : '—';
     const p95 = this.percentile(this.receiveTimes, 0.95);
-    const bufferBytes = this.data.frameBufferBytes || 0;
+    const bufferBytes = this.frameBytes || 0;
     const ingressMBps = ((bufferBytes * Number(callbackFps)) / 1e6).toFixed(3);
     const core = this.receiveCore;
     const productStage = core
@@ -628,12 +693,24 @@ Page({
       processed: this.processedFrames,
       skipped,
       skipRatio,
+      replaced: this.receiveFramesReplaced,
       avgProcessMs: avgMs,
       p95ProcessMs: p95 != null ? p95.toFixed(2) + ' ms' : '—',
       ingressMBps,
       productStage,
       receiveStage: core ? core.stage.toUpperCase() : 'UNAVAILABLE',
+      frameWidth: this.frameW,
+      frameHeight: this.frameH,
+      frameBufferBytes: this.frameBytes,
+      frameFormat: this.frameBytes ? 'RGBA (4 bytes/px)' : '—',
       decodedSymbols: core ? core.stats.decodedSymbols : 0,
+      duplicates: core ? core.stats.duplicateSymbols : 0,
+      redundant: core ? core.stats.redundantSymbols : 0,
+      rejected: core ? core.stats.rejectedFrames : 0,
+      beaconDetections: core ? core.eventCounts.beaconProbes : 0,
+      orientationAttempts: core ? core.eventCounts.orientationAttempts : 0,
+      orientationSuccess: core ? core.eventCounts.orientationSuccess : 0,
+      manifestAcquisitions: core ? core.eventCounts.manifestAcquisitions : 0,
       solvedBlocks: core ? (core.solvedCount + ' / ' + core.sourceCount) : '—',
       totalBlocks: core ? core.sourceCount : '—'
     };
@@ -840,13 +917,36 @@ Page({
         }
       : null;
 
+    // Per-stage budget inventory (Phase 1): avg / p95 / max over processed frames.
+    const stageSummary = {};
+    Object.keys(this.receiveStageTimes).forEach((key) => {
+      const v = this.receiveStageTimes[key];
+      if (!v || !v.length) return;
+      const sorted = v.slice().sort((a, b) => a - b);
+      stageSummary[key] = {
+        n: v.length,
+        avgMs: Number((v.reduce((a, b) => a + b, 0) / v.length).toFixed(2)),
+        p95Ms: Number(sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * 0.95))].toFixed(2)),
+        maxMs: Number(sorted[sorted.length - 1].toFixed(2))
+      };
+    });
+
+    const sourceByteLength = core && core.manifest ? core.manifest.file.byteLength : null;
+    // Physical reconstructed throughput (only valid on exact reconstruction).
+    // This is NOT Net Goodput (see docs/TF011_SESSION_MANIFEST_INVENTORY.md and
+    // the Net Goodput definition — no formal definition satisfied here).
+    const physicalReconstructedBytesPerSecond = (shaMatch && sourceByteLength && elapsedMs > 0)
+      ? Number((sourceByteLength / (elapsedMs / 1000)).toFixed(2))
+      : null;
+
     return {
-      evidenceClass: 'PHYSICAL MINI PROGRAM SHARED RECEIVE PIPELINE',
+      evidenceClass: 'PHYSICAL MINI PROGRAM END-TO-END RECONSTRUCTION',
       buildId: this.data.buildId,
       appMode: this.data.mode,
       stage,
-      note: 'Code path exists; this does NOT claim physical PASS. NOT Net Goodput.',
+      note: 'Physical optical reconstruction evidence. NOT G0. NOT Net Goodput. Payload has zero network path.',
       networkPayloadPath: 'NONE',
+      radiosState: this.data.networkType,
       localFilePath: this.data.localFilePath || null,
       timestamp: new Date().toISOString(),
       testDurationMs: elapsedMs,
@@ -862,22 +962,36 @@ Page({
         sdkVersion: this.data.sdkVersion
       },
       camera: {
-        frameWidth: this.data.frameWidth,
-        frameHeight: this.data.frameHeight,
-        frameBufferBytes: this.data.frameBufferBytes,
-        frameFormat: this.data.frameFormat
+        frameWidth: this.frameW,
+        frameHeight: this.frameH,
+        frameBufferBytes: this.frameBytes,
+        frameFormat: this.frameBytes ? 'RGBA (4 bytes/px)' : '—'
       },
       orientation,
       manifest,
       dynamic,
       reconstruction,
       sha256: { reconstructedSha256: reconstructedSha, manifestSha256: manifestSha, shaMatch },
+      protocolEvents: {
+        beaconDetections: core ? core.eventCounts.beaconProbes : 0,
+        orientationAttempts: core ? core.eventCounts.orientationAttempts : 0,
+        orientationSuccess: core ? core.eventCounts.orientationSuccess : 0,
+        manifestAcquisitions: core ? core.eventCounts.manifestAcquisitions : 0
+      },
       performance: {
         callbackFps: Number(callbackFps),
         processingFps: Number(processingFps),
         receivedFrames: this.receiveFramesReceived,
         processedFrames: this.receiveFramesProcessed,
-        skippedFrames: skipped
+        skippedBusyFrames: skipped,
+        replacedFrames: this.receiveFramesReplaced,
+        boundedModel: 'one frame processing + one latest pending frame',
+        reconstructMs: this.reconstructMs,
+        shaMs: this.shaMs,
+        fileWriteMs: this.fileWriteMs,
+        perStageMs: stageSummary,
+        sourceByteLength,
+        physicalReconstructedBytesPerSecond
       },
       errors: this.data.errors
     };
@@ -998,6 +1112,15 @@ Page({
         if (dev.platform) evidence.platform = dev.platform;
       }
     } catch (err) { /* optional */ }
+    // Radio state proxy: network type (wifi/5g/4g/3g/2g/none/unknown). "none"
+    // implies airplane mode (offline-radio) which is the formal offline G0
+    // condition. This does NOT transmit anything.
+    try {
+      wx.getNetworkType({
+        success: (res) => { this.setData({ networkType: (res && res.networkType) || 'unknown' }); },
+        fail: () => { this.setData({ networkType: 'unknown' }); }
+      });
+    } catch (err) { this.setData({ networkType: 'unknown' }); }
     this.setData(evidence);
     this.appendLog('device model (runtime): ' + evidence.model);
   },

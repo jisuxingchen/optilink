@@ -112,6 +112,17 @@ export class SharedOpticalReceiveCore {
   manifestRecovery: ManifestRecoveryResult | null = null;
   activeSessionKey: string | null = null;
   stats: DynamicFrameStats = {...EMPTY_STATS};
+  /**
+   * Protocol-event counters for physical metric capture (TF-012 Phase 12).
+   * Platform-neutral: both the browser simulation and the Mini Program adapter
+   * read these directly rather than re-deriving them from stage transitions.
+   */
+  readonly eventCounts = {
+    beaconProbes: 0,        // cheap non-beacon gate evaluations (idle stage)
+    orientationAttempts: 0, // expensive fiducialOnly acquisitions actually run
+    orientationSuccess: 0,  // acquisitions that produced locks
+    manifestAcquisitions: 0,// distinct Manifest recoveries (session switches)
+  };
   /** Checkpoints of prior incomplete sessions, keyed by sessionKey. */
   readonly previousCheckpoints = new Map<string, ReceiveCheckpoint>();
 
@@ -128,11 +139,17 @@ export class SharedOpticalReceiveCore {
   /**
    * Cheap orientation-beacon probe (used only while idle during cold late join).
    * Counts luma transitions along a scanline through the middle tile: the 64-cell
-   * acquisition beacon has ~36 transitions, while 96-cell frames (preamble /
-   * Manifest / symbols) have ~58+. This avoids running the expensive training
-   * lock on every non-beacon frame. A wrong answer is safe (one frame wasted).
+   * acquisition beacon has ~36 transitions, while 96-cell frames (preamble ~58 /
+   * Manifest ~58 / symbols 48..76) have 48+. Threshold 42 sits between the two
+   * (measured over 256 symbol frames: min 48; beacon middle row 36), so it
+   * rejects non-beacon frames without risking a false negative. This avoids
+   * running the expensive training lock on every non-beacon frame. A wrong
+   * answer is safe (one frame wasted).
+   *
+   * Public so platform adapters and the TF-012 budget inventory can profile the
+   * cheap non-beacon gate separately from the expensive fiducialOnly acquisition.
    */
-  private isLikelyOrientationBeacon(image: ImageData): boolean {
+  isLikelyOrientationBeacon(image: ImageData): boolean {
     const fid = locateOrientationFiducials(image);
     const triplet = fid.triplet;
     if (!triplet || triplet.support !== 'triplet') return false;
@@ -152,7 +169,7 @@ export class SharedOpticalReceiveCore {
       if (cur !== prev) transitions += 1;
       prev = cur;
     }
-    return transitions <= 48;
+    return transitions <= 42;
   }
 
   get complete(): boolean {
@@ -180,6 +197,10 @@ export class SharedOpticalReceiveCore {
     this.decoder = null;
     this.attempt = 0;
     this.stats = {...EMPTY_STATS};
+    this.eventCounts.beaconProbes = 0;
+    this.eventCounts.orientationAttempts = 0;
+    this.eventCounts.orientationSuccess = 0;
+    this.eventCounts.manifestAcquisitions = 0;
     this.previousCheckpoints.clear();
   }
 
@@ -192,6 +213,7 @@ export class SharedOpticalReceiveCore {
         .map((tile) => tile.lock)
         .filter((lock): lock is PixelLock => Boolean(lock));
       this.stage = 'oriented';
+      this.eventCounts.orientationSuccess += 1;
     }
     return this.orientation;
   }
@@ -231,6 +253,8 @@ export class SharedOpticalReceiveCore {
       if (this.stage !== 'complete') this.stage = 'receiving';
       return true;
     }
+
+    this.eventCounts.manifestAcquisitions += 1;
 
     // Different session: preserve the current incomplete checkpoint, then switch.
     if (this.activeSessionKey && this.decoder && !this.decoder.complete) {
@@ -318,7 +342,9 @@ export class SharedOpticalReceiveCore {
       case 'idle': {
         // Cold late join: only attempt the (expensive) orientation lock when the
         // frame is likely the 64-cell acquisition beacon.
+        this.eventCounts.beaconProbes += 1;
         if (this.isLikelyOrientationBeacon(asImageData(this.normalized(frame)))) {
+          this.eventCounts.orientationAttempts += 1;
           this.acquireOrientation(frame, {fiducialOnly: true});
         }
         break;

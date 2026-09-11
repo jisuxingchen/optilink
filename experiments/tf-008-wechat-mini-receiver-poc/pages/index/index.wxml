@@ -63,10 +63,22 @@
     <view class="row"><text class="k">exact tiles</text><text class="v">{{receiveExactTiles}}</text></view>
     <view class="row"><text class="k">manifest</text><text class="v">{{manifestStatus}}</text></view>
     <view class="row"><text class="k">manifest file size</text><text class="v">{{manifestFileSize}}</text></view>
+    <view class="row"><text class="k">beacon detections</text><text class="v">{{beaconDetections}}</text></view>
+    <view class="row"><text class="k">orientation attempts</text><text class="v">{{orientationAttempts}}</text></view>
+    <view class="row"><text class="k">orientation success</text><text class="v">{{orientationSuccess}}</text></view>
+    <view class="row"><text class="k">manifest acquisitions</text><text class="v">{{manifestAcquisitions}}</text></view>
     <view class="row"><text class="k">decoded symbols</text><text class="v">{{decodedSymbols}}</text></view>
+    <view class="row"><text class="k">duplicates</text><text class="v">{{duplicates}}</text></view>
+    <view class="row"><text class="k">redundant</text><text class="v">{{redundant}}</text></view>
+    <view class="row"><text class="k">rejected</text><text class="v">{{rejected}}</text></view>
+    <view class="row"><text class="k">replaced (bounded slot)</text><text class="v">{{replaced}}</text></view>
     <view class="row"><text class="k">solved blocks</text><text class="v">{{solvedBlocks}}</text></view>
     <view class="row"><text class="k">reconstruction</text><text class="v">{{reconstructionStatus}}</text></view>
+    <view class="row"><text class="k">reconstruct ms</text><text class="v">{{reconstructionMs}}</text></view>
     <view class="row"><text class="k">SHA-256</text><text class="v">{{shaStatus}}</text></view>
+    <view class="row"><text class="k">SHA ms</text><text class="v">{{shaMs}}</text></view>
+    <view class="row"><text class="k">file write ms</text><text class="v">{{fileWriteMs}}</text></view>
+    <view class="row"><text class="k">network radio type</text><text class="v">{{networkType}}</text></view>
     <view class="row"><text class="k">local file</text><text class="v">{{localFilePath}}</text></view>
     <view class="row" wx:for="{{tileStatus}}" wx:key="*this"><text class="k">per-tile</text><text class="v">{{item}}</text></view>
   </view>
