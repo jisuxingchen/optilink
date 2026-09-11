@@ -1,0 +1,18 @@
+{
+  "pages": [
+    "pages/index/index"
+  ],
+  "lazyCodeLoading": "requiredComponents",
+  "window": {
+    "navigationBarTitleText": "OptiLink Camera PoC",
+    "navigationBarBackgroundColor": "#0f172a",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#0f172a"
+  },
+  "permission": {
+    "scope.camera": {
+      "desc": "用于光学接收 OptiGrid 帧（仅本地处理，不上传任何网络数据）"
+    }
+  },
+  "sitemapLocation": "sitemap.json"
+}

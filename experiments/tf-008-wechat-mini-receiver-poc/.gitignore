@@ -1,0 +1,2 @@
+# WeChat DevTools private per-developer config — do not commit (contains local AppID/settings)
+project.private.config.json

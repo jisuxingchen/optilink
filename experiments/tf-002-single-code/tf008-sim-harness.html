@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>TF-008 Browser Simulation Harness</title>
+  <style>
+    :root { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    body { margin: 0; padding: 16px; background: #0f1720; color: #d8e5ef; }
+    h1 { font-size: 18px; margin: 0 0 8px; }
+    p.hint { font-size: 12px; color: #7c93a9; margin: 0 0 12px; max-width: 900px; }
+    .row { display: flex; gap: 16px; align-items: flex-start; }
+    iframe { width: 640px; height: 360px; border: 1px solid #334155; background: #000; }
+    #status { white-space: pre-wrap; background: #0f1720; border: 1px solid #334155;
+      border-radius: 8px; padding: 12px; font-size: 12px; max-height: 360px; overflow: auto; }
+  </style>
+</head>
+<body>
+  <h1>TF-008 SIM — browser pixel receiver harness</h1>
+  <p class="hint">
+    Receiver input is rendered pixels only (canvas framebuffer read of the real
+    sender page). No sender internals, no oracle, no network payload path.
+  </p>
+  <div class="row">
+    <iframe id="senderFrame" src="/tf-008-orientation-sender.html" title="real sender"></iframe>
+    <pre id="status">starting…</pre>
+  </div>
+  <script type="module" src="/src/tf008-sim-main.ts"></script>
+</body>
+</html>

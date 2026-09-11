@@ -1,0 +1,463 @@
+{
+  "evidenceClass": "SIMULATED BROWSER PIXEL TF-008 ACQUISITION",
+  "generatedAt": "2026-09-11T01:05:26.838Z",
+  "gitHead": "d521d5bc7dab088e4769819d73492b90d4a9c42c",
+  "senderEntry": "/tf-008-orientation-sender.html",
+  "capture": {
+    "method": "canvas framebuffer getImageData (rendered pixels only)",
+    "width": 1920,
+    "height": 1080,
+    "bytes": 8294400,
+    "topLeftPixel": {
+      "r": 236,
+      "g": 239,
+      "b": 241
+    },
+    "expectedBacking": {
+      "width": 1920,
+      "height": 1080
+    }
+  },
+  "inputFrame": {
+    "width": 720,
+    "height": 1280,
+    "format": "RGBA"
+  },
+  "networkPayloadPath": "NONE",
+  "oracleInputs": [],
+  "summary": {
+    "primaryCases": 4,
+    "primaryPassed": 4,
+    "allCases": 6,
+    "allPassed": 6
+  },
+  "cases": [
+    {
+      "case": "A-native-letterbox",
+      "placement": "upright landscape content, black letterbox margins",
+      "inputFrameSize": "720x1280",
+      "expectedTransform": "native",
+      "selectedTransform": "native",
+      "orientationMode": "native",
+      "detectedMarkerComponentCount": 26,
+      "validTripletMarkerCount": 3,
+      "tripletValid": true,
+      "support": "triplet",
+      "lockMode": "triplet-seeded",
+      "exactTiles": 3,
+      "tileCount": 3,
+      "projection": true,
+      "locked": true,
+      "bitErrors": [
+        0,
+        0,
+        0
+      ],
+      "transformCandidates": [
+        {
+          "mode": "native",
+          "detectedMarkerComponentCount": 3,
+          "validTripletMarkerCount": 3,
+          "tripletValid": true,
+          "tripletSupport": "triplet",
+          "geometryScore": 999999.1619047619,
+          "tripletRejectReason": "triplet-ok"
+        },
+        {
+          "mode": "rotate180",
+          "detectedMarkerComponentCount": 3,
+          "validTripletMarkerCount": 3,
+          "tripletValid": true,
+          "tripletSupport": "triplet",
+          "geometryScore": 999998.1707936508,
+          "tripletRejectReason": "triplet-ok"
+        },
+        {
+          "mode": "rotateCW",
+          "detectedMarkerComponentCount": 0,
+          "validTripletMarkerCount": 0,
+          "tripletValid": false,
+          "tripletSupport": "none",
+          "geometryScore": null,
+          "tripletRejectReason": "insufficient-markers (0 detected)"
+        },
+        {
+          "mode": "rotateCCW",
+          "detectedMarkerComponentCount": 0,
+          "validTripletMarkerCount": 0,
+          "tripletValid": false,
+          "tripletSupport": "none",
+          "geometryScore": null,
+          "tripletRejectReason": "insufficient-markers (0 detected)"
+        }
+      ],
+      "profile": {
+        "preScanMs": 40,
+        "normalizeMs": 25,
+        "lockMs": 571,
+        "refineMs": 0,
+        "errorsMs": 1,
+        "calibrationMs": 574,
+        "totalMs": 639
+      },
+      "wallMs": 639.5,
+      "pass": true
+    },
+    {
+      "case": "A2-native-letterbox-neutral",
+      "placement": "upright landscape content, neutral letterbox margins",
+      "inputFrameSize": "720x1280",
+      "expectedTransform": "native",
+      "selectedTransform": "native",
+      "orientationMode": "native",
+      "detectedMarkerComponentCount": 26,
+      "validTripletMarkerCount": 3,
+      "tripletValid": true,
+      "support": "triplet",
+      "lockMode": "triplet-seeded",
+      "exactTiles": 3,
+      "tileCount": 3,
+      "projection": true,
+      "locked": true,
+      "bitErrors": [
+        0,
+        0,
+        0
+      ],
+      "transformCandidates": [
+        {
+          "mode": "native",
+          "detectedMarkerComponentCount": 3,
+          "validTripletMarkerCount": 3,
+          "tripletValid": true,
+          "tripletSupport": "triplet",
+          "geometryScore": 999999.1619047619,
+          "tripletRejectReason": "triplet-ok"
+        },
+        {
+          "mode": "rotate180",
+          "detectedMarkerComponentCount": 3,
+          "validTripletMarkerCount": 3,
+          "tripletValid": true,
+          "tripletSupport": "triplet",
+          "geometryScore": 999998.1707936508,
+          "tripletRejectReason": "triplet-ok"
+        },
+        {
+          "mode": "rotateCW",
+          "detectedMarkerComponentCount": 3,
+          "validTripletMarkerCount": 0,
+          "tripletValid": false,
+          "tripletSupport": "none",
+          "geometryScore": null,
+          "tripletRejectReason": "geometry-mismatch (3 components, no valid triplet)"
+        },
+        {
+          "mode": "rotateCCW",
+          "detectedMarkerComponentCount": 0,
+          "validTripletMarkerCount": 0,
+          "tripletValid": false,
+          "tripletSupport": "none",
+          "geometryScore": null,
+          "tripletRejectReason": "insufficient-markers (0 detected)"
+        }
+      ],
+      "profile": {
+        "preScanMs": 15,
+        "normalizeMs": 24,
+        "lockMs": 469,
+        "refineMs": 0,
+        "errorsMs": 1,
+        "calibrationMs": 471,
+        "totalMs": 510
+      },
+      "wallMs": 510.5,
+      "pass": true
+    },
+    {
+      "case": "B-rotate180-letterbox",
+      "placement": "180-degree landscape content, black letterbox margins",
+      "inputFrameSize": "720x1280",
+      "expectedTransform": "rotate180",
+      "selectedTransform": "rotate180",
+      "orientationMode": "rotate180",
+      "detectedMarkerComponentCount": 26,
+      "validTripletMarkerCount": 3,
+      "tripletValid": true,
+      "support": "triplet",
+      "lockMode": "triplet-seeded",
+      "exactTiles": 3,
+      "tileCount": 3,
+      "projection": true,
+      "locked": true,
+      "bitErrors": [
+        0,
+        0,
+        0
+      ],
+      "transformCandidates": [
+        {
+          "mode": "native",
+          "detectedMarkerComponentCount": 3,
+          "validTripletMarkerCount": 3,
+          "tripletValid": true,
+          "tripletSupport": "triplet",
+          "geometryScore": 999998.1707936508,
+          "tripletRejectReason": "triplet-ok"
+        },
+        {
+          "mode": "rotate180",
+          "detectedMarkerComponentCount": 3,
+          "validTripletMarkerCount": 3,
+          "tripletValid": true,
+          "tripletSupport": "triplet",
+          "geometryScore": 999999.1619047619,
+          "tripletRejectReason": "triplet-ok"
+        },
+        {
+          "mode": "rotateCW",
+          "detectedMarkerComponentCount": 0,
+          "validTripletMarkerCount": 0,
+          "tripletValid": false,
+          "tripletSupport": "none",
+          "geometryScore": null,
+          "tripletRejectReason": "insufficient-markers (0 detected)"
+        },
+        {
+          "mode": "rotateCCW",
+          "detectedMarkerComponentCount": 0,
+          "validTripletMarkerCount": 0,
+          "tripletValid": false,
+          "tripletSupport": "none",
+          "geometryScore": null,
+          "tripletRejectReason": "insufficient-markers (0 detected)"
+        }
+      ],
+      "profile": {
+        "preScanMs": 20,
+        "normalizeMs": 33,
+        "lockMs": 654,
+        "refineMs": 0,
+        "errorsMs": 0,
+        "calibrationMs": 654,
+        "totalMs": 707
+      },
+      "wallMs": 706.8999999761581,
+      "pass": true
+    },
+    {
+      "case": "C-rotateCW-content",
+      "placement": "landscape content rotated 90 deg CW (full-bleed portrait)",
+      "inputFrameSize": "720x1280",
+      "expectedTransform": "rotateCCW",
+      "selectedTransform": "rotateCCW",
+      "orientationMode": "rotateCCW",
+      "detectedMarkerComponentCount": 22,
+      "validTripletMarkerCount": 3,
+      "tripletValid": true,
+      "support": "triplet",
+      "lockMode": "triplet-seeded",
+      "exactTiles": 3,
+      "tileCount": 3,
+      "projection": true,
+      "locked": true,
+      "bitErrors": [
+        0,
+        0,
+        0
+      ],
+      "transformCandidates": [
+        {
+          "mode": "native",
+          "detectedMarkerComponentCount": 1,
+          "validTripletMarkerCount": 0,
+          "tripletValid": false,
+          "tripletSupport": "none",
+          "geometryScore": null,
+          "tripletRejectReason": "insufficient-markers (1 detected)"
+        },
+        {
+          "mode": "rotate180",
+          "detectedMarkerComponentCount": 1,
+          "validTripletMarkerCount": 0,
+          "tripletValid": false,
+          "tripletSupport": "none",
+          "geometryScore": null,
+          "tripletRejectReason": "insufficient-markers (1 detected)"
+        },
+        {
+          "mode": "rotateCW",
+          "detectedMarkerComponentCount": 3,
+          "validTripletMarkerCount": 3,
+          "tripletValid": true,
+          "tripletSupport": "triplet",
+          "geometryScore": 999998.1707936508,
+          "tripletRejectReason": "triplet-ok"
+        },
+        {
+          "mode": "rotateCCW",
+          "detectedMarkerComponentCount": 3,
+          "validTripletMarkerCount": 3,
+          "tripletValid": true,
+          "tripletSupport": "triplet",
+          "geometryScore": 999999.1619047619,
+          "tripletRejectReason": "triplet-ok"
+        }
+      ],
+      "profile": {
+        "preScanMs": 16,
+        "normalizeMs": 31,
+        "lockMs": 638,
+        "refineMs": 0,
+        "errorsMs": 1,
+        "calibrationMs": 639,
+        "totalMs": 686
+      },
+      "wallMs": 686.6000000238419,
+      "pass": true
+    },
+    {
+      "case": "D-rotateCCW-content",
+      "placement": "landscape content rotated 90 deg CCW (full-bleed portrait)",
+      "inputFrameSize": "720x1280",
+      "expectedTransform": "rotateCW",
+      "selectedTransform": "rotateCW",
+      "orientationMode": "rotateCW",
+      "detectedMarkerComponentCount": 22,
+      "validTripletMarkerCount": 3,
+      "tripletValid": true,
+      "support": "triplet",
+      "lockMode": "triplet-seeded",
+      "exactTiles": 3,
+      "tileCount": 3,
+      "projection": true,
+      "locked": true,
+      "bitErrors": [
+        0,
+        0,
+        0
+      ],
+      "transformCandidates": [
+        {
+          "mode": "native",
+          "detectedMarkerComponentCount": 1,
+          "validTripletMarkerCount": 0,
+          "tripletValid": false,
+          "tripletSupport": "none",
+          "geometryScore": null,
+          "tripletRejectReason": "insufficient-markers (1 detected)"
+        },
+        {
+          "mode": "rotate180",
+          "detectedMarkerComponentCount": 1,
+          "validTripletMarkerCount": 0,
+          "tripletValid": false,
+          "tripletSupport": "none",
+          "geometryScore": null,
+          "tripletRejectReason": "insufficient-markers (1 detected)"
+        },
+        {
+          "mode": "rotateCW",
+          "detectedMarkerComponentCount": 3,
+          "validTripletMarkerCount": 3,
+          "tripletValid": true,
+          "tripletSupport": "triplet",
+          "geometryScore": 999999.1619047619,
+          "tripletRejectReason": "triplet-ok"
+        },
+        {
+          "mode": "rotateCCW",
+          "detectedMarkerComponentCount": 3,
+          "validTripletMarkerCount": 3,
+          "tripletValid": true,
+          "tripletSupport": "triplet",
+          "geometryScore": 999998.1707936508,
+          "tripletRejectReason": "triplet-ok"
+        }
+      ],
+      "profile": {
+        "preScanMs": 17,
+        "normalizeMs": 32,
+        "lockMs": 633,
+        "refineMs": 0,
+        "errorsMs": 1,
+        "calibrationMs": 634,
+        "totalMs": 683
+      },
+      "wallMs": 682.2999999523163,
+      "pass": true
+    },
+    {
+      "case": "E-native-scaled-offset",
+      "placement": "upright content, 0.97 scale + (+6,-6)px offset, black margins",
+      "inputFrameSize": "720x1280",
+      "expectedTransform": "native",
+      "selectedTransform": "native",
+      "orientationMode": "native",
+      "detectedMarkerComponentCount": 26,
+      "validTripletMarkerCount": 3,
+      "tripletValid": true,
+      "support": "triplet",
+      "lockMode": "triplet-seeded",
+      "exactTiles": 3,
+      "tileCount": 3,
+      "projection": true,
+      "locked": true,
+      "bitErrors": [
+        0,
+        0,
+        0
+      ],
+      "transformCandidates": [
+        {
+          "mode": "native",
+          "detectedMarkerComponentCount": 3,
+          "validTripletMarkerCount": 3,
+          "tripletValid": true,
+          "tripletSupport": "triplet",
+          "geometryScore": 999998.8519914951,
+          "tripletRejectReason": "triplet-ok"
+        },
+        {
+          "mode": "rotate180",
+          "detectedMarkerComponentCount": 3,
+          "validTripletMarkerCount": 3,
+          "tripletValid": true,
+          "tripletSupport": "triplet",
+          "geometryScore": 999998.3866666667,
+          "tripletRejectReason": "triplet-ok"
+        },
+        {
+          "mode": "rotateCW",
+          "detectedMarkerComponentCount": 0,
+          "validTripletMarkerCount": 0,
+          "tripletValid": false,
+          "tripletSupport": "none",
+          "geometryScore": null,
+          "tripletRejectReason": "insufficient-markers (0 detected)"
+        },
+        {
+          "mode": "rotateCCW",
+          "detectedMarkerComponentCount": 0,
+          "validTripletMarkerCount": 0,
+          "tripletValid": false,
+          "tripletSupport": "none",
+          "geometryScore": null,
+          "tripletRejectReason": "insufficient-markers (0 detected)"
+        }
+      ],
+      "profile": {
+        "preScanMs": 18,
+        "normalizeMs": 32,
+        "lockMs": 572,
+        "refineMs": 0,
+        "errorsMs": 1,
+        "calibrationMs": 574,
+        "totalMs": 624
+      },
+      "wallMs": 623.3999999761581,
+      "pass": true
+    }
+  ],
+  "timingNote": "DESKTOP / SIMULATION timing only — not representative of phone performance."
+}
