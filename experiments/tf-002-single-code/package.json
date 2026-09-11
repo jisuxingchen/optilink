@@ -7,6 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "dev:tf008-sender": "vite --host 127.0.0.1 --port 5317 --strictPort",
     "dev:tf012-sender": "vite --host 0.0.0.0 --port 5318 --strictPort",
+    "dev:single-baseline-sender": "vite --host 0.0.0.0 --port 5319 --strictPort",
     "lab": "node lab-server.mjs",
     "lab:tf007f": "node lab-server-tf007f.mjs",
     "lab:tunnel": "node lab-tunnel.mjs",
@@ -23,7 +24,8 @@
     "test:tf008-sim": "playwright test tf008-sim.spec.mjs --config=playwright.tf008-sim.config.mjs --workers=1 --reporter=line",
     "test:tf009-sim": "playwright test tf009-sim.spec.mjs --config=playwright.tf009-sim.config.mjs --workers=1 --reporter=line",
     "test:tf011-sim": "playwright test tf011-sim.spec.mjs --config=playwright.tf011-sim.config.mjs --workers=1 --reporter=line",
-    "test:tf012-sim": "playwright test tf012-sim.spec.mjs --config=playwright.tf012-sim.config.mjs --workers=1 --reporter=line"
+    "test:tf012-sim": "playwright test tf012-sim.spec.mjs --config=playwright.tf012-sim.config.mjs --workers=1 --reporter=line",
+    "test:single-baseline-sender": "playwright test single-baseline-sender.spec.ts --config=playwright.single-baseline.config.mjs --workers=1 --reporter=line"
   },
   "dependencies": {
     "@zxing/browser": "0.2.1",

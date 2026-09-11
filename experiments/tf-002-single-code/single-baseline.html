@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>OptiLink · TF-012 Single-Code Baseline Sender 单码基线发送端</title>
+  <style>
+    :root{color-scheme:light}
+    *{box-sizing:border-box}
+    html,body{margin:0;padding:0;width:100%;height:100%;background:#ffffff;overflow:hidden;
+      font-family:Inter,ui-sans-serif,system-ui,"Segoe UI",sans-serif;color:#0f1720}
+    #stage{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#ffffff}
+    #codeCanvas{display:block;image-rendering:pixelated;background:#ffffff;box-shadow:0 0 0 2px #94a3b8}
+    #panel{position:fixed;left:14px;top:14px;z-index:10;background:rgba(255,255,255,.94);border:1px solid #cbd5e1;
+      border-radius:12px;padding:12px 14px;box-shadow:0 8px 24px rgba(15,23,32,.16);font-size:13px;max-width:min(430px,86vw)}
+    #panel.hidden{display:none}
+    #panel h1{margin:0 0 8px;font-size:15px;letter-spacing:.02em}
+    #panel .sub{color:#475569;font-size:12px;margin:0 0 10px;line-height:1.5}
+    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+    button{padding:10px 16px;border-radius:9px;border:1px solid #0f1720;background:#0f1720;color:#fff;font-weight:700;font-size:13px;cursor:pointer}
+    button:disabled{opacity:.45;cursor:default}
+    button.ghost{background:#fff;color:#0f1720}
+    #broadcastStatus{font-weight:800;padding:5px 10px;border-radius:999px;font-size:12px;letter-spacing:.03em}
+    #broadcastStatus.stopped{background:#fee2e2;color:#991b1b}
+    #broadcastStatus.live{background:#dcfce7;color:#166534}
+    table{border-collapse:collapse;font-size:12px;width:100%}
+    td{padding:2px 0;vertical-align:top}
+    td.k{color:#475569;padding-right:12px;white-space:nowrap}
+    td.v{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:700}
+    #hint{position:fixed;right:14px;bottom:12px;z-index:10;font-size:12px;color:#64748b;background:rgba(255,255,255,.9);
+      padding:6px 10px;border-radius:8px;border:1px solid #e2e8f0}
+  </style>
+</head>
+<body>
+  <div id="stage">
+    <canvas id="codeCanvas" width="1080" height="1080"></canvas>
+  </div>
+
+  <section id="panel">
+    <h1>TF-012 Single-Code Baseline · 单码基线</h1>
+    <p class="sub">
+      Stateless cyclic broadcaster 无状态循环广播：chunk 0 → 15 → 0 … 无限循环。
+      Receiver may join at ANY time 接收端可在任意时刻加入。No ACK, no feedback, no network payload.
+    </p>
+    <div class="row">
+      <button id="startButton">Start / 开始</button>
+      <button id="stopButton" class="ghost" disabled>Stop / 停止</button>
+      <span id="broadcastStatus" class="stopped">Stopped / 已停止</span>
+      <button id="hideButton" class="ghost" title="Hide this panel during the physical test">Hide / 隐藏</button>
+    </div>
+    <table>
+      <tr><td class="k">File / 文件</td><td class="v" id="fileName">—</td></tr>
+      <tr><td class="k">File size / 文件大小</td><td class="v" id="fileSize">—</td></tr>
+      <tr><td class="k">Source SHA-256</td><td class="v" id="fileSha">—</td></tr>
+      <tr><td class="k">File ID / 文件 ID</td><td class="v" id="fileId">—</td></tr>
+      <tr><td class="k">Total chunks / 总切片</td><td class="v" id="totalChunks">—</td></tr>
+      <tr><td class="k">Current chunk / 当前切片</td><td class="v" id="currentChunk">—</td></tr>
+      <tr><td class="k">Chunk data / 每片文件数据</td><td class="v" id="chunkData">—</td></tr>
+      <tr><td class="k">Chunk payload / 每片载荷</td><td class="v" id="chunkPayload">—</td></tr>
+      <tr><td class="k">Matrix / 矩阵</td><td class="v" id="matrixSize">—</td></tr>
+      <tr><td class="k">Hold time / 保持时间</td><td class="v" id="holdTime">—</td></tr>
+      <tr><td class="k">Cycle count / 循环次数</td><td class="v" id="cycleCount">0</td></tr>
+      <tr><td class="k">Status / 状态</td><td class="v" id="statusText">Stopped / 已停止</td></tr>
+    </table>
+  </section>
+
+  <div id="hint">One OptiGrid only · 单码显示 · no Manifest / no Preamble / no Fountain / no 3-tile</div>
+
+  <script type="module" src="/src/single-baseline-sender-main.ts"></script>
+</body>
+</html>

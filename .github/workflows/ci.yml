@@ -104,6 +104,7 @@ jobs:
           test -s dist/tiled-carrier.html
           test -s dist/tiled-temporal.html
           test -s dist/tiled-physical.html
+          test -s dist/single-baseline.html
       - name: Install headless Chromium
         run: |
           npx playwright install --with-deps chromium >/tmp/playwright-install.log 2>&1 || {
@@ -112,6 +113,8 @@ jobs:
           }
       - name: Run TF-005 pixel-isolated carrier bench and tracking frontier
         run: npm run bench:headless
+      - name: Run TF-012 r4 single-code baseline sender acceptance
+        run: npm run test:single-baseline-sender
       - name: Validate lab coordinator and tunnel launcher syntax
         run: |
           node --check lab-server.mjs

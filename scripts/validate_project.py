@@ -13,6 +13,8 @@ required = [
     "docs/PRODUCT_REQUIREMENTS.md",
     "docs/TECHNICAL_OPTIONS.md",
     "docs/GLOSSARY.md",
+    "docs/OPTILINK_DATA_FLOW_GATES.md",
+    "docs/TF012_SINGLE_CODE_BASELINE.md",
     "docs/adr/ADR-0001-development-governance.md",
     "project/ROADMAP.md",
     "project/PROJECT_STATUS.json",

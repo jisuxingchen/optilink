@@ -8,6 +8,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         baseline: entry('./index.html'),
+        singleBaselineSender: entry('./single-baseline.html'),
         fountain: entry('./fountain.html'),
         optigrid: entry('./optigrid.html'),
         carrierBench: entry('./carrier-bench.html'),

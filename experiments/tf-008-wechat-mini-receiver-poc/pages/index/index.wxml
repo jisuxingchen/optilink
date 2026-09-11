@@ -3,6 +3,7 @@
   <view class="bootbanner {{bootStatus === 'BOOT OK' ? 'bootok' : 'booterr'}}">{{bootStatus}} · buildId {{buildId}}{{bootError ? ' · ' + bootError : ''}}</view>
   <view class="netbanner">Network payload path: NONE</view>
   <view class="receivebanner" wx:if="{{mode === 'receive'}}">SHARED RECEIVE PIPELINE ACTIVE · buildId {{buildId}}</view>
+  <view class="benchbanner" wx:if="{{mode === 'baseline'}}">SINGLE-CODE BASELINE 单码基线 ACTIVE · buildId {{buildId}}</view>
   <view class="benchbanner" wx:if="{{mode === 'benchmark'}}">CAMERA BENCHMARK MODE ACTIVE · buildId {{buildId}}</view>
 
   <camera
@@ -21,6 +22,7 @@
     <button class="btn" bindtap="stopCamera" disabled="{{!running}}">Stop Camera</button>
     <button class="btn" bindtap="resetMetrics">Reset Metrics</button>
     <button class="btn modebtn {{mode === 'receive' ? 'modeactive' : ''}}" data-mode="receive" bindtap="onSelectMode">Shared Receive Pipeline</button>
+    <button class="btn modebtn {{mode === 'baseline' ? 'modeactive' : ''}}" data-mode="baseline" bindtap="onSelectMode">Single-Code Baseline 单码基线</button>
     <button class="btn modebtn {{mode === 'benchmark' ? 'modeactive' : ''}}" data-mode="benchmark" bindtap="onSelectMode">Camera Benchmark</button>
     <button class="btn" wx:if="{{mode === 'benchmark'}}" bindtap="toggleHeavy">{{heavy ? 'Normalization 1280x720: ON' : 'Normalization 1280x720: OFF'}}</button>
   </view>
@@ -86,6 +88,51 @@
     <view class="row"><text class="k">network radio type</text><text class="v">{{networkType}}</text></view>
     <view class="row"><text class="k">local file</text><text class="v">{{localFilePath}}</text></view>
     <view class="row" wx:for="{{tileStatus}}" wx:key="*this"><text class="k">per-tile</text><text class="v">{{item}}</text></view>
+  </view>
+
+  <view class="panel" wx:if="{{mode === 'baseline'}}">
+    <view class="section">single-code baseline 单码基线</view>
+    <view class="pipeline-error" wx:if="{{baselinePipelineError}}">{{baselinePipelineError}}</view>
+    <view class="row"><text class="k">self-check</text><text class="v">{{baselineSelfCheck}}</text></view>
+    <view class="row"><text class="k">Mode / 模式</text><text class="v">Single-Code Baseline / 单码基线</text></view>
+    <view class="row"><text class="k">Status / 状态</text><text class="v">{{baselineStatus}}</text></view>
+    <view class="row"><text class="k">File ID / 文件ID</text><text class="v">{{baselineFileId}}</text></view>
+    <view class="row"><text class="k">File / 文件</text><text class="v">{{baselineFileName}}</text></view>
+    <view class="row"><text class="k">File size / 文件大小</text><text class="v">{{baselineFileSize}}</text></view>
+    <view class="row"><text class="k">Received chunks / 已接收分片</text><text class="v">{{baselineReceivedChunks}}</text></view>
+    <view class="row"><text class="k">Missing chunks / 缺失分片</text><text class="v">{{baselineMissingChunks}}</text></view>
+    <view class="row"><text class="k">Duplicates / 重复帧</text><text class="v">{{baselineDuplicates}}</text></view>
+    <view class="row"><text class="k">Last chunk / 最后收到</text><text class="v">{{baselineLastChunk}}</text></view>
+    <view class="row"><text class="k">Elapsed / 已用时</text><text class="v">{{baselineElapsed}}</text></view>
+    <view class="row"><text class="k">Camera FPS / 相机帧率</text><text class="v">{{callbackFps}}</text></view>
+    <view class="row"><text class="k">Processed FPS</text><text class="v">{{processingFps}}</text></view>
+    <view class="row"><text class="k">Camera frame / 相机帧</text><text class="v">{{baselineFrameInfo}}</text></view>
+    <view class="row"><text class="k">Decode attempts / 解码尝试</text><text class="v">{{baselineDecodeAttempts}}</text></view>
+    <view class="row"><text class="k">Decode success / 解码成功</text><text class="v">{{baselineDecodeSuccess}}</text></view>
+    <view class="row"><text class="k">CRC failures / CRC 失败</text><text class="v">{{baselineCrcFailures}}</text></view>
+    <view class="row"><text class="k">Locate failures / 定位失败</text><text class="v">{{baselineLocateFailures}}</text></view>
+    <view class="row"><text class="k">Metadata rejects</text><text class="v">{{baselineMetadataRejects}}</text></view>
+    <view class="row"><text class="k">Foreign file rejects</text><text class="v">{{baselineForeignRejects}}</text></view>
+    <view class="row"><text class="k">Code size / 码尺寸</text><text class="v">{{baselineCodeWidth}}</text></view>
+    <view class="row"><text class="k">Pixels per cell X/Y</text><text class="v">{{baselinePixPerCell}}</text></view>
+    <view class="row"><text class="k">Reserved pattern score</text><text class="v">{{baselineReservedScore}}</text></view>
+    <view class="row"><text class="k">Frame rotation index</text><text class="v">{{baselineRotation}}</text></view>
+    <view class="row"><text class="k">Contrast</text><text class="v">{{baselineContrast}}</text></view>
+    <view class="row"><text class="k">Time to first chunk</text><text class="v">{{baselineFirstChunkMs}}</text></view>
+    <view class="row"><text class="k">Time to all chunks</text><text class="v">{{baselineAllChunksMs}}</text></view>
+    <view class="row"><text class="k">Reconstruction / 重构方式</text><text class="v">{{baselineReconstructMethod}}</text></view>
+    <view class="row"><text class="k">Reconstruction / 重构结果</text><text class="v">{{baselineReconstructionStatus}}</text></view>
+    <view class="row"><text class="k">Reconstruct ms</text><text class="v">{{baselineReconstructMs}}</text></view>
+    <view class="row"><text class="k">SHA-256</text><text class="v">{{baselineShaStatus}}</text></view>
+    <view class="row"><text class="k">SHA ms</text><text class="v">{{baselineShaMs}}</text></view>
+    <view class="row"><text class="k">network radio type</text><text class="v">{{networkType}}</text></view>
+    <view class="row"><text class="k">file save</text><text class="v">not required in this baseline / 基线不落盘</text></view>
+  </view>
+
+  <view class="panel" wx:if="{{mode === 'baseline' && baselineContentPreview}}">
+    <view class="section">TRANSFER COMPLETE / 传输完成 — Content Preview / 内容预览</view>
+    <view class="row"><text class="k">lines</text><text class="v">{{baselinePreviewLines}}</text></view>
+    <text class="preview">{{baselineContentPreview}}</text>
   </view>
 
   <view class="panel" wx:if="{{mode === 'benchmark'}}">

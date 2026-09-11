@@ -22,6 +22,8 @@ const FRAME_TIMEOUT_MS = 5000; // "no camera frame received within 5s"
 const UI_REFRESH_MS = 500;     // periodic UI refresh / FPS window
 const PROCESS_TIME_CAP = 600;  // max processing-time samples kept for p95
 const RECEIVE_MATRIX = 96;     // protocol constant: manifest + dynamic symbol matrix
+const BASELINE_MATRIX = 96;    // TF-012 r4 single-code baseline matrix
+const BASELINE_TOTAL_CHUNKS = 16; // TF-012 r4 baseline: 10240 B / 640 B per chunk
 
 // Shared optical acquisition core (bundled from the TF-007H modules).
 // GUARDED LOAD: the page must never fail silently. If the bundle throws at
@@ -38,7 +40,7 @@ try {
 
 // Unmistakable build identifier — must be visible on the phone to prove the
 // device is running the latest shared-receive package (not a stale cache).
-const BUILD_ID = 'tf012-r3-7728b0c';
+const BUILD_ID = 'tf012-r4-dev';
 
 // Checkpoint persistence (bounded cadence — never per camera frame). The
 // platform-neutral core owns checkpoint export/import; this adapter only does
@@ -65,7 +67,7 @@ Page({
     callbackActive: false,
     frozen: false,
     heavy: false,
-    mode: 'receive', // 'receive' | 'benchmark'
+    mode: 'receive', // 'receive' | 'benchmark' | 'baseline'
     buildId: BUILD_ID,
     bootStatus: 'BOOT OK',
     bootError: '',
@@ -111,6 +113,39 @@ Page({
     shaMs: '—',
     fileWriteMs: '—',
     networkType: '—',
+
+    // TF-012 r4 single-code baseline (单码基线) mode state
+    baselineStatus: 'WAITING / 等待',
+    baselineFileId: '—',
+    baselineFileName: '—',
+    baselineFileSize: '—',
+    baselineReceivedChunks: '0 / 16',
+    baselineMissingChunks: '—',
+    baselineDuplicates: 0,
+    baselineLastChunk: '—',
+    baselineDecodeAttempts: 0,
+    baselineDecodeSuccess: 0,
+    baselineCrcFailures: 0,
+    baselineLocateFailures: 0,
+    baselineForeignRejects: 0,
+    baselineMetadataRejects: 0,
+    baselineCodeWidth: '—',
+    baselinePixPerCell: '—',
+    baselineReservedScore: '—',
+    baselineRotation: '—',
+    baselineContrast: '—',
+    baselineFirstChunkMs: '—',
+    baselineAllChunksMs: '—',
+    baselineElapsed: '—',
+    baselineFrameInfo: '—',
+    baselineReconstructionStatus: '—',
+    baselineReconstructMethod: '—',
+    baselineReconstructMs: '—',
+    baselineShaMs: '—',
+    baselineShaStatus: '—',
+    baselineContentPreview: '',
+    baselinePreviewLines: 0,
+    baselineSelfCheck: '—',
 
     // live metrics
     frameWidth: 0,
@@ -198,6 +233,20 @@ Page({
   frameW: 0, frameH: 0, frameBytes: 0,  // batched frame geometry (no per-frame setData)
   reconstructMs: 0, shaMs: 0, fileWriteMs: 0,
 
+  // TF-012 r4 single-code baseline internal state (bypasses the full TF-012
+  // state machine: no cold-join beacon, no Preamble, no Manifest, no Fountain,
+  // no 3-tile logic — one big OptiGrid, one chunk per frame).
+  baselineReceiver: null,
+  baselineBusy: false,
+  baselinePending: null,
+  baselineFramesReceived: 0,
+  baselineFramesProcessed: 0,
+  baselineFramesReplaced: 0,
+  baselineTimes: [],
+  baselineFinalized: false,
+  baselineResult: null,
+  baselineStartAt: 0,
+
   onLoad() {
     this.collectDeviceEvidence();
     this.readCameraPermission();
@@ -205,6 +254,10 @@ Page({
     this.receiveCore = (opticalCore && typeof opticalCore.SharedOpticalReceiveCore === 'function')
       ? new opticalCore.SharedOpticalReceiveCore()
       : null;
+    this.baselineReceiver = (opticalCore && typeof opticalCore.SingleCodeBaselineReceiver === 'function')
+      ? new opticalCore.SingleCodeBaselineReceiver()
+      : null;
+    if (this.baselineReceiver) this.baselineReceiver.begin();
 
     // Boot status is VISIBLE and never silent: if the bundle failed to load the
     // page still renders and shows BOOT ERROR with the reason.
@@ -319,6 +372,18 @@ Page({
       : null;
     this.receiveBusy = false;
     this.receivePending = null;
+    this.baselineReceiver = (opticalCore && typeof opticalCore.SingleCodeBaselineReceiver === 'function')
+      ? new opticalCore.SingleCodeBaselineReceiver()
+      : null;
+    if (this.baselineReceiver) this.baselineReceiver.begin();
+    this.baselineBusy = false;
+    this.baselinePending = null;
+    this.baselineFramesReceived = 0;
+    this.baselineFramesProcessed = 0;
+    this.baselineFramesReplaced = 0;
+    this.baselineTimes = [];
+    this.baselineFinalized = false;
+    this.baselineResult = null;
     this.receiveFramesReceived = 0;
     this.receiveFramesProcessed = 0;
     this.receiveFramesSkipped = 0;
@@ -338,6 +403,7 @@ Page({
     this.windowProcessed = 0;
     this.startedAt = Date.now();
     this.lastFrameAt = 0;
+    this.baselineStartAt = Date.now();
 
     this.setData({
       frozen: false,
@@ -392,7 +458,37 @@ Page({
       replaced: 0,
       reconstructionMs: '—',
       shaMs: '—',
-      fileWriteMs: '—'
+      fileWriteMs: '—',
+      baselineStatus: 'WAITING / 等待',
+      baselineFileId: '—',
+      baselineFileName: '—',
+      baselineFileSize: '—',
+      baselineReceivedChunks: '0 / 16',
+      baselineMissingChunks: '—',
+      baselineDuplicates: 0,
+      baselineLastChunk: '—',
+      baselineDecodeAttempts: 0,
+      baselineDecodeSuccess: 0,
+      baselineCrcFailures: 0,
+      baselineLocateFailures: 0,
+      baselineForeignRejects: 0,
+      baselineMetadataRejects: 0,
+      baselineCodeWidth: '—',
+      baselinePixPerCell: '—',
+      baselineReservedScore: '—',
+      baselineRotation: '—',
+      baselineContrast: '—',
+      baselineFirstChunkMs: '—',
+      baselineAllChunksMs: '—',
+      baselineElapsed: '—',
+      baselineFrameInfo: '—',
+      baselineReconstructionStatus: '—',
+      baselineReconstructMethod: '—',
+      baselineReconstructMs: '—',
+      baselineShaMs: '—',
+      baselineShaStatus: '—',
+      baselineContentPreview: '',
+      baselinePreviewLines: 0
     });
     this.appendLog('metrics reset');
   },
@@ -413,10 +509,28 @@ Page({
     this.setData({ mode, receivePipelineError: '' });
     this.appendLog('active mode: ' + mode);
     if (mode === 'receive') this.runReceiveSelfCheck();
+    if (mode === 'baseline') this.runBaselineSelfCheck();
   },
 
   onSelectMode(e) {
     this.setMode(e.currentTarget.dataset.mode);
+  },
+
+  runBaselineSelfCheck() {
+    const problems = [];
+    if (!opticalCore) problems.push('optical-core bundle missing');
+    else {
+      if (typeof opticalCore.SingleCodeBaselineReceiver !== 'function') problems.push('SingleCodeBaselineReceiver not exported');
+      if (typeof opticalCore.sha256Hex !== 'function') problems.push('sha256Hex not exported');
+      if (typeof opticalCore.acquireOrientation !== 'function') problems.push('acquireOrientation not exported');
+    }
+    if (!this.baselineReceiver) problems.push('baseline receiver instance unavailable');
+    if (problems.length) {
+      this.setData({ baselineSelfCheck: 'SELF-CHECK FAIL: ' + problems.join('; ') });
+      this.recordError('baseline_selfcheck_failed: ' + problems.join('; '));
+    } else {
+      this.setData({ baselineSelfCheck: 'SELF-CHECK OK' });
+    }
   },
 
   runReceiveSelfCheck() {
@@ -463,6 +577,8 @@ Page({
 
     if (this.data.mode === 'receive') {
       this.processReceiveFrame(buffer, width, height);
+    } else if (this.data.mode === 'baseline') {
+      this.processBaselineFrame(buffer, width, height);
     } else {
       this.processBenchmarkFrame(buffer, width, height);
     }
@@ -543,6 +659,87 @@ Page({
         this.receiveBusy = false;
       }
     }
+  },
+
+  // ---- TF-012 r4 single-code baseline mode (单码基线) ----------------------
+  // ONE large OptiGrid per camera frame. This mode deliberately bypasses the
+  // full TF-012 state machine: no cold-join beacon state, no Preamble, no
+  // Manifest, no Fountain, no 3-tile logic. Pipeline:
+  //   CameraFrame → locate ONE OptiGrid → decode → parse chunk metadata →
+  //   validate transfer/file identity → store unique chunk → ignore duplicate.
+  // Bounded latest-frame pipeline, identical in shape to receive mode.
+  processBaselineFrame(buffer, width, height) {
+    this.baselineFramesReceived++;
+    if (!this.baselineReceiver) {
+      this.recordError('baseline_receiver_unavailable');
+      return;
+    }
+    if (this.baselineBusy) {
+      this.baselinePending = { buffer, width, height };
+      this.baselineFramesReplaced++;
+      return;
+    }
+    this.baselineBusy = true;
+    this.runBaselineFrame({ buffer, width, height });
+  },
+
+  runBaselineFrame(entry) {
+    const receiver = this.baselineReceiver;
+    const t0 = Date.now();
+    try {
+      const frame = { width: entry.width, height: entry.height, data: new Uint8ClampedArray(entry.buffer) };
+      receiver.ingestFrame(frame, BASELINE_MATRIX);
+      const elapsed = Date.now() - t0;
+      this.baselineTimes.push(elapsed);
+      if (this.baselineTimes.length > PROCESS_TIME_CAP) this.baselineTimes.shift();
+      this.baselineFramesProcessed++;
+      this.processedFrames++;
+      this.windowProcessed++;
+      if (receiver.complete && !this.baselineFinalized) this.finalizeBaseline();
+    } catch (err) {
+      this.recordError('baseline_failed:' + (err && err.message));
+    } finally {
+      const next = this.baselinePending;
+      if (next) {
+        this.baselinePending = null;
+        this.runBaselineFrame(next);
+      } else {
+        this.baselineBusy = false;
+      }
+    }
+  },
+
+  // Completion is ALL UNIQUE CHUNKS RECEIVED — never "the last chunk index
+  // arrived" (the last missing chunk may be any index). Reconstruction is
+  // CONCAT_BY_INDEX truncated to totalFileBytes, then SHA-256 against the
+  // digest carried in the chunk metadata. No file is saved in this baseline.
+  finalizeBaseline() {
+    const receiver = this.baselineReceiver;
+    if (!receiver || this.baselineFinalized) return;
+    this.baselineFinalized = true;
+    let result = null;
+    try {
+      result = receiver.reconstruct();
+    } catch (err) {
+      this.recordError('baseline_reconstruct_failed:' + (err && err.message));
+      return;
+    }
+    if (!result) {
+      this.recordError('baseline_reconstruct_incomplete:' + receiver.receivedUniqueCount + '/' + receiver.totalChunks);
+      return;
+    }
+    this.baselineResult = result;
+    const preview = opticalCore.singleBaselinePreviewText(result.bytes, 6);
+    this.setData({
+      baselineStatus: result.match ? 'COMPLETE / 完成' : 'ERROR / 错误',
+      baselineReconstructionStatus: 'RECONSTRUCTED ' + result.bytes.length + ' B',
+      baselineReconstructMs: result.reconstructMs + ' ms',
+      baselineShaMs: result.shaMs + ' ms',
+      baselineShaStatus: result.match ? 'MATCH' : 'MISMATCH',
+      baselineContentPreview: preview.head + '\n· · ·\n' + preview.tail,
+      baselinePreviewLines: preview.lines
+    });
+    this.appendLog('baseline reconstruction ' + (result.match ? 'SHA MATCH' : 'SHA MISMATCH') + ' · ' + result.bytes.length + ' bytes');
   },
 
   // Reconstruction complete: compute the local SHA-256 and write the file.
@@ -637,6 +834,8 @@ Page({
 
     if (this.data.mode === 'receive') {
       this.onReceiveTick();
+    } else if (this.data.mode === 'baseline') {
+      this.onBaselineTick();
     } else {
       this.onBenchmarkTick();
     }
@@ -781,9 +980,81 @@ Page({
     this.setData(patch);
   },
 
+  // Live single-code baseline panel. Every value here is measured by the
+  // platform-neutral baseline receiver — the adapter never decodes payload
+  // bits, never talks to the sender and never reads a sender-side oracle.
+  onBaselineTick() {
+    const elapsed = Math.max(1, Date.now() - this.windowStartAt);
+    const seconds = elapsed / 1000;
+    const callbackFps = (this.windowReceived / seconds).toFixed(1);
+    const processingFps = (this.windowProcessed / seconds).toFixed(1);
+    const skipped = Math.max(0, this.baselineFramesReceived - this.baselineFramesProcessed);
+    const avgMs = this.baselineTimes.length
+      ? (this.baselineTimes.reduce((a, b) => a + b, 0) / this.baselineTimes.length).toFixed(2) + ' ms'
+      : '—';
+    const receiver = this.baselineReceiver;
+    const metrics = receiver ? receiver.metrics : null;
+    const total = receiver && receiver.totalChunks ? receiver.totalChunks : BASELINE_TOTAL_CHUNKS;
+    const missing = receiver ? receiver.missingIndices() : [];
+
+    this.setData({
+      callbackFps,
+      processingFps,
+      totalReceived: this.receivedFrames,
+      processed: this.processedFrames,
+      skipped,
+      skipRatio: this.baselineFramesReceived ? ((skipped / this.baselineFramesReceived) * 100).toFixed(1) + '%' : '0.0%',
+      replaced: this.baselineFramesReplaced,
+      avgProcessMs: avgMs,
+      frameWidth: this.frameW,
+      frameHeight: this.frameH,
+      frameBufferBytes: this.frameBytes,
+      frameFormat: this.frameBytes ? 'RGBA (4 bytes/px)' : '—',
+      baselineFrameInfo: this.frameW ? (this.frameW + ' × ' + this.frameH) : '—',
+      baselineElapsed: this.baselineStartAt ? ((Date.now() - this.baselineStartAt) / 1000).toFixed(1) + ' s' : '—',
+      baselineStatus: this.baselineStatusText(receiver),
+      baselineReceivedChunks: receiver ? (receiver.receivedUniqueCount + ' / ' + total) : '0 / ' + BASELINE_TOTAL_CHUNKS,
+      baselineMissingChunks: missing.length ? '[' + missing.join(', ') + ']' : 'none',
+      baselineDuplicates: metrics ? metrics.duplicateChunks : 0,
+      baselineLastChunk: metrics && metrics.lastChunkIndex >= 0 ? String(metrics.lastChunkIndex) : '—',
+      baselineDecodeAttempts: metrics ? metrics.decodeAttempts : 0,
+      baselineDecodeSuccess: metrics ? metrics.decodeSuccess : 0,
+      baselineCrcFailures: metrics ? metrics.crcFailures : 0,
+      baselineLocateFailures: metrics ? metrics.locateFailures : 0,
+      baselineForeignRejects: metrics ? metrics.foreignChunkRejects : 0,
+      baselineMetadataRejects: metrics ? metrics.metadataRejects : 0,
+      baselineCodeWidth: metrics && metrics.codeWidthPx ? metrics.codeWidthPx.toFixed(0) + ' px' : '—',
+      baselinePixPerCell: metrics && metrics.pixPerCellX
+        ? metrics.pixPerCellX.toFixed(2) + ' / ' + metrics.pixPerCellY.toFixed(2)
+        : '—',
+      baselineReservedScore: metrics && metrics.reservedScore ? (metrics.reservedScore * 100).toFixed(1) + '%' : '—',
+      baselineRotation: metrics ? String(metrics.rotation) : '—',
+      baselineContrast: metrics && metrics.contrast ? metrics.contrast.toFixed(1) : '—',
+      baselineFirstChunkMs: metrics && metrics.firstChunkMs >= 0 ? metrics.firstChunkMs + ' ms' : '—',
+      baselineAllChunksMs: metrics && metrics.allChunksMs >= 0 ? metrics.allChunksMs + ' ms' : '—',
+      baselineFileId: receiver && receiver.activeFileId !== null
+        ? '0x' + (receiver.activeFileId >>> 0).toString(16).padStart(8, '0')
+        : '—',
+      baselineFileName: receiver && receiver.fileName ? receiver.fileName : '—',
+      baselineFileSize: receiver && receiver.totalFileBytes ? receiver.totalFileBytes + ' B' : '—',
+      baselineReconstructMethod: receiver && receiver.reconstructionMethod ? receiver.reconstructionMethod : '—',
+      baselinePipelineError: (this.data.running && this.baselineFramesReceived > 4 && this.baselineFramesProcessed === 0)
+        ? 'ERROR: BASELINE PIPELINE NOT RUNNING'
+        : ''
+    });
+  },
+
+  baselineStatusText(receiver) {
+    if (!receiver || receiver.activeFileId === null) return 'WAITING / 等待';
+    if (receiver.stage === 'error') return 'ERROR / 错误';
+    if (receiver.stage === 'complete') return 'COMPLETE / 完成';
+    if (receiver.stage === 'verifying') return 'VERIFYING / 校验中';
+    if (receiver.stage === 'reconstructing') return 'RECONSTRUCTING / 重构中';
+    return 'RECEIVING / 接收中';
+  },
+
   // ---- freeze / copy -----------------------------------------------------
-  freezeResult() {
-    this.clearFrameTimeout();
+  freezeResult() {    this.clearFrameTimeout();
     this.stopCamera();
 
     const result = this.buildResultPayload();
@@ -811,6 +1082,7 @@ Page({
 
   buildResultPayload() {
     if (this.data.mode === 'receive') return this.buildReceiveResultPayload();
+    if (this.data.mode === 'baseline') return this.buildBaselineResultPayload();
     const elapsedMs = this.startedAt ? Date.now() - this.startedAt : 0;
     const callbackFps = elapsedMs > 0 ? (this.receivedFrames / (elapsedMs / 1000)).toFixed(2) : '0.00';
     const processingFps = elapsedMs > 0 ? (this.processedFrames / (elapsedMs / 1000)).toFixed(2) : '0.00';
@@ -881,6 +1153,111 @@ Page({
           }
         : null,
       normalization: normalize,
+      errors: this.data.errors
+    };
+  },
+
+  /**
+   * TF-012 r4 single-code baseline frozen result. This is the JSON the PO
+   * copies back after a physical test. Evidence class is explicitly NOT
+   * Net Goodput and NOT G0.
+   */
+  buildBaselineResultPayload() {
+    const receiver = this.baselineReceiver;
+    const metrics = receiver ? receiver.metrics : null;
+    const elapsedMs = this.baselineStartAt ? Date.now() - this.baselineStartAt : 0;
+    const callbackFps = elapsedMs > 0 ? (this.receivedFrames / (elapsedMs / 1000)).toFixed(2) : '0.00';
+    const processingFps = elapsedMs > 0 ? (this.baselineFramesProcessed / (elapsedMs / 1000)).toFixed(2) : '0.00';
+    const avgProcessMs = this.baselineTimes.length
+      ? (this.baselineTimes.reduce((a, b) => a + b, 0) / this.baselineTimes.length).toFixed(3)
+      : null;
+    const p95ProcessMs = this.percentile(this.baselineTimes, 0.95);
+    const missing = receiver ? receiver.missingIndices() : [];
+    const reconstruction = this.baselineResult;
+
+    return {
+      evidenceClass: 'PHYSICAL SINGLE-CODE FILE TRANSFER BASELINE',
+      note: 'Single-Code Baseline 单码基线. NOT Net Goodput. NOT G0. No file save required.',
+      buildId: this.data.buildId,
+      appMode: this.data.mode,
+      modeLabel: 'Single-Code Baseline / 单码基线',
+      networkPayloadPath: 'NONE',
+      timestamp: new Date().toISOString(),
+      testDurationMs: elapsedMs,
+      reconstructionMethod: receiver ? receiver.reconstructionMethod : null,
+      transfer: {
+        fileId: receiver && receiver.activeFileId !== null
+          ? '0x' + (receiver.activeFileId >>> 0).toString(16).padStart(8, '0')
+          : null,
+        fileName: receiver ? receiver.fileName : null,
+        fileBytes: receiver ? receiver.totalFileBytes : null,
+        totalChunks: receiver ? receiver.totalChunks : null,
+        chunkDataBytes: receiver ? receiver.chunkDataBytes : null,
+        fileSha256: receiver ? receiver.fileSha256 : null
+      },
+      chunks: {
+        uniqueReceived: receiver ? receiver.receivedUniqueCount : 0,
+        missing: missing,
+        duplicates: metrics ? metrics.duplicateChunks : 0,
+        lastChunkIndex: metrics ? metrics.lastChunkIndex : -1,
+        foreignChunkRejects: metrics ? metrics.foreignChunkRejects : 0,
+        metadataRejects: metrics ? metrics.metadataRejects : 0,
+        postCompleteFrames: metrics ? metrics.postCompleteFrames : 0
+      },
+      camera: {
+        frameWidth: this.data.frameWidth,
+        frameHeight: this.data.frameHeight,
+        frameBufferBytes: this.data.frameBufferBytes,
+        frameFormat: this.data.frameFormat,
+        observedCodeWidthPx: metrics ? Number(metrics.codeWidthPx.toFixed(2)) : null,
+        observedCodeHeightPx: metrics ? Number(metrics.codeHeightPx.toFixed(2)) : null,
+        matrixSize: BASELINE_MATRIX,
+        estimatedPixelsPerCellX: metrics ? Number(metrics.pixPerCellX.toFixed(3)) : null,
+        estimatedPixelsPerCellY: metrics ? Number(metrics.pixPerCellY.toFixed(3)) : null,
+        reservedPatternScore: metrics ? Number(metrics.reservedScore.toFixed(4)) : null,
+        binarisationThreshold: metrics ? Number(metrics.threshold.toFixed(2)) : null,
+        contrast: metrics ? Number(metrics.contrast.toFixed(2)) : null,
+        frameRotationIndex: metrics ? metrics.rotation : null
+      },
+      decoding: {
+        cameraFrames: metrics ? metrics.cameraFrames : 0,
+        decodeAttempts: metrics ? metrics.decodeAttempts : 0,
+        successfulDecodes: metrics ? metrics.decodeSuccess : 0,
+        crcFailures: metrics ? metrics.crcFailures : 0,
+        locateFailures: metrics ? metrics.locateFailures : 0
+      },
+      timing: {
+        timeToFirstValidChunkMs: metrics && metrics.firstChunkMs >= 0 ? metrics.firstChunkMs : null,
+        timeToAllChunksMs: metrics && metrics.allChunksMs >= 0 ? metrics.allChunksMs : null,
+        reconstructionMs: metrics && metrics.reconstructMs >= 0 ? metrics.reconstructMs : null,
+        sha256Ms: metrics && metrics.shaMs >= 0 ? metrics.shaMs : null,
+        callbackFps: Number(callbackFps),
+        processingFps: Number(processingFps),
+        avgFrameProcessMs: avgProcessMs,
+        p95FrameProcessMs: p95ProcessMs != null ? p95ProcessMs.toFixed(3) : null
+      },
+      reconstruction: {
+        status: this.data.baselineReconstructionStatus,
+        bytes: reconstruction ? reconstruction.bytes.length : null,
+        reconstructMs: reconstruction ? reconstruction.reconstructMs : null,
+        sha256: reconstruction ? reconstruction.sha256Hex : null,
+        expectedSha256: reconstruction ? reconstruction.expectedSha256 : null,
+        shaResult: reconstruction ? (reconstruction.match ? 'MATCH' : 'MISMATCH') : this.data.baselineShaStatus,
+        previewLines: this.data.baselinePreviewLines,
+        preview: this.data.baselineContentPreview
+      },
+      device: {
+        model: this.data.model,
+        brand: this.data.brand,
+        system: this.data.system,
+        platform: this.data.platform,
+        wechatVersion: this.data.wechatVersion,
+        baseLibVersion: this.data.baseLibVersion,
+        sdkVersion: this.data.sdkVersion,
+        pixelRatio: this.data.pixelRatio,
+        screenSize: this.data.screenSize
+      },
+      networkType: this.data.networkType,
       errors: this.data.errors
     };
   },

@@ -167,3 +167,16 @@
   white-space: pre-wrap;
   word-break: break-all;
 }
+
+/* TF-012 r4 single-code baseline: reconstructed UTF-8 content preview. */
+.preview {
+  display: block;
+  font-family: monospace;
+  font-size: 22rpx;
+  color: #d1fae5;
+  background: #0b1220;
+  border-radius: 8rpx;
+  padding: 14rpx;
+  white-space: pre-wrap;
+  word-break: break-all;
+}

@@ -11,3 +11,5 @@ export {SharedOpticalReceiveCore, sessionKey} from './receive-core.ts';
 export type {ReceiveStage, DynamicFrameStats, ReceiveCheckpoint} from './receive-core.ts';
 export {sha256, sha256Hex} from './sha256.ts';
 export type {PixelFrame} from './pixel-frame.ts';
+// TF-012 r4 minimum physical single-code baseline (单码基线).
+export * from './single-baseline.ts';

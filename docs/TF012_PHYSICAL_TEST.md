@@ -1,5 +1,16 @@
 # TF-012 — Physical Test Plan (64 KiB, Mini Program end-to-end)
 
+> **Strategy update (TF-012 r4).** The **Single-Code Baseline / 单码基线** is now
+> the **primary physical bring-up path**: `docs/TF012_SINGLE_CODE_BASELINE.md` and
+> `docs/OPTILINK_DATA_FLOW_GATES.md` (G1–G13). It deliberately bypasses Preamble,
+> Manifest, Fountain and 3-tile composition until basic physical single-code file
+> transfer is proven on a real phone.
+>
+> The plan below is the **unchanged full-protocol path**. Its existing physical
+> evidence (CameraFrame PASS, Orientation PASS, 3/3 exact PASS, Preamble FAIL) is
+> kept and is not deleted; this document is retained for the later return to the
+> full protocol. Do not run it before the baseline is accepted.
+
 **Status:** READY for PO physical action (after exact-head CI green + Technical Review PASS).
 
 ## Goal
