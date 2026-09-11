@@ -129,6 +129,35 @@
     <view class="row"><text class="k">file save</text><text class="v">not required in this baseline / 基线不落盘</text></view>
   </view>
 
+  <view class="panel" wx:if="{{mode === 'baseline'}}">
+    <view class="section">speed ladder · 速度阶梯 (TF-012 r6)</view>
+    <view class="row"><text class="k">declared hold / 声明每码停留</text><text class="v">{{holdMsDeclared}} ms</text></view>
+    <view class="row">
+      <text class="k">set to sender ?holdMs=</text>
+      <input class="numinput" type="number" value="{{holdMsInput}}" bindinput="onHoldMsInput" placeholder="1500 .. 33" />
+    </view>
+    <view class="row">
+      <text class="k">ladder preset / 阶梯预设</text>
+      <picker mode="selector" range="{{holdMsLadder}}" bindchange="onHoldMsPick">
+        <view class="pick">pick {{holdMsDeclared}} ms ▾</view>
+      </picker>
+    </view>
+    <view class="row"><text class="k">theoretical chunk rate / 理论切片速率</text><text class="v">{{theoChunkRate}}</text></view>
+    <view class="row"><text class="k">theoretical file-payload rate / 理论文件载荷速率</text><text class="v">{{theoPayloadRate}}</text></view>
+    <view class="note">declared sender-side arithmetic · NOT Net Goodput · NOT optical throughput</view>
+    <view class="hr"></view>
+    <view class="row"><text class="k">active process avg / 有效处理均值</text><text class="v">{{activeProcessAvgMs}}</text></view>
+    <view class="row"><text class="k">active process p50</text><text class="v">{{activeProcessP50Ms}}</text></view>
+    <view class="row"><text class="k">active process p95</text><text class="v">{{activeProcessP95Ms}}</text></view>
+    <view class="row"><text class="k">active process max</text><text class="v">{{activeProcessMaxMs}}</text></view>
+    <view class="row"><text class="k">active samples / 有效样本</text><text class="v">{{activeProcessSamples}}</text></view>
+    <view class="row"><text class="k">post-complete frames EXCLUDED / 完成后忽略帧</text><text class="v">{{postCompleteFrames}}</text></view>
+    <view class="row"><text class="k">clock / 时钟</text><text class="v">{{clockSource}}</text></view>
+    <view class="hr"></view>
+    <view class="row"><text class="k">exploratory Net Goodput / 探索性净吞吐</text><text class="v">{{netGoodputText}}</text></view>
+    <view class="note">defined ONLY when 16/16 unique chunks + SHA-256 MATCH · 10 KiB exploratory physical benchmark · NOT G0</view>
+  </view>
+
   <view class="panel" wx:if="{{mode === 'baseline' && baselineContentPreview}}">
     <view class="section">TRANSFER COMPLETE / 传输完成 — Content Preview / 内容预览</view>
     <view class="row"><text class="k">lines</text><text class="v">{{baselinePreviewLines}}</text></view>

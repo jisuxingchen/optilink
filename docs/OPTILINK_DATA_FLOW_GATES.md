@@ -1,6 +1,6 @@
 # OptiLink Data Flow Gates — 数据流门
 
-**Status:** ACTIVE for the TF-012 r4 **Single-Code Baseline** (单码基线).
+**Status:** ACTIVE for the TF-012 r6 **Single-Code Baseline** (单码基线) speed ladder.
 **Scope:** the simplified baseline data flow G1–G13 below. The full TF-012 protocol
 path (orientation beacon → Preamble → Manifest → Fountain symbols → 3 tiles) is
 **deliberately bypassed** by this baseline and is documented separately in
@@ -18,7 +18,20 @@ Terminology / 术语
   UNIQUE CHUNKS ARE PRESENT**.
 - **Chunk / 分片** — one self-describing unit of the file; one chunk = one OptiGrid.
 - **Not in this baseline / 本基线不包含** — Fountain, Manifest frame, Preamble,
-  3-tile composition, ACK, Net Goodput, file save.
+  3-tile composition, ACK, file save. An **exploratory** Net Goodput number exists
+  from r6 onward, but only as an output of a complete, SHA-256-exact physical run
+  (see the speed section below). It is never a design target and never G0.
+
+**Three speed quantities that must never be conflated / 三个不可混淆的速度量**
+
+| # | Name | 中文 | Formula | Nature |
+| --- | --- | --- | --- | --- |
+| 1 | Theoretical gross file-payload rate | 理论文件载荷速率 | `chunkDataBytes / holdMs` | **Declared** sender arithmetic. Not a measurement. Not goodput. |
+| 2 | Physical decode metrics | 真实物理解码指标 | frames, attempts, failures, px/cell | **Measured** on the phone. |
+| 3 | Exploratory Net Goodput | 探索性有效净吞吐 | `fileBytes / timeToAllChunksSeconds` | **Exploratory.** Only defined for a real run with 16/16 unique chunks **and** SHA-256 MATCH — otherwise `null`. |
+
+CameraFrame RGBA ingress bandwidth is an interface property. It is **not** optical
+throughput and must never be reported as such. This 10 KiB measurement is **not G0**.
 
 | Gate | English name | 中文名称 |
 | --- | --- | --- |
@@ -331,13 +344,23 @@ reported at the exact sub-stage it reached, with its best failed score — a bar
 
 ## Cross-cutting gates / 横向门
 
-- **Speed / 速度**: not optimised. The initial broadcast hold is a deliberately slow
-  1000 ms per chunk (`?holdMs=` overridable); one full cycle takes ~16 s. Reliability
-  beats throughput in this baseline.
+- **Speed / 速度**: characterised, **not optimised**. The single degree of freedom
+  is the broadcast hold time `?holdMs=` (1500 / 1000 / 750 / 500 / 333 / 250 / 200 /
+  150 / 100 / 75 / 50 / 33 ms). G1–G13 are unchanged by it; only the time each
+  chunk stays on screen changes. No Fountain, no 3-code mode, no matrix change, no
+  chunk-size change, no Worker, no locator change for speed.
 - **One-way only / 仅单向**: no ACK, no retransmission request, no receiver
   feedback, no network payload. The sender never learns anything about the receiver.
 - **Evidence class / 证据等级**: on phone success this is
-  `PHYSICAL SINGLE-CODE FILE TRANSFER BASELINE` — **not** Net Goodput, **not** G0.
+  `PHYSICAL SINGLE-CODE FILE TRANSFER BASELINE · SPEED LADDER` — **not** Net Goodput
+  by default, **not** G0.
+- **PASS per speed point / 每个速度点的通过条件 (real phone only)**:
+  `uniqueReceived == 16`, `missing == []`, `reconstructedBytes == 10240`,
+  `shaResult == MATCH`. There is **no software-only PASS for a speed point** and no
+  speed point may be declared stable from one lucky run (3/3 required).
+- **Which gate degrades first / 哪个门先退化**: when a speed point fails, the frozen
+  JSON identifies the deepest G7 sub-stage reached and the counter that grew, so the
+  first degraded gate is named by evidence rather than guessed.
 
 ---
 
@@ -406,3 +429,65 @@ The proposed replacement for the first case is a gray-frame/checkerboard-border
 detector (G7a-2) that derives the code boundary from the alternating border cells
 instead of a global threshold. It is **not** implemented yet: the r5 physical
 diagnostics must first show whether the real scene is in that class.
+
+**Single-Code Baseline — r6 timing metric correction / 时间指标修正**
+
+The r4/r5 frozen JSON reported `avgFrameProcessMs = 0.007` and
+`p95FrameProcessMs = 0.000`, which cannot describe a 96×96 OptiGrid decode at
+~4 px/cell. Root cause, established from the code path:
+
+1. `runBaselineFrame` measured every processed frame with `Date.now() - t0`.
+2. Once the transfer is complete the receiver enters `reconstructing`/`complete`
+   and `ingestFrame` returns **before touching a pixel** — and the adapter's frame
+   wrapper is a zero-copy `new Uint8ClampedArray(arrayBuffer)` **view**, so such a
+   frame costs ~0 ms.
+3. `bufferTimes` keeps only the newest `PROCESS_TIME_CAP = 600` samples. The run
+   reported ≥642 successful decodes plus a long post-completion tail, so every
+   real decode sample was evicted from the ring and the average described the
+   ignore path instead of decoding.
+
+Fix (r6): a frame is classified **before** the ingest call, using the receiver
+stage at entry. Pre-completion frames enter the active latency aggregate
+(`activeProcessAvgMs` / `P50` / `P95` / `Max`, `activeProcessSamples`);
+post-completion frames are excluded and counted in `postCompleteFrames`. The
+frame that completes the transfer is still counted as active. Timings also use a
+monotonic sub-millisecond clock (`wx.getPerformance().now()`, falling back to
+`Date.now()`) reported as `timing.clockSource`, so a fast decode is not quantised
+to 0 ms. The deprecated `avgFrameProcessMs` / `p95FrameProcessMs` names remain in
+the JSON but are now computed over ACTIVE samples only.
+
+A second defect was fixed in the same block: the baseline `callbackFps` divided
+the **global** `receivedFrames` counter (shared with the other modes) by a
+baseline-only elapsed window, inflating it. It now uses `baselineFramesReceived`.
+
+**Single-Code Baseline — r6 speed ladder (software)**
+
+| Gate | Status | Note |
+| --- | --- | --- |
+| G1–G5 | **PASS** | unchanged by r6; the protocol is untouched |
+| G6 (software) | **PASS** | callback FPS now measured from the baseline counter |
+| G7a–G7d (software) | **PASS** | unchanged from r5; no locator change for speed |
+| G8–G13 (software) | **PASS** | same receiver, same reconstruction, same SHA-256 |
+| Sender `?holdMs=` ladder | **PASS** | all 12 ladder values honoured; the fast end is no longer clamped to 100 ms |
+| Frozen JSON | **PASS** | `benchmark` / `physical` / `completion` sections for each speed run |
+| G6–G13 (real phone, per speed point) | **NOT YET TESTED** | Stage A coarse ladder is the next PO run |
+
+**Speed-ladder measurement plan / 速度阶梯测量计划**
+
+- **Stage A — coarse ladder (coarse transition search):** 1500, 750, 333, 150, 75, 33 ms.
+  One run each. Record PASS/FAIL, `timeToAllChunksMs`, SHA, CRC failures, locate
+  failures, and exploratory Net Goodput (or `null`).
+- **Stage B — boundary refinement:** once the transition region is known
+  (e.g. 150 PASS / 75 FAIL), test intermediates around the last stable PASS and
+  the first FAIL (e.g. 125, 100, 90, 80).
+- **Stability:** the fastest candidate PASS is repeated **3 times**; a speed point
+  is only "stable PASS" at 3/3 exact SHA MATCH. The next faster point is also run
+  3 times and recorded as 3/3, 2/3, 1/3 or 0/3.
+- The PO is **not** asked to run all 12 values up front.
+
+**Data flow per speed run / 每次速度运行的数据流**
+
+G6 CameraFrame → G7 Decode (G7a/G7b/G7c/G7d) → G8 Chunk Reception →
+G9 Deduplication → G10 All Chunks → G11 Reconstruction → G12 SHA-256 →
+G13 Display. A degraded speed point is attributed to the **first** gate whose
+behaviour changed, using the frozen JSON rather than inference.

@@ -1,5 +1,5 @@
 /**
- * TF-012 r4 — Single-Code Baseline Sender 单码基线发送端.
+ * TF-012 r6 — Single-Code Baseline Sender 单码基线发送端 (speed ladder).
  *
  * ONE OptiGrid on screen, one chunk at a time, cycled forever:
  *
@@ -14,16 +14,34 @@
  * totalFileBytes, totalChunks, chunkIndex, chunkDataBytes, reconstructionMethod
  * and fileSha256. No Manifest frame, no Preamble dependency, no Fountain symbol,
  * no 3-tile composition, no speed optimisation.
+ *
+ * r6 adds NOTHING to the protocol. The only new degree of freedom is `holdMs`
+ * (how long one chunk stays on screen), so the stable speed limit of the CURRENT
+ * architecture can be characterised before anything is optimised:
+ *
+ *   single-baseline.html?holdMs=100
+ *
+ * The readout prints three deliberately separate numbers: the declared hold
+ * time, the THEORETICAL chunk rate and the THEORETICAL gross file-payload rate.
+ * The last two are arithmetic on the hold timer — they are NOT measurements, NOT
+ * Net Goodput and NOT optical throughput. Only a complete SHA-256-exact phone run
+ * may produce a goodput number, and that number comes from the receiver.
  */
 import {
   SINGLE_BASELINE_MATRIX,
   SINGLE_BASELINE_RECONSTRUCTION_METHOD,
+  SINGLE_BASELINE_HOLD_MS_LADDER,
   buildSingleBaselineTransfer,
+  clampSingleBaselineHoldMs,
+  singleBaselineBenchmark,
 } from './optical-core/single-baseline.ts';
 
 const params = new URLSearchParams(location.search);
-const holdMs = Math.min(60000, Math.max(100, Number.parseInt(params.get('holdMs') ?? '1000', 10) || 1000));
+// Speed ladder: 1500 … 33 ms. Values outside the ladder are still honoured
+// (Stage B needs 125/100/90/80), only the hard bounds are clamped.
+const holdMs = clampSingleBaselineHoldMs(params.get('holdMs'), 1000);
 const quietCells = Math.max(2, Math.min(6, Number.parseInt(params.get('quiet') ?? '3', 10) || 3));
+const benchmark = singleBaselineBenchmark(holdMs);
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const node = document.getElementById(id);
@@ -47,6 +65,9 @@ const chunkDataCell = $<HTMLElement>('chunkData');
 const chunkPayloadCell = $<HTMLElement>('chunkPayload');
 const matrixCell = $<HTMLElement>('matrixSize');
 const holdTimeCell = $<HTMLElement>('holdTime');
+const chunkRateCell = $<HTMLElement>('chunkRate');
+const payloadRateCell = $<HTMLElement>('payloadRate');
+const ladderCell = $<HTMLElement>('ladder');
 const cycleCountCell = $<HTMLElement>('cycleCount');
 const statusTextCell = $<HTMLElement>('statusText');
 const diagnosticRow = $<HTMLElement>('diagnosticRow');
@@ -208,6 +229,17 @@ chunkDataCell.textContent = `${transfer.chunkDataBytes} bytes`;
 chunkPayloadCell.textContent = `${transfer.payloadBytes} / ${transfer.optigridCapacityBytes} bytes`;
 matrixCell.textContent = `${matrixSize} × ${matrixSize}`;
 holdTimeCell.textContent = diagnosticMode ? 'static (diagnostic)' : `${holdMs} ms`;
+chunkRateCell.textContent = diagnosticMode
+  ? 'n/a (static hold)'
+  : benchmark
+    ? `${benchmark.theoreticalChunksPerSecond} chunk/s`
+    : '—';
+payloadRateCell.textContent = diagnosticMode
+  ? 'n/a (static hold)'
+  : benchmark
+    ? `${benchmark.theoreticalPayloadBytesPerSecond} B/s · ${benchmark.theoreticalPayloadKiBPerSecond} KiB/s`
+    : '—';
+ladderCell.textContent = SINGLE_BASELINE_HOLD_MS_LADDER.join(' / ') + ' ms';
 if (diagnosticMode) {
   diagnosticRow.hidden = false;
   heldChunkRow.hidden = false;
@@ -238,8 +270,16 @@ renderCurrent();
     quietCells,
     diagnosticMode,
     heldChunk: diagnosticMode ? heldChunk : null,
+    benchmark: diagnosticMode ? null : benchmark,
   },
-  state: () => ({broadcasting, cursor: diagnosticMode ? (heldChunk as number) : cursor, cycleCount, holdMs, diagnosticMode}),
+  state: () => ({
+    broadcasting,
+    cursor: diagnosticMode ? (heldChunk as number) : cursor,
+    cycleCount,
+    holdMs,
+    diagnosticMode,
+    benchmark: diagnosticMode ? null : benchmark,
+  }),
   start: startBroadcast,
   stop: stopAndFreeze,
   showChunk: (index: number) => {

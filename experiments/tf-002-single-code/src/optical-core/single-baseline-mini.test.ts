@@ -56,7 +56,7 @@ test('16 · Mini Program page boot smoke (Page() registers with baseline surface
   const page = captured as unknown as Record<string, unknown>;
   const data = page.data as Record<string, unknown>;
   assert.equal(data.mode, 'receive', 'default mode is the shared receive pipeline');
-  assert.match(String(data.buildId), /^tf012-r5-/, 'buildId uses the tf012-r5 prefix');
+  assert.match(String(data.buildId), /^tf012-r6-/, 'buildId uses the tf012-r6 prefix');
   assert.equal(data.baselineStatus, 'WAITING / 等待', 'baseline status is part of the initial data');
   assert.equal(data.baselineReceivedChunks, '0 / 16', 'baseline chunk counter is part of the initial data');
   assert.ok('baselineSelfCheck' in data, 'baseline self-check field present');
@@ -83,6 +83,25 @@ test('16 · Mini Program page boot smoke (Page() registers with baseline surface
   for (const section of ['g7aCandidateDetection', 'g7bCodeBoundingBox', 'g7cGeometryLock', 'g7dCrcDecode']) {
     assert.ok(PAGE_JS.includes(section), 'frozen result carries ' + section);
   }
+
+  // TF-012 r6 speed ladder: the phone can declare the hold duration and read the
+  // corrected ACTIVE latency plus a gated exploratory Net Goodput.
+  for (const method of ['applyHoldMs', 'onHoldMsInput', 'onHoldMsPick', 'baselineActiveStats', 'baselineNetGoodputMetrics']) {
+    assert.equal(typeof page[method], 'function', 'page exposes ' + method);
+  }
+  for (const field of ['holdMsLadder', 'theoChunkRate', 'theoPayloadRate', 'activeProcessAvgMs', 'activeProcessP50Ms', 'activeProcessP95Ms', 'activeProcessMaxMs', 'activeProcessSamples', 'postCompleteFrames', 'clockSource', 'netGoodputText', 'holdMsDeclared']) {
+    assert.ok(field in data, 'page data exposes ' + field);
+    assert.ok(PAGE_WXML.includes(field), 'speed-ladder panel shows ' + field);
+  }
+  for (const section of ['benchmark: {', 'physical: {', 'completion: {']) {
+    assert.ok(PAGE_JS.includes(section), 'frozen result carries the r6 ' + section);
+  }
+  for (const field of ['theoreticalChunksPerSecond', 'theoreticalPayloadBytesPerSecond', 'theoreticalPayloadKiBPerSecond', 'timeToFirstValidChunkMs', 'timeToAllChunksMs', 'successfulDecodes', 'observedCodeWidthPx', 'observedCodeHeightPx', 'pixelsPerCellX', 'pixelsPerCellY', 'reconstructedBytes', 'shaResult', 'exploratoryNetGoodputBytesPerSecond', 'exploratoryNetGoodputKiBPerSecond']) {
+    assert.ok(PAGE_JS.includes(field), 'frozen result carries ' + field);
+  }
+  // Net Goodput is gated by the shared core, never computed inline on the phone.
+  assert.match(PAGE_JS, /singleBaselineNetGoodput\(/u, 'net goodput uses the shared definition');
+  assert.match(PAGE_JS, /clampSingleBaselineHoldMs\(/u, 'hold ms uses the shared ladder clamp');
 });
 
 test('17 · Mini Program baseline mode smoke uses the shared core only', () => {
@@ -96,8 +115,14 @@ test('17 · Mini Program baseline mode smoke uses the shared core only', () => {
   const runFrame = PAGE_JS.slice(PAGE_JS.indexOf('  runBaselineFrame(entry) {'), PAGE_JS.indexOf('  onBaselineTick() {'));
   assert.ok(runFrame.length > 100, 'runBaselineFrame present');
   assert.match(runFrame, /data: new Uint8ClampedArray\(entry\.buffer\)/u, 'baseline frame comes from the camera buffer');
-  assert.match(runFrame, /receiver\.ingestFrame\(frame, BASELINE_MATRIX\)/u, 'baseline ingest goes through the shared core');
+  assert.match(runFrame, /receiver\.ingestFrame\(frame, BASELINE_MATRIX, clockMs\(\)\)/u, 'baseline ingest goes through the shared core');
   assert.match(runFrame, /receiver\.complete/u, 'completion is decided by the shared core');
+  // r6 timing accounting: a post-completion frame must be classified BEFORE the
+  // call and excluded from the active latency aggregate (it used to be averaged
+  // in, which is what collapsed avgFrameProcessMs to ~0.007 ms).
+  assert.match(runFrame, /active = stageBefore !== 'complete'/u, 'post-completion frames are classified before the call');
+  assert.match(runFrame, /if \(active\) \{/u, 'active latency samples are gated on the pre-call stage');
+  assert.match(runFrame, /this\.baselinePostCompleteFrames \+= 1/u, 'post-completion frames are counted separately');
   assert.match(PAGE_JS, /receiver\.reconstruct\(\)/u, 'reconstruction is done by the shared core');
   assert.match(PAGE_JS, /receiver\.missingIndices\(\)/u, 'missing-chunk reporting comes from the shared core');
 

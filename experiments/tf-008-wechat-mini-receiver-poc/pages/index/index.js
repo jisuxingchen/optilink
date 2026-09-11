@@ -20,10 +20,12 @@ const STAT_SAMPLE_STEP = 16;   // sample every Nth pixel for the cheap luma stat
 const NORMALIZE_EVERY = 3;     // run the normalization bench every Nth frame when enabled
 const FRAME_TIMEOUT_MS = 5000; // "no camera frame received within 5s"
 const UI_REFRESH_MS = 500;     // periodic UI refresh / FPS window
-const PROCESS_TIME_CAP = 600;  // max processing-time samples kept for p95
+const PROCESS_TIME_CAP = 600;  // max ACTIVE processing-time samples kept for p50/p95
 const RECEIVE_MATRIX = 96;     // protocol constant: manifest + dynamic symbol matrix
 const BASELINE_MATRIX = 96;    // TF-012 r4 single-code baseline matrix
 const BASELINE_TOTAL_CHUNKS = 16; // TF-012 r4 baseline: 10240 B / 640 B per chunk
+const BASELINE_FILE_BYTES = 10240; // TF-012 r4/r6 deterministic source file size
+const BASELINE_DEFAULT_HOLD_MS = 1000; // must match the sender URL ?holdMs=
 
 // Shared optical acquisition core (bundled from the TF-007H modules).
 // GUARDED LOAD: the page must never fail silently. If the bundle throws at
@@ -40,7 +42,43 @@ try {
 
 // Unmistakable build identifier — must be visible on the phone to prove the
 // device is running the latest shared-receive package (not a stale cache).
-const BUILD_ID = 'tf012-r5-711349b';
+const BUILD_ID = 'tf012-r6-dev';
+
+/**
+ * Monotonic millisecond clock for the speed-ladder benchmark.
+ *
+ * WHY THIS EXISTS: the r4/r5 timing block averaged `Date.now() - t0` over ALL
+ * processed baseline frames. Post-completion frames return immediately from
+ * `ingestFrame` before touching a single pixel, and the adapter's frame wrapper
+ * is a ZERO-COPY `new Uint8ClampedArray(arrayBuffer)` view, so those frames cost
+ * ~0 ms. Because the sample ring keeps only the last PROCESS_TIME_CAP entries,
+ * a long post-completion tail evicted every real decode sample and the reported
+ * average collapsed to ~0.007 ms — a measurement of the ignore path, not of
+ * decoding. Two independent corrections are applied here:
+ *
+ *   1. post-completion frames are excluded from the active latency aggregate and
+ *      counted separately as `postCompleteFrames`;
+ *   2. timings use a sub-millisecond clock when the platform provides one, so a
+ *      fast decode is not quantised to 0 ms by Date.now()'s 1 ms resolution.
+ *
+ * `Date.now()` remains the fallback and the clock actually used is reported in
+ * the frozen JSON as `timing.clockResolutionMs` / `timing.clockSource`.
+ */
+const performanceClock = (function () {
+  try {
+    if (typeof wx === 'undefined' || typeof wx.getPerformance !== 'function') return null;
+    const perf = wx.getPerformance();
+    return perf && typeof perf.now === 'function' ? perf : null;
+  } catch (err) {
+    return null;
+  }
+}());
+
+const CLOCK_SOURCE = performanceClock ? 'wx.getPerformance().now()' : 'Date.now()';
+
+function clockMs() {
+  return performanceClock ? performanceClock.now() : Date.now();
+}
 
 // Checkpoint persistence (bounded cadence — never per camera frame). The
 // platform-neutral core owns checkpoint export/import; this adapter only does
@@ -146,6 +184,26 @@ Page({
     baselineContentPreview: '',
     baselinePreviewLines: 0,
     baselineSelfCheck: '—',
+
+    // TF-012 r6 speed ladder (declared hold time + corrected active latency +
+    // exploratory net goodput). Theoretical rates are DECLARED arithmetic.
+    // r6 speed ladder: the DECLARED hold duration of ONE chunk, matching the
+    // sender URL (?holdMs=). The receiver cannot observe the sender's timer, so
+    // the PO declares it and every theoretical rate is derived from it and
+    // labelled as declared — never as a measured goodput.
+    holdMsInput: String(BASELINE_DEFAULT_HOLD_MS),
+    holdMsDeclared: BASELINE_DEFAULT_HOLD_MS,
+    holdMsLadder: [],
+    theoChunkRate: '—',
+    theoPayloadRate: '—',
+    activeProcessAvgMs: '—',
+    activeProcessP50Ms: '—',
+    activeProcessP95Ms: '—',
+    activeProcessMaxMs: '—',
+    activeProcessSamples: 0,
+    postCompleteFrames: 0,
+    clockSource: '—',
+    netGoodputText: 'null (needs 16/16 + SHA MATCH)',
 
     // G7 locator diagnostics (G7a candidate → G7b bounding box → G7c geometry → G7d CRC)
     g7aPass: '—',
@@ -273,7 +331,11 @@ Page({
   baselineFramesReceived: 0,
   baselineFramesProcessed: 0,
   baselineFramesReplaced: 0,
+  // r6: ACTIVE (pre-completion) processing latency samples ONLY. Post-completion
+  // ignored frames are counted in baselinePostCompleteFrames and never enter
+  // this ring — see the clockMs() comment for the r4/r5 accounting bug.
   baselineTimes: [],
+  baselinePostCompleteFrames: 0,
   baselineFinalized: false,
   baselineResult: null,
   baselineStartAt: 0,
@@ -288,7 +350,16 @@ Page({
     this.baselineReceiver = (opticalCore && typeof opticalCore.SingleCodeBaselineReceiver === 'function')
       ? new opticalCore.SingleCodeBaselineReceiver()
       : null;
-    if (this.baselineReceiver) this.baselineReceiver.begin();
+    if (this.baselineReceiver) this.baselineReceiver.begin(clockMs());
+
+    // TF-012 r6 speed ladder: expose the ladder to the picker and derive the
+    // declared theoretical rates for the default hold time.
+    const ladder = (opticalCore && Array.isArray(opticalCore.SINGLE_BASELINE_HOLD_MS_LADDER))
+      ? opticalCore.SINGLE_BASELINE_HOLD_MS_LADDER.slice()
+      : [];
+    const ladderLabels = ladder.map((value) => value + ' ms');
+    this.setData({ holdMsLadder: ladderLabels, clockSource: CLOCK_SOURCE });
+    this.applyHoldMs(BASELINE_DEFAULT_HOLD_MS);
 
     // Boot status is VISIBLE and never silent: if the bundle failed to load the
     // page still renders and shows BOOT ERROR with the reason.
@@ -406,13 +477,14 @@ Page({
     this.baselineReceiver = (opticalCore && typeof opticalCore.SingleCodeBaselineReceiver === 'function')
       ? new opticalCore.SingleCodeBaselineReceiver()
       : null;
-    if (this.baselineReceiver) this.baselineReceiver.begin();
+    if (this.baselineReceiver) this.baselineReceiver.begin(clockMs());
     this.baselineBusy = false;
     this.baselinePending = null;
     this.baselineFramesReceived = 0;
     this.baselineFramesProcessed = 0;
     this.baselineFramesReplaced = 0;
     this.baselineTimes = [];
+    this.baselinePostCompleteFrames = 0;
     this.baselineFinalized = false;
     this.baselineResult = null;
     this.receiveFramesReceived = 0;
@@ -544,6 +616,44 @@ Page({
 
   onSelectMode(e) {
     this.setMode(e.currentTarget.dataset.mode);
+  },
+
+  // ---- TF-012 r6 speed ladder: declared hold time -------------------------
+  // The receiver CANNOT observe the sender's hold timer, so the PO declares it
+  // here, exactly matching the sender URL (?holdMs=). Declaring it is not a
+  // measurement: only the theoretical rates derive from it, and they are always
+  // labelled as declared arithmetic, never as goodput or optical throughput.
+  applyHoldMs(raw) {
+    if (!opticalCore || typeof opticalCore.clampSingleBaselineHoldMs !== 'function') return;
+    const declared = opticalCore.clampSingleBaselineHoldMs(raw, BASELINE_DEFAULT_HOLD_MS);
+    const benchmark = typeof opticalCore.singleBaselineBenchmark === 'function'
+      ? opticalCore.singleBaselineBenchmark(declared)
+      : null;
+    this.setData({
+      holdMsInput: String(declared),
+      holdMsDeclared: declared,
+      theoChunkRate: benchmark ? (benchmark.theoreticalChunksPerSecond + ' chunk/s') : '—',
+      theoPayloadRate: benchmark
+        ? (benchmark.theoreticalPayloadBytesPerSecond + ' B/s · '
+          + benchmark.theoreticalPayloadKiBPerSecond + ' KiB/s')
+        : '—'
+    });
+  },
+
+  onHoldMsInput(e) {
+    const raw = e && e.detail ? e.detail.value : '';
+    if (raw === '' || raw === '-') {
+      this.setData({ holdMsInput: raw });
+      return;
+    }
+    this.applyHoldMs(raw);
+  },
+
+  onHoldMsPick(e) {
+    const ladder = this.data.holdMsLadder || [];
+    const index = Number(e && e.detail ? e.detail.value : 0);
+    if (!Number.isFinite(index) || index < 0 || index >= ladder.length) return;
+    this.applyHoldMs(ladder[index]);
   },
 
   runBaselineSelfCheck() {
@@ -713,15 +823,31 @@ Page({
     this.runBaselineFrame({ buffer, width, height });
   },
 
+  // r6 TIMING ACCOUNTING (corrected): the sample ring measures ACTIVE processing
+  // only. A frame that arrives after the transfer is complete returns from
+  // `ingestFrame` before any pixel work, so its latency is the ignore path, not
+  // a decode. Mixing the two collapsed avgProcessMs to ~0.007 ms in r4/r5 and
+  // made the metric useless for speed benchmarking. The distinction is decided
+  // BEFORE the call (the receiver stage at entry), so the frame that COMPLETES
+  // the transfer is still counted as active, and post-completion frames are
+  // counted separately.
   runBaselineFrame(entry) {
     const receiver = this.baselineReceiver;
-    const t0 = Date.now();
+    const t0 = clockMs();
+    let active = true;
     try {
       const frame = { width: entry.width, height: entry.height, data: new Uint8ClampedArray(entry.buffer) };
-      receiver.ingestFrame(frame, BASELINE_MATRIX);
-      const elapsed = Date.now() - t0;
-      this.baselineTimes.push(elapsed);
-      if (this.baselineTimes.length > PROCESS_TIME_CAP) this.baselineTimes.shift();
+      const stageBefore = receiver.stage;
+      active = stageBefore !== 'complete' && stageBefore !== 'reconstructing' && stageBefore !== 'verifying';
+      receiver.ingestFrame(frame, BASELINE_MATRIX, clockMs());
+      const elapsed = clockMs() - t0;
+      if (active) {
+        this.baselineTimes.push(elapsed);
+        if (this.baselineTimes.length > PROCESS_TIME_CAP) this.baselineTimes.shift();
+      } else {
+        // Excluded from active latency on purpose — see comment above.
+        this.baselinePostCompleteFrames += 1;
+      }
       this.baselineFramesProcessed++;
       this.processedFrames++;
       this.windowProcessed++;
@@ -1019,13 +1145,13 @@ Page({
     const callbackFps = (this.windowReceived / seconds).toFixed(1);
     const processingFps = (this.windowProcessed / seconds).toFixed(1);
     const skipped = Math.max(0, this.baselineFramesReceived - this.baselineFramesProcessed);
-    const avgMs = this.baselineTimes.length
-      ? (this.baselineTimes.reduce((a, b) => a + b, 0) / this.baselineTimes.length).toFixed(2) + ' ms'
-      : '—';
+    const activeStats = this.baselineActiveStats();
+    const avgMs = activeStats.avg != null ? activeStats.avg.toFixed(2) + ' ms' : '—';
     const receiver = this.baselineReceiver;
     const metrics = receiver ? receiver.metrics : null;
     const total = receiver && receiver.totalChunks ? receiver.totalChunks : BASELINE_TOTAL_CHUNKS;
     const missing = receiver ? receiver.missingIndices() : [];
+    const netGoodput = this.baselineNetGoodputMetrics(receiver, this.baselineResult);
 
     this.setData({
       callbackFps,
@@ -1036,6 +1162,16 @@ Page({
       skipRatio: this.baselineFramesReceived ? ((skipped / this.baselineFramesReceived) * 100).toFixed(1) + '%' : '0.0%',
       replaced: this.baselineFramesReplaced,
       avgProcessMs: avgMs,
+      activeProcessAvgMs: activeStats.avg != null ? activeStats.avg.toFixed(3) + ' ms' : '—',
+      activeProcessP50Ms: activeStats.p50 != null ? activeStats.p50.toFixed(3) + ' ms' : '—',
+      activeProcessP95Ms: activeStats.p95 != null ? activeStats.p95.toFixed(3) + ' ms' : '—',
+      activeProcessMaxMs: activeStats.max != null ? activeStats.max.toFixed(3) + ' ms' : '—',
+      activeProcessSamples: activeStats.count,
+      postCompleteFrames: this.baselinePostCompleteFrames,
+      clockSource: CLOCK_SOURCE,
+      netGoodputText: netGoodput
+        ? (netGoodput.bytesPerSecond + ' B/s · ' + netGoodput.kibPerSecond + ' KiB/s')
+        : 'null (needs 16/16 + SHA MATCH)',
       frameWidth: this.frameW,
       frameHeight: this.frameH,
       frameBufferBytes: this.frameBytes,
@@ -1237,26 +1373,51 @@ Page({
   },
 
   /**
-   * TF-012 r4 single-code baseline frozen result. This is the JSON the PO
-   * copies back after a physical test. Evidence class is explicitly NOT
-   * Net Goodput and NOT G0.
+   * TF-012 r6 single-code baseline frozen result.
+   *
+   * This is the JSON the PO copies back after a REAL PHONE run and it is the
+   * ONLY place a speed-ladder result may be declared PASS. Evidence class is
+   * explicitly NOT Net Goodput-by-default and NOT G0.
+   *
+   * r6 structure (the three quantities that must never be conflated):
+   *   benchmark  — DECLARED sender-side arithmetic (holdMs → theoretical rates).
+   *                A rate here is NOT a measurement and NOT a PASS.
+   *   physical   — what the phone actually did (frames, decodes, failures, px/cell).
+   *   completion — reconstruction + SHA-256 verdict, and the ONLY gate for
+   *                exploratoryNetGoodput* (null unless 16/16 unique + MATCH).
    */
   buildBaselineResultPayload() {
     const receiver = this.baselineReceiver;
     const metrics = receiver ? receiver.metrics : null;
     const elapsedMs = this.baselineStartAt ? Date.now() - this.baselineStartAt : 0;
-    const callbackFps = elapsedMs > 0 ? (this.receivedFrames / (elapsedMs / 1000)).toFixed(2) : '0.00';
+    // r6 fix: FPS must use the BASELINE frame counters. `this.receivedFrames` is
+    // a global counter shared by every mode, so dividing it by a baseline-only
+    // elapsed window reported an inflated callback FPS.
+    const callbackFps = elapsedMs > 0 ? (this.baselineFramesReceived / (elapsedMs / 1000)).toFixed(2) : '0.00';
     const processingFps = elapsedMs > 0 ? (this.baselineFramesProcessed / (elapsedMs / 1000)).toFixed(2) : '0.00';
-    const avgProcessMs = this.baselineTimes.length
-      ? (this.baselineTimes.reduce((a, b) => a + b, 0) / this.baselineTimes.length).toFixed(3)
-      : null;
-    const p95ProcessMs = this.percentile(this.baselineTimes, 0.95);
+    const activeStats = this.baselineActiveStats();
     const missing = receiver ? receiver.missingIndices() : [];
     const reconstruction = this.baselineResult;
+    const uniqueReceived = receiver ? receiver.receivedUniqueCount : 0;
+    const totalChunks = receiver && receiver.totalChunks ? receiver.totalChunks : BASELINE_TOTAL_CHUNKS;
+    const shaResult = reconstruction ? (reconstruction.match ? 'MATCH' : 'MISMATCH') : this.data.baselineShaStatus;
+    const pass = shaResult === 'MATCH'
+      && uniqueReceived === totalChunks
+      && totalChunks === BASELINE_TOTAL_CHUNKS
+      && reconstruction
+      && reconstruction.bytes.length === BASELINE_FILE_BYTES
+      && missing.length === 0;
+    const netGoodput = this.baselineNetGoodputMetrics(receiver, reconstruction);
+    const declaredHoldMs = this.data.holdMsDeclared;
+    const benchmark = (opticalCore && typeof opticalCore.singleBaselineBenchmark === 'function')
+      ? opticalCore.singleBaselineBenchmark(declaredHoldMs)
+      : null;
+    const timeToAllChunksMs = metrics && metrics.allChunksMs >= 0 ? metrics.allChunksMs : null;
+    const timeToFirstValidChunkMs = metrics && metrics.firstChunkMs >= 0 ? metrics.firstChunkMs : null;
 
     return {
-      evidenceClass: 'PHYSICAL SINGLE-CODE FILE TRANSFER BASELINE',
-      note: 'Single-Code Baseline 单码基线. NOT Net Goodput. NOT G0. No file save required.',
+      evidenceClass: 'PHYSICAL SINGLE-CODE FILE TRANSFER BASELINE · SPEED LADDER',
+      note: 'Single-Code Baseline 单码基线 speed ladder (TF-012 r6). A 10 KiB exploratory physical benchmark only — NOT Net Goodput by default, NOT G0, NOT optical throughput.',
       buildId: this.data.buildId,
       appMode: this.data.mode,
       modeLabel: 'Single-Code Baseline / 单码基线',
@@ -1264,6 +1425,68 @@ Page({
       timestamp: new Date().toISOString(),
       testDurationMs: elapsedMs,
       reconstructionMethod: receiver ? receiver.reconstructionMethod : null,
+      passDefinition: 'uniqueReceived == totalChunks == 16 AND missing == [] AND reconstructedBytes == 10240 AND shaResult == MATCH',
+      // ---- 1. DECLARED sender-side arithmetic — NOT a measurement ----
+      benchmark: {
+        holdMs: benchmark ? benchmark.holdMs : declaredHoldMs,
+        holdMsSource: 'declared (must equal the sender URL ?holdMs=)',
+        theoreticalChunksPerSecond: benchmark ? benchmark.theoreticalChunksPerSecond : null,
+        theoreticalPayloadBytesPerSecond: benchmark ? benchmark.theoreticalPayloadBytesPerSecond : null,
+        theoreticalPayloadKiBPerSecond: benchmark ? benchmark.theoreticalPayloadKiBPerSecond : null,
+        chunkDataBytes: receiver && receiver.chunkDataBytes ? receiver.chunkDataBytes : null,
+        totalChunks,
+        matrixSize: BASELINE_MATRIX,
+        warning: 'Theoretical gross file-payload rate = chunkDataBytes / holdMs. Declared arithmetic only. NOT a measurement, NOT Net Goodput, NOT optical throughput.'
+      },
+      // ---- 2. MEASURED physical decode metrics ----
+      physical: {
+        timeToFirstValidChunkMs,
+        timeToAllChunksMs,
+        // Informational: the steady-state window that excludes the PO's aiming
+        // time. NOT used for exploratoryNetGoodput (which uses timeToAllChunksMs).
+        timeFromFirstChunkToAllChunksMs: (timeToAllChunksMs !== null && timeToFirstValidChunkMs !== null)
+          ? timeToAllChunksMs - timeToFirstValidChunkMs
+          : null,
+        cameraFrames: metrics ? metrics.cameraFrames : 0,
+        decodeAttempts: metrics ? metrics.decodeAttempts : 0,
+        successfulDecodes: metrics ? metrics.decodeSuccess : 0,
+        locateFailures: metrics ? metrics.locateFailures : 0,
+        crcFailures: metrics ? metrics.crcFailures : 0,
+        metadataRejects: metrics ? metrics.metadataRejects : 0,
+        foreignChunkRejects: metrics ? metrics.foreignChunkRejects : 0,
+        duplicates: metrics ? metrics.duplicateChunks : 0,
+        uniqueReceived,
+        callbackFps: Number(callbackFps),
+        processingFps: Number(processingFps),
+        observedCodeWidthPx: metrics ? Number(metrics.codeWidthPx.toFixed(2)) : null,
+        observedCodeHeightPx: metrics ? Number(metrics.codeHeightPx.toFixed(2)) : null,
+        pixelsPerCellX: metrics ? Number(metrics.pixPerCellX.toFixed(3)) : null,
+        pixelsPerCellY: metrics ? Number(metrics.pixPerCellY.toFixed(3)) : null,
+        reservedPatternScore: metrics ? Number(metrics.reservedScore.toFixed(4)) : null,
+        binarisationThreshold: metrics ? Number(metrics.threshold.toFixed(2)) : null,
+        contrast: metrics ? Number(metrics.contrast.toFixed(2)) : null,
+        frameRotationIndex: metrics ? metrics.rotation : null,
+        postCompleteFrames: metrics ? metrics.postCompleteFrames : this.baselinePostCompleteFrames,
+        postCompleteFramesIgnoredByAdapter: this.baselinePostCompleteFrames
+      },
+      // ---- 3. COMPLETION + the only gateway to a goodput number ----
+      completion: {
+        reconstructedBytes: reconstruction ? reconstruction.bytes.length : null,
+        shaResult,
+        sha256: reconstruction ? reconstruction.sha256Hex : null,
+        expectedSha256: reconstruction ? reconstruction.expectedSha256 : null,
+        missing,
+        reconstructionStatus: this.data.baselineReconstructionStatus,
+        reconstructMs: reconstruction ? reconstruction.reconstructMs : null,
+        shaMs: reconstruction ? reconstruction.shaMs : null,
+        previewLines: this.data.baselinePreviewLines,
+        preview: this.data.baselineContentPreview
+      },
+      // null unless completion proves 16/16 unique + exact SHA-256 MATCH.
+      exploratoryNetGoodputBytesPerSecond: netGoodput ? netGoodput.bytesPerSecond : null,
+      exploratoryNetGoodputKiBPerSecond: netGoodput ? netGoodput.kibPerSecond : null,
+      exploratoryNetGoodputFormula: 'reconstructedBytes / (timeToAllChunksMs / 1000) — null unless 16/16 unique + SHA-256 MATCH',
+      pass,
       transfer: {
         fileId: receiver && receiver.activeFileId !== null
           ? '0x' + (receiver.activeFileId >>> 0).toString(16).padStart(8, '0')
@@ -1275,7 +1498,7 @@ Page({
         fileSha256: receiver ? receiver.fileSha256 : null
       },
       chunks: {
-        uniqueReceived: receiver ? receiver.receivedUniqueCount : 0,
+        uniqueReceived,
         missing: missing,
         duplicates: metrics ? metrics.duplicateChunks : 0,
         lastChunkIndex: metrics ? metrics.lastChunkIndex : -1,
@@ -1306,14 +1529,26 @@ Page({
         locateFailures: metrics ? metrics.locateFailures : 0
       },
       timing: {
-        timeToFirstValidChunkMs: metrics && metrics.firstChunkMs >= 0 ? metrics.firstChunkMs : null,
-        timeToAllChunksMs: metrics && metrics.allChunksMs >= 0 ? metrics.allChunksMs : null,
+        timeToFirstValidChunkMs,
+        timeToAllChunksMs,
         reconstructionMs: metrics && metrics.reconstructMs >= 0 ? metrics.reconstructMs : null,
         sha256Ms: metrics && metrics.shaMs >= 0 ? metrics.shaMs : null,
         callbackFps: Number(callbackFps),
         processingFps: Number(processingFps),
-        avgFrameProcessMs: avgProcessMs,
-        p95FrameProcessMs: p95ProcessMs != null ? p95ProcessMs.toFixed(3) : null
+        // r6 CORRECTED: active = pre-completion frames ONLY. Post-completion
+        // ignored frames are excluded (and counted separately) — in r4/r5 they
+        // entered this aggregate and collapsed the average to ~0.007 ms.
+        activeProcessAvgMs: activeStats.avg != null ? Number(activeStats.avg.toFixed(3)) : null,
+        activeProcessP50Ms: activeStats.p50 != null ? Number(activeStats.p50.toFixed(3)) : null,
+        activeProcessP95Ms: activeStats.p95 != null ? Number(activeStats.p95.toFixed(3)) : null,
+        activeProcessMaxMs: activeStats.max != null ? Number(activeStats.max.toFixed(3)) : null,
+        activeProcessSamples: activeStats.count,
+        postCompleteFrames: this.baselinePostCompleteFrames,
+        clockSource: CLOCK_SOURCE,
+        clockResolutionMs: performanceClock ? 'sub-millisecond' : 1,
+        // Deprecated r4/r5 names, now computed over ACTIVE samples only.
+        avgFrameProcessMs: activeStats.avg != null ? Number(activeStats.avg.toFixed(3)) : null,
+        p95FrameProcessMs: activeStats.p95 != null ? Number(activeStats.p95.toFixed(3)) : null
       },
       reconstruction: {
         status: this.data.baselineReconstructionStatus,
@@ -1321,7 +1556,7 @@ Page({
         reconstructMs: reconstruction ? reconstruction.reconstructMs : null,
         sha256: reconstruction ? reconstruction.sha256Hex : null,
         expectedSha256: reconstruction ? reconstruction.expectedSha256 : null,
-        shaResult: reconstruction ? (reconstruction.match ? 'MATCH' : 'MISMATCH') : this.data.baselineShaStatus,
+        shaResult,
         previewLines: this.data.baselinePreviewLines,
         preview: this.data.baselineContentPreview
       },
@@ -1628,6 +1863,45 @@ Page({
     const sorted = values.slice().sort((a, b) => a - b);
     const idx = Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * fraction));
     return sorted[idx];
+  },
+
+  // TF-012 r6: latency statistics over ACTIVE (pre-completion) frames only.
+  // `baselineTimes` never receives a post-completion ignored frame, so this is a
+  // decode-cost distribution, not a mixture of decode cost and an early return.
+  baselineActiveStats() {
+    const values = this.baselineTimes;
+    if (!values.length) return {avg: null, p50: null, p95: null, max: null, count: 0};
+    let sum = 0;
+    let max = 0;
+    for (let i = 0; i < values.length; i += 1) {
+      sum += values[i];
+      if (values[i] > max) max = values[i];
+    }
+    return {
+      avg: sum / values.length,
+      p50: this.percentile(values, 0.5),
+      p95: this.percentile(values, 0.95),
+      max,
+      count: values.length
+    };
+  },
+
+  /**
+   * TF-012 r6 exploratory Net Goodput. Delegates the guard to the shared core so
+   * the browser sender, Node tests and this adapter agree on exactly one
+   * definition: 16/16 unique chunks AND SHA-256 MATCH, else null.
+   */
+  baselineNetGoodputMetrics(receiver, reconstruction) {
+    if (!opticalCore || typeof opticalCore.singleBaselineNetGoodput !== 'function') return null;
+    if (!receiver || !reconstruction) return null;
+    const metrics = receiver.metrics;
+    return opticalCore.singleBaselineNetGoodput(
+      reconstruction.bytes.length,
+      metrics.allChunksMs,
+      receiver.receivedUniqueCount,
+      receiver.totalChunks,
+      reconstruction.match === true,
+    );
   },
 
   percentileFormat(values, kind) {

@@ -1994,3 +1994,110 @@ export function singleBaselinePreviewText(bytes: Uint8Array, maxLines = 6): {hea
     lines,
   };
 }
+
+// ---------------------------------------------------------------------------
+// 8. TF-012 r6 — speed ladder: theoretical rates + exploratory net goodput
+// ---------------------------------------------------------------------------
+//
+// THREE NUMBERS THAT MUST NEVER BE CONFLATED / 三个不可混淆的数字:
+//
+//   1. Theoretical gross file-payload rate 理论文件载荷速率
+//        = chunkDataBytes / hold duration
+//      A SENDER-SIDE, DECLARED quantity. It is arithmetic on the hold timer, not
+//      a measurement, and it says nothing about whether the receiver keeps up.
+//      It is NOT Net Goodput and it is NOT optical throughput.
+//
+//   2. Physical decode metrics 真实物理解码指标
+//      What the phone actually did (frames, decode attempts, failures, px/cell).
+//
+//   3. Exploratory Net Goodput 探索性有效净吞吐
+//        = fileBytes / timeToAllChunksSeconds
+//      Only defined for a REAL phone run that received all 16 unique chunks AND
+//      produced an exact SHA-256 MATCH. Otherwise it is null. This is a 10 KiB
+//      exploratory physical benchmark only — it is NOT G0.
+//
+// CameraFrame RGBA ingress bandwidth is an interface property, never optical
+// throughput, and must never be reported as such.
+
+/** The Stage A / Stage B speed ladder, ascending speed (descending hold time). */
+export const SINGLE_BASELINE_HOLD_MS_LADDER = [1500, 1000, 750, 500, 333, 250, 200, 150, 100, 75, 50, 33] as const;
+
+/** Fastest supported hold. Below this the sender cannot render meaningfully. */
+export const SINGLE_BASELINE_HOLD_MS_MIN = 33;
+/** Slowest supported hold (defensive upper bound for the URL parameter). */
+export const SINGLE_BASELINE_HOLD_MS_MAX = 60000;
+
+/** Parse/clamp a hold duration. Invalid input falls back to `fallback`. */
+export function clampSingleBaselineHoldMs(value: unknown, fallback = 1000): number {
+  const parsed = typeof value === 'number' ? value : Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(SINGLE_BASELINE_HOLD_MS_MAX, Math.max(SINGLE_BASELINE_HOLD_MS_MIN, Math.round(parsed)));
+}
+
+export type SingleBaselineBenchmark = {
+  /** Declared hold duration of ONE chunk, in milliseconds. */
+  holdMs: number;
+  /** Theoretical chunk rate = 1000 / holdMs. NOT a measurement. */
+  theoreticalChunksPerSecond: number;
+  /** Theoretical gross file-payload rate = chunkDataBytes * 1000 / holdMs. */
+  theoreticalPayloadBytesPerSecond: number;
+  theoreticalPayloadKiBPerSecond: number;
+};
+
+function round(value: number, decimals: number): number {
+  const factor = 10 ** decimals;
+  return Math.round(value * factor) / factor;
+}
+
+/**
+ * Declared sender-side benchmark numbers for a hold duration. Returns numbers
+ * only — never a PASS/FAIL and never a goodput claim. `null` when the hold
+ * duration is unusable, so a caller can never accidentally print 0 or Infinity.
+ */
+export function singleBaselineBenchmark(
+  holdMs: number,
+  chunkDataBytes = SINGLE_BASELINE_CHUNK_DATA_BYTES,
+): SingleBaselineBenchmark | null {
+  if (!Number.isFinite(holdMs) || holdMs <= 0) return null;
+  if (!Number.isFinite(chunkDataBytes) || chunkDataBytes <= 0) return null;
+  const chunksPerSecond = 1000 / holdMs;
+  const bytesPerSecond = (chunkDataBytes * 1000) / holdMs;
+  return {
+    holdMs,
+    theoreticalChunksPerSecond: round(chunksPerSecond, 3),
+    theoreticalPayloadBytesPerSecond: round(bytesPerSecond, 1),
+    theoreticalPayloadKiBPerSecond: round(bytesPerSecond / 1024, 3),
+  };
+}
+
+export type SingleBaselineNetGoodput = {
+  fileBytes: number;
+  timeToAllChunksMs: number;
+  bytesPerSecond: number;
+  kibPerSecond: number;
+};
+
+/**
+ * Exploratory Net Goodput. Deliberately narrow: `null` unless the caller proves
+ * a complete, SHA-256-exact physical run (16/16 unique chunks). A partial or
+ * mismatching run has NO goodput — it has a failure, which is not a rate.
+ */
+export function singleBaselineNetGoodput(
+  fileBytes: number,
+  timeToAllChunksMs: number,
+  uniqueReceived: number,
+  totalChunks: number,
+  shaMatched: boolean,
+): SingleBaselineNetGoodput | null {
+  if (!shaMatched) return null;
+  if (!Number.isFinite(fileBytes) || fileBytes <= 0) return null;
+  if (!Number.isFinite(timeToAllChunksMs) || timeToAllChunksMs <= 0) return null;
+  if (totalChunks <= 0 || uniqueReceived !== totalChunks) return null;
+  const bytesPerSecond = (fileBytes * 1000) / timeToAllChunksMs;
+  return {
+    fileBytes,
+    timeToAllChunksMs,
+    bytesPerSecond: round(bytesPerSecond, 3),
+    kibPerSecond: round(bytesPerSecond / 1024, 3),
+  };
+}

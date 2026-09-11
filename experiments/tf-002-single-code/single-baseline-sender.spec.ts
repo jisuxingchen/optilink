@@ -1,5 +1,5 @@
 /**
- * TF-012 r4 — Single-Code Baseline sender acceptance (real browser, real canvas).
+ * TF-012 r6 — Single-Code Baseline sender acceptance (real browser, real canvas).
  *
  * Verifies the sender page itself, not just the shared protocol module:
  *  13  sender Start button starts a cyclic broadcast from chunk 0
@@ -7,6 +7,9 @@
  *  15  sender cycles 0..15 and wraps back to chunk 0 (the loop is deterministic)
  *  ·   every rendered canvas is a VALID OptiGrid v1 frame (sampled from the real
  *      canvas and CRC-decoded in Node against the shared payload builder)
+ *  r5  ?diagnostic=chunk0 holds ONE known chunk with no timer (G7 bring-up)
+ *  r6  ?holdMs= honours the whole speed ladder and the readout prints the
+ *      DECLARED theoretical rates — never Net Goodput, never throughput
  */
 import {test, expect} from '@playwright/test';
 import type {Page} from '@playwright/test';
@@ -170,3 +173,58 @@ test('diagnostic mode holds ONE known chunk indefinitely (?diagnostic=chunk0)', 
   expect((await state(page)).broadcasting).toBe(false);
   await expect(page.locator('#statusText')).toHaveText('Stopped / 已停止');
 });
+
+/**
+ * TF-012 r6 speed ladder. The only new degree of freedom is the hold duration,
+ * so the sender must (a) honour every ladder value through the URL and (b) show
+ * the DECLARED theoretical rates without ever calling them Net Goodput.
+ */
+test('speed ladder: holdMs is honoured from the URL and theoretical rates are declared', async ({page}) => {
+  await page.goto('/single-baseline.html?holdMs=100');
+
+  await expect(page.locator('#holdTime')).toHaveText('100 ms');
+  await expect(page.locator('#chunkRate')).toHaveText('10 chunk/s');
+  await expect(page.locator('#payloadRate')).toHaveText('6400 B/s · 6.25 KiB/s');
+  expect((await state(page)).holdMs).toBe(100);
+
+  // The full ladder is advertised on the page (not a single hard-coded value).
+  await expect(page.locator('#ladder')).toHaveText('1500 / 1000 / 750 / 500 / 333 / 250 / 200 / 150 / 100 / 75 / 50 / 33 ms');
+
+  // The URL is the source of truth, and the broadcast really uses that period.
+  await page.goto('/single-baseline.html?holdMs=250');
+  await expect(page.locator('#holdTime')).toHaveText('250 ms');
+  await expect(page.locator('#chunkRate')).toHaveText('4 chunk/s');
+  await expect(page.locator('#payloadRate')).toHaveText('2560 B/s · 2.5 KiB/s');
+  expect((await state(page)).holdMs).toBe(250);
+
+  await page.locator('#startButton').click();
+  await expect(page.locator('#statusText')).toHaveText('Broadcasting / 广播中');
+  // ~4 chunks/s: a full cycle (16 chunks) is ~4 s, so a 0.9 s window cannot
+  // finish a cycle and must have advanced at least twice.
+  await page.waitForTimeout(900);
+  const running = await state(page);
+  expect(running.broadcasting).toBe(true);
+  expect(running.cycleCount).toBe(0);
+  expect(running.cursor, 'the 250 ms period really advances the cycle').toBeGreaterThanOrEqual(2);
+  await page.locator('#stopButton').click();
+});
+
+test('speed ladder: the fast end is not silently clamped to 100 ms', async ({page}) => {
+  for (const [holdMs, chunksPerSecond] of [[75, '13.333'], [50, '20'], [33, '30.303']] as Array<[number, string]>) {
+    await page.goto('/single-baseline.html?holdMs=' + holdMs);
+    await expect(page.locator('#holdTime')).toHaveText(holdMs + ' ms');
+    await expect(page.locator('#chunkRate')).toHaveText(chunksPerSecond + ' chunk/s');
+    expect((await state(page)).holdMs, 'holdMs ' + holdMs + ' must reach the sender unclamped').toBe(holdMs);
+  }
+});
+
+test('speed ladder: diagnostic static hold reports no theoretical rate', async ({page}) => {
+  await page.goto('/single-baseline.html?holdMs=100&diagnostic=chunk0');
+  await expect(page.locator('#holdTime')).toHaveText('static (diagnostic)');
+  await expect(page.locator('#chunkRate')).toHaveText('n/a (static hold)');
+  await expect(page.locator('#payloadRate')).toHaveText('n/a (static hold)');
+  // A static hold has no chunk rate, so no rate may be reported.
+  const url = new URL(page.url());
+  expect(url.searchParams.get('holdMs')).toBe('100');
+});
+

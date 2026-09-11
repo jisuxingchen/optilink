@@ -113,7 +113,7 @@ jobs:
           }
       - name: Run TF-005 pixel-isolated carrier bench and tracking frontier
         run: npm run bench:headless
-      - name: Run TF-012 r4 single-code baseline sender acceptance
+      - name: Run TF-012 r6 single-code baseline sender acceptance (speed ladder)
         run: npm run test:single-baseline-sender
       - name: Validate lab coordinator and tunnel launcher syntax
         run: |

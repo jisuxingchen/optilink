@@ -58,7 +58,10 @@
       <tr><td class="k">Chunk data / 每片文件数据</td><td class="v" id="chunkData">—</td></tr>
       <tr><td class="k">Chunk payload / 每片载荷</td><td class="v" id="chunkPayload">—</td></tr>
       <tr><td class="k">Matrix / 矩阵</td><td class="v" id="matrixSize">—</td></tr>
-      <tr><td class="k">Hold time / 保持时间</td><td class="v" id="holdTime">—</td></tr>
+      <tr><td class="k">Hold time / 每码停留</td><td class="v" id="holdTime">—</td></tr>
+      <tr><td class="k">Theoretical chunk rate / 理论切片速率</td><td class="v" id="chunkRate">—</td></tr>
+      <tr><td class="k">Theoretical file-payload rate / 理论文件载荷速率</td><td class="v" id="payloadRate">—</td></tr>
+      <tr><td class="k">Speed ladder / 速度阶梯</td><td class="v" id="ladder">—</td></tr>
       <tr id="diagnosticRow" hidden><td class="k">Diagnostic Mode / 诊断模式</td><td class="v" id="diagnosticMode">—</td></tr>
       <tr id="heldChunkRow" hidden><td class="k">Held Chunk / 固定切片</td><td class="v" id="heldChunk">—</td></tr>
       <tr><td class="k">Cycle count / 循环次数</td><td class="v" id="cycleCount">0</td></tr>
@@ -66,7 +69,8 @@
     </table>
   </section>
 
-  <div id="hint">One OptiGrid only · 单码显示 · no Manifest / no Preamble / no Fountain / no 3-tile</div>
+  <div id="hint">One OptiGrid only · 单码显示 · no Manifest / no Preamble / no Fountain / no 3-tile<br />
+    Theoretical rates are declared sender-side arithmetic — NOT Net Goodput, NOT optical throughput.</div>
 
   <script type="module" src="/src/single-baseline-sender-main.ts"></script>
 </body>
