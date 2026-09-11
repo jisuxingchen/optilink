@@ -40,7 +40,7 @@ try {
 
 // Unmistakable build identifier — must be visible on the phone to prove the
 // device is running the latest shared-receive package (not a stale cache).
-const BUILD_ID = 'tf012-r5-dev';
+const BUILD_ID = 'tf012-r5-711349b';
 
 // Checkpoint persistence (bounded cadence — never per camera frame). The
 // platform-neutral core owns checkpoint export/import; this adapter only does

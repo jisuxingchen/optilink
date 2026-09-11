@@ -2,8 +2,10 @@
 
 **Status:** READY for PO physical action (after exact-head CI green + Technical
 Review PASS).
-**Build:** `tf012-r5-<shortsha>` · branch `spike/tf-012-physical-performance` ·
-Issue #53 · PR #54.
+**Build:** `tf012-r5-711349b` · build content commit `711349b` · branch
+`spike/tf-012-physical-performance` · Issue #53 · PR #54.
+(The follow-up commit that pins this buildId string changes nothing else in the
+baseline; `utils/optical-core.js` is rebuilt from the same source.)
 **r4 physical evidence (kept):** G6 CameraFrame = **PHYSICAL PASS**;
 G7 = **PHYSICAL FAIL** with `locateFailures = 5272 / 5272` and `crcFailures = 0`;
 G7b–G13 = NOT REACHED. See `docs/OPTILINK_DATA_FLOW_GATES.md` → Current physical
