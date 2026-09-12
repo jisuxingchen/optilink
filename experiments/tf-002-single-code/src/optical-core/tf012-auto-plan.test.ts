@@ -34,6 +34,7 @@ import {
   type Tf012AutoStepResult,
   type Tf012AutoRunResult,
 } from './tf012-auto-orchestrator.ts';
+import {runAutoPlan} from './tf012-auto-fake-peer.ts';
 import type {Tf012AutoEnvelope} from './tf012-auto-plan.ts';
 
 // ---------------------------------------------------------------------------
@@ -88,84 +89,20 @@ interface RecordedRun {
   sender: Tf012AutoSenderSample;
 }
 
-function runPlan(options: {ready: boolean} = {ready: true}): RecordedRun {
-  const commands: Tf012AutoEnvelope[] = [];
-  const frozen: Tf012AutoStepResult[] = [];
-  let final: Tf012AutoRunResult | null = null;
-  const receiver = emptyReceiverSample();
-  const sender: Tf012AutoSenderSample = {
-    mode: 'static', holdMs: null, cursor: 0, paused: false, broadcasting: false,
-    canvasDevicePx: 1020, canvasHash: 'aaaa', pausedAt: null, resumedAt: null,
+/**
+ * r14: the run now needs a real sender PEER, so the r13 tests drive the shared fake
+ * peer (see tf012-auto-harness.test.ts for the control-plane cases). The peer refuses
+ * to confirm anything it did not actually do, which is exactly what r13 was missing.
+ */
+function runPlan(options: {ready?: boolean} = {}): RecordedRun {
+  const peer = runAutoPlan({ready: options.ready !== false});
+  return {
+    commands: peer.commands,
+    frozen: peer.frozen,
+    final: peer.finalResult(),
+    receiver: peer.receiver,
+    sender: peer.sender,
   };
-  const orchestrator = createTf012AutoOrchestrator({
-    runId: 'run-test-1',
-    buildId: 'tf012-r13-test',
-    device: 'test-rig',
-    ports: {
-      send: (message) => {
-        // Every outbound message must satisfy the strict control-plane validator.
-        const check = validateTf012AutoControlMessage(message);
-        assert.equal(check.ok, true, `orchestrator emitted an illegal message: ${check.reason}`);
-        commands.push(message);
-        // Apply the control effect to the simulated sender.
-        if (message.action === 'SET_MODE') sender.mode = message.mode as 'static' | 'cyclic';
-        if (message.action === 'SET_HOLD_MS') sender.holdMs = Number(message.holdMs);
-        if (message.action === 'PAUSE') {
-          sender.paused = true;
-          sender.pausedAt = 1;
-        }
-        if (message.action === 'RESUME') sender.paused = false;
-        if (message.action === 'START') sender.broadcasting = true;
-        if (message.action === 'STOP') sender.broadcasting = false;
-      },
-      senderSample: () => {
-        // The simulated cycle advances while running and is frozen while paused.
-        if (sender.broadcasting && !sender.paused) sender.cursor = ((sender.cursor ?? 0) + 1) % 16;
-        return {...sender};
-      },
-      receiverSample: () => {
-        // The simulated receiver decodes while the sender is running, and — crucially —
-        // also while it is PAUSED (that is the point of the A4 step).
-        if (sender.broadcasting) {
-          receiver.cameraFrames += 3;
-          receiver.decodeAttempts += 3;
-          if (options.ready) {
-            receiver.successfulDecodes += 1;
-            receiver.uniqueReceived = Math.min(16, receiver.uniqueReceived + 1);
-            receiver.observedCodeWidthPx = 287.35;
-            receiver.pixelsPerCellX = 2.99;
-            receiver.pixelsPerCellY = 3.0;
-            receiver.reservedPatternScore = 0.95;
-            receiver.contrast = 168.65;
-          } else {
-            receiver.crcFailures += 3;
-          }
-        }
-        return {...receiver};
-      },
-      resetReceiverMetrics: () => {
-        receiver.cameraFrames = 0;
-        receiver.decodeAttempts = 0;
-        receiver.successfulDecodes = 0;
-        receiver.crcFailures = 0;
-        receiver.locateFailures = 0;
-        receiver.uniqueReceived = 0;
-      },
-      onStepResult: (result) => frozen.push(result),
-      onRunResult: (result) => {
-        final = result;
-      },
-    },
-  });
-
-  let now = 1000;
-  orchestrator.start(now);
-  const limit = 200;
-  for (let index = 0; index < limit && orchestrator.finalResult() === null; index += 1) {
-    now += 500;
-    orchestrator.tick(now);
-  }
-  return {commands, frozen, final, receiver, sender};
 }
 
 test('r13 auto plan: the declaration and the sender holdMs follow the active step', () => {
@@ -205,7 +142,7 @@ test('r13 auto plan: the declaration and the sender holdMs follow the active ste
   // The command order is exactly the plan order, with SET_MODE before SET_HOLD_MS
   // before START inside each step.
   const sequence = commands
-    .filter((message) => ['SET_MODE', 'SET_HOLD_MS', 'START', 'PAUSE', 'STEP_COMPLETE'].includes(String(message.action)))
+    .filter((message) => ['SET_MODE', 'SET_HOLD_MS', 'START', 'PAUSE', 'RESUME', 'STEP_COMPLETE'].includes(String(message.action)))
     .map((message) => `${String(message.stepId)}:${String(message.action)}`);
   assert.deepEqual(sequence, [
     'SETUP:SET_MODE', 'SETUP:START',
@@ -213,7 +150,8 @@ test('r13 auto plan: the declaration and the sender holdMs follow the active ste
     'A2:SET_MODE', 'A2:SET_HOLD_MS', 'A2:START', 'A2:STEP_COMPLETE',
     'A3:SET_MODE', 'A3:SET_HOLD_MS', 'A3:START', 'A3:STEP_COMPLETE',
     'A4:SET_MODE', 'A4:SET_HOLD_MS', 'A4:START', 'A4:PAUSE', 'A4:STEP_COMPLETE',
-    'A5:SET_MODE', 'A5:START', 'A5:STEP_COMPLETE',
+    // r14: A4 leaves the carrier frozen, so A5 must be resumed before it can run.
+    'A5:RESUME', 'A5:SET_MODE', 'A5:START', 'A5:STEP_COMPLETE',
   ]);
 });
 

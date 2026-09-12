@@ -345,7 +345,24 @@ Page({
     autoConnected: false,
     autoRunning: false,
     autoPhase: 'IDLE',
-    autoStatusText: 'IDLE / 未开始',
+    // r14: the RUN verdict and the CONTROL-channel health are separate fields, so a
+    // later socket update can never overwrite COMPLETE / ABORTED / SETUP_NOT_READY.
+    autoRunStatus: 'Run: IDLE / 未开始',
+    autoControlStatus: 'Control: OFFLINE / 控制通道未连接',
+    autoHandshake: 'WAITING FOR PC SENDER / 等待电脑发送端',
+    autoCommand: 'Command: —',
+    autoSenderConfirmed: 'NO / 未确认',
+    autoSenderMismatch: '—',
+    autoTelemetryAge: 'never / 未收到',
+    autoPauseRequested: 'no',
+    autoPauseConfirmed: 'no',
+    autoFrozenCursor: '—',
+    autoFrozenStepsDone: '0 / ' + TF012_AUTO_STEP_COUNT,
+    autoStoppedConfirmed: 'NO',
+    autoHarnessValid: 'NO',
+    autoValidityFailed: 'none',
+    autoResultUpload: 'pending / 待上传',
+    autoFinalJsonReady: 'NO',
     autoStepLabel: '—',
     autoStepIndex: 0,
     autoStepCount: TF012_AUTO_STEP_COUNT,
@@ -1145,6 +1162,7 @@ Page({
       activeProcessAvgMs: Number.isFinite(activeStats.avg) ? activeStats.avg : null,
       activeProcessP95Ms: Number.isFinite(activeStats.p95) ? activeStats.p95 : null,
       cameraFrames: this.baselineFramesReceived,
+      processedFrames: this.baselineFramesProcessed,
       decodeAttempts: metrics ? metrics.decodeAttempts : 0,
       successfulDecodes: metrics ? metrics.decodeSuccess : 0,
       crcFailures: metrics ? metrics.crcFailures : 0,
@@ -1169,12 +1187,12 @@ Page({
     }
     const url = this.data.autoControlUrl;
     if (!createAutoTestRunner) {
-      this.setData({autoStatusText: 'AUTO HARNESS UNAVAILABLE / 自动测试模块未加载'});
+      this.setData({autoRunStatus: 'Run: AUTO HARNESS UNAVAILABLE / 自动测试模块未加载'});
       wx.showToast({title: 'Auto harness unavailable: ' + autoHarnessLoadError, icon: 'none'});
       return;
     }
     if (!url) {
-      this.setData({autoStatusText: 'CONTROL URL MISSING / 缺少控制地址'});
+      this.setData({autoRunStatus: 'Run: CONTROL URL MISSING / 缺少控制地址'});
       wx.showToast({title: 'Set the control channel URL first / 请先填写控制地址', icon: 'none'});
       return;
     }
@@ -1197,10 +1215,12 @@ Page({
       onProgress: (progress) => this.setData(this.autoProgressPatch(progress)),
       onStepResult: (result) => this.onAutoStepResult(result),
       onRunResult: (result) => this.onAutoRunResult(result),
+      onUploadStatus: (status) => this.onAutoUploadStatus(status),
       onLog: (text) => this.appendLog('auto: ' + text),
-      onStatus: (status) => this.setData({autoConnected: status.connected, autoStatusText: status.connected
-        ? 'CONTROL ONLINE / 控制通道已连接'
-        : 'CONTROL OFFLINE / 控制通道未连接'})
+      // Control-channel health is its OWN field: it must never overwrite the run status.
+      onStatus: (status) => this.setData({autoConnected: status.connected,
+        autoControlStatus: status.connected ? 'Control: ONLINE / 控制通道在线'
+          : 'Control: OFFLINE / 控制通道未连接'})
     });
     this.autoRunner = runner;
     this.autoResults = [];
@@ -1211,7 +1231,7 @@ Page({
 
   onAutoTestStop() {
     if (this.autoRunner) this.autoRunner.abort('STOPPED_BY_PO');
-    this.setData({autoRunning: false, autoStatusText: 'STOPPED / 已停止'});
+    this.setData({autoRunning: false, autoRunStatus: 'ABORTED / 已中止'});
   },
 
   onAutoControlUrl(event) {
@@ -1227,8 +1247,23 @@ Page({
   },
 
   autoProgressPatch(progress) {
+    // `status` is the RUN outcome (RUNNING / COMPLETE / ABORTED / …). It is deliberately
+    // separate from the control-channel line so a later socket update cannot overwrite a
+    // finished run's verdict — the r13 defect where COMPLETE reverted to "CONTROL ONLINE".
+    const runStatus = progress.status === 'RUNNING'
+      ? 'Run: RUNNING / 运行中'
+      : progress.status === 'WAITING_FOR_SENDER'
+        ? 'Run: WAITING FOR PC SENDER / 等待电脑发送端'
+        : 'Run: ' + progress.status;
+    const handshake = !progress.senderConnected
+      ? 'WAITING FOR PC SENDER / 等待电脑发送端'
+      : !progress.senderHello
+        ? 'CONTROL ONLINE, NO SENDER HELLO / 已连接，未见发送端握手'
+        : progress.telemetryFresh
+          ? 'SENDER CONNECTED / 发送端已连接'
+          : 'SENDER TELEMETRY STALE / 发送端遥测延迟';
     return {
-      autoRunning: progress.phase === 'SETUP' || progress.phase === 'STEP',
+      autoRunning: progress.phase !== 'DONE' && progress.phase !== 'ABORTED',
       autoPhase: progress.phase,
       autoStepLabel: progress.label,
       autoStepIndex: progress.stepIndex,
@@ -1237,9 +1272,17 @@ Page({
       autoStepHoldMs: progress.holdMs == null ? 'static' : progress.holdMs + ' ms',
       autoPaused: progress.paused,
       autoSenderConnected: progress.senderConnected,
-      autoStatusText: progress.senderConnected
-        ? (progress.phase === 'DONE' ? 'COMPLETE / 完成' : 'RUNNING / 运行中')
-        : 'WAITING FOR SENDER / 等待发送端'
+      autoRunStatus: runStatus,
+      autoHandshake: handshake,
+      autoCommand: 'Command: ' + progress.requested,
+      autoSenderConfirmed: progress.senderConfirmed ? 'YES / 已确认' : 'NO / 未确认',
+      autoSenderMismatch: progress.senderMismatch || '—',
+      autoTelemetryAge: progress.telemetryAgeMs == null
+        ? 'never / 未收到'
+        : progress.telemetryAgeMs + ' ms' + (progress.telemetryFresh ? '' : ' (stale)'),
+      autoPauseRequested: progress.pauseRequested ? 'YES' : 'no',
+      autoPauseConfirmed: progress.pauseConfirmed ? 'YES' : 'no',
+      autoFrozenCursor: progress.frozenCursor == null ? '—' : progress.frozenCursor,
     };
   },
 
@@ -1265,18 +1308,25 @@ Page({
   },
 
   onAutoRunResult(result) {
-    const text = JSON.stringify(result, null, 2);
     this.autoFinalResult = result;
+    const validity = result.validity || {valid: false, checks: []};
+    const failed = (validity.checks || []).filter((check) => !check.ok);
     this.setData({
       autoRunning: false,
-      autoStatusText: result.status === 'COMPLETE' ? 'COMPLETE / 完成' : ('ABORTED: ' + result.status),
-      autoFinalJson: text,
+      autoRunStatus: result.status === 'COMPLETE'
+        ? 'AUTO TEST COMPLETE / 自动测试完成'
+        : 'AUTO TEST ' + result.status,
       autoFinalStatus: result.status,
+      autoFrozenStepsDone: result.stepsCompleted + ' / ' + result.stepsPlanned,
+      autoStoppedConfirmed: result.timeline && result.timeline.stopConfirmedAtIso ? 'YES' : 'NO',
+      autoHarnessValid: validity.valid ? 'YES' : 'NO',
+      autoValidityFailed: failed.length ? failed.map((check) => check.id + ': ' + check.detail).join('; ') : 'none',
       autoSetupLabel: result.setupGate ? result.setupGate.label : '—',
       autoSetupReasons: result.setupGate && result.setupGate.reasons.length
         ? result.setupGate.reasons.join('; ')
         : 'none'
     });
+    this.refreshAutoFinalJson();
     if (result.status === 'SETUP_NOT_READY') {
       wx.showModal({
         title: 'SETUP NOT READY / 取景条件未就绪',
@@ -1289,15 +1339,46 @@ Page({
           + '\nlocateFailures=' + this.autoStepReceiverSample().locateFailures,
         showCancel: false
       });
+    } else if (!validity.valid) {
+      // A run that cannot prove it was controlled must say so loudly, not look green.
+      wx.showModal({
+        title: 'HARNESS INVALID / 测试未受控',
+        content: 'status=' + result.status
+          + '\n' + (failed.map((check) => check.id + ': ' + check.detail).join('\n') || 'see JSON'),
+        showCancel: false
+      });
     }
     this.appendLog('AUTO TEST finished: ' + result.status + ' (' + result.stepsCompleted + '/'
-      + result.stepsPlanned + ')' );
+      + result.stepsPlanned + ')' + (validity.valid ? ' [valid]' : ' [INVALID]'));
+  },
+
+  /**
+   * The final JSON always exists LOCALLY. The lab upload is reported separately so a
+   * failed upload can never look like a lost run.
+   */
+  refreshAutoFinalJson() {
+    if (!this.autoFinalResult) return;
+    const text = JSON.stringify(
+      Object.assign({}, this.autoFinalResult, {resultUpload: this.autoResultUpload || 'pending'}),
+      null, 2);
+    this.setData({autoFinalJson: text, autoFinalJsonReady: 'YES'});
+  },
+
+  onAutoUploadStatus(status) {
+    this.autoResultUpload = status;
+    this.setData({autoResultUpload: status === 'success' ? 'success / 已上传'
+      : status === 'failed' ? 'failed / 上传失败（本地 JSON 已保留）'
+        : 'pending / 待上传'});
+    this.refreshAutoFinalJson();
   },
 
   autoTick() {
     if (!this.autoRunner || !this.autoRunner.isRunning()) return;
     this.setData(Object.assign({
       autoConnected: this.autoRunner.status().connected,
+      autoControlStatus: this.autoRunner.status().connected
+        ? 'Control: ONLINE / 控制通道在线'
+        : 'Control: OFFLINE / 控制通道未连接',
       autoFrozenSteps: Array.isArray(this.autoResults) ? this.autoResults.length : 0
     }, this.buildKeyStatusPatch()));
   },

@@ -143,6 +143,65 @@ export function tf012AutoPlanDurationMs(): number {
 }
 
 // ---------------------------------------------------------------------------
+// Requested vs actual sender state (r14)
+// ---------------------------------------------------------------------------
+//
+// Sending SET_MODE / SET_HOLD_MS / START / PAUSE is a REQUEST, not an achievement.
+// The orchestrator may only start measuring a step once live sender telemetry proves
+// the sender really is in the requested state, and the sender panel shows the same
+// comparison. Both ends therefore use these two functions instead of their own
+// interpretation of "did it work".
+
+export interface Tf012AutoSenderState {
+  mode: Tf012AutoMode;
+  holdMs: number | null;
+  cursor: number | null;
+  paused: boolean;
+  broadcasting: boolean;
+}
+
+/** The sender state a step REQUIRES. Static steps pin chunk 0; cyclic steps pin holdMs. */
+export function tf012AutoExpectedSenderState(step: Tf012AutoStep): Tf012AutoSenderState {
+  return {
+    mode: step.mode,
+    holdMs: step.mode === 'cyclic' ? step.holdMs : null,
+    // A static step is only static if the carrier is pinned to chunk 0.
+    cursor: step.mode === 'static' ? 0 : null,
+    paused: false,
+    broadcasting: true,
+  };
+}
+
+/** "CYCLIC 1000 ms" / "STATIC chunk0" — the one phrase both ends display. */
+export function tf012AutoSenderStateLabel(state: Tf012AutoSenderState): string {
+  return state.mode === 'static'
+    ? `STATIC chunk${state.cursor ?? 0}`
+    : `CYCLIC ${state.holdMs ?? '—'} ms`;
+}
+
+/**
+ * Compare a live sender sample against the requested state. Returns null on a match,
+ * otherwise a short human reason — never a boolean, because the reason is what the
+ * phone and the PC panel both show while a run waits.
+ */
+export function tf012AutoSenderStateMismatch(
+  sample: Tf012AutoSenderState,
+  expected: Tf012AutoSenderState,
+): string | null {
+  if (sample.mode !== expected.mode) return `mode is ${sample.mode}, requested ${expected.mode}`;
+  if (!sample.broadcasting) return 'sender is not broadcasting';
+  if (sample.paused !== expected.paused) {
+    return sample.paused ? 'sender is paused, requested running' : 'sender is running, requested paused';
+  }
+  if (expected.mode === 'static') {
+    if (sample.cursor !== expected.cursor) return `cursor is ${String(sample.cursor)}, requested ${String(expected.cursor)}`;
+    return null;
+  }
+  if (sample.holdMs !== expected.holdMs) return `holdMs is ${String(sample.holdMs)}, requested ${String(expected.holdMs)}`;
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Control-channel schema
 // ---------------------------------------------------------------------------
 //

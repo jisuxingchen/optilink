@@ -11,8 +11,11 @@
 import {
   TF012_AUTO_SENDER_ROLE,
   tf012AutoCommand,
+  tf012AutoSenderStateLabel,
+  tf012AutoSenderStateMismatch,
   validateTf012AutoControlMessage,
   type Tf012AutoEnvelope,
+  type Tf012AutoSenderState,
 } from './optical-core/tf012-auto-plan.ts';
 
 export interface Tf012AutoSenderSurface {
@@ -59,6 +62,18 @@ export interface Tf012AutoClientStatus {
    *   DONE    — after RUN_COMPLETE / RUN_ABORTED
    */
   phase: 'IDLE' | 'RUNNING' | 'PAUSED' | 'DONE';
+  /** The phone announced itself (relay-confirmed peer HELLO) and is still talking. */
+  peerConnected: boolean;
+  /** Host-clock timestamp of the last inbound message from the phone, or null. */
+  peerSeenAt: number | null;
+  /** The state the phone last REQUESTED, as a phrase such as "CYCLIC 1000 ms". */
+  requestedLabel: string;
+  /** The sender's live state, same vocabulary. */
+  actualLabel: string;
+  /** True when live state matches the request — the sender never asserts it for the phone. */
+  requestedConfirmed: boolean;
+  /** Why the live state does not match, when it does not. */
+  requestedMismatch: string | null;
   lastRejected: string | null;
   telemetrySent: number;
   commandsApplied: number;
@@ -75,7 +90,42 @@ export function createTf012AutoSenderClient(options: Tf012AutoSenderClientOption
   let stepId: string | null = null;
   const status: Tf012AutoClientStatus = {
     connected: false, url: options.url, runId: null, stepId: null, phase: 'IDLE',
+    peerConnected: false, peerSeenAt: null,
+    requestedLabel: '—', actualLabel: '—', requestedConfirmed: false, requestedMismatch: null,
     lastRejected: null, telemetrySent: 0, commandsApplied: 0,
+  };
+
+  /** What the phone asked for. A request is not an achievement — the panel shows both. */
+  const requested: {
+    mode: 'static' | 'cyclic' | null;
+    holdMs: number | null;
+    cursor: number | null;
+    paused: boolean | null;
+    broadcasting: boolean | null;
+  } = {mode: null, holdMs: null, cursor: null, paused: null, broadcasting: null};
+
+  /** Recompute requested-vs-actual from the live surface sample. */
+  const refreshConfirmation = (): void => {
+    const sample = surface.sample();
+    const actual: Tf012AutoSenderState = {
+      mode: sample.mode, holdMs: sample.holdMs, cursor: sample.cursor,
+      paused: sample.paused, broadcasting: sample.broadcasting,
+    };
+    const expected: Tf012AutoSenderState = {
+      mode: requested.mode ?? actual.mode,
+      holdMs: (requested.mode ?? actual.mode) === 'cyclic' ? requested.holdMs : null,
+      cursor: (requested.mode ?? actual.mode) === 'static' ? requested.cursor : null,
+      paused: requested.paused ?? actual.paused,
+      broadcasting: requested.broadcasting ?? actual.broadcasting,
+    };
+    status.actualLabel = tf012AutoSenderStateLabel(actual) + (actual.paused ? ' · PAUSED' : '')
+      + (actual.broadcasting ? '' : ' · STOPPED');
+    status.requestedLabel = requested.mode == null
+      ? '—'
+      : tf012AutoSenderStateLabel(expected) + (requested.paused === true ? ' · PAUSED' : '')
+        + (requested.broadcasting === false ? ' · STOPPED' : '');
+    status.requestedMismatch = requested.mode == null ? null : tf012AutoSenderStateMismatch(actual, expected);
+    status.requestedConfirmed = requested.mode != null && status.requestedMismatch === null;
   };
 
   const publish = (message: Tf012AutoEnvelope): void => {
@@ -90,6 +140,7 @@ export function createTf012AutoSenderClient(options: Tf012AutoSenderClientOption
 
   const sendTelemetry = (): void => {
     const sample = surface.sample();
+    refreshConfirmation();
     publish(tf012AutoCommand('TELEMETRY', {
       runId, stepId, mode: sample.mode, holdMs: sample.holdMs, cursor: sample.cursor,
       paused: sample.paused, broadcasting: sample.broadcasting,
@@ -110,6 +161,9 @@ export function createTf012AutoSenderClient(options: Tf012AutoSenderClientOption
     }
     const command = message as Tf012AutoEnvelope;
     const action = String(command.action);
+    // Any inbound control message proves the phone is on the other end.
+    status.peerSeenAt = Date.now();
+    status.peerConnected = true;
     if (action === 'HELLO') {
       status.connected = true;
       options.onStatus?.({...status});
@@ -118,27 +172,42 @@ export function createTf012AutoSenderClient(options: Tf012AutoSenderClientOption
     if (typeof command.runId === 'string') runId = command.runId;
     if (typeof command.stepId === 'string') stepId = command.stepId;
     switch (action) {
-      case 'SET_MODE':
-        surface.setMode(command.mode as 'static' | 'cyclic',
-          command.chunkIndex === null || command.chunkIndex === undefined ? null : Number(command.chunkIndex));
+      case 'SET_MODE': {
+        const mode = command.mode as 'static' | 'cyclic';
+        requested.mode = mode;
+        requested.holdMs = mode === 'cyclic' ? requested.holdMs : null;
+        requested.cursor = mode === 'static'
+          ? (command.chunkIndex === null || command.chunkIndex === undefined ? 0 : Number(command.chunkIndex))
+          : null;
+        requested.broadcasting = true;
+        requested.paused = false;
+        surface.setMode(mode, command.chunkIndex === null || command.chunkIndex === undefined
+          ? null : Number(command.chunkIndex));
         status.phase = 'RUNNING';
         break;
+      }
       case 'SET_HOLD_MS':
+        requested.holdMs = Number(command.holdMs);
         surface.setHoldMs(Number(command.holdMs));
         break;
       case 'START':
+        requested.broadcasting = true;
         surface.start();
         status.phase = 'RUNNING';
         break;
       case 'PAUSE':
+        requested.paused = true;
         surface.pauseCurrentFrame();
         status.phase = 'PAUSED';
         break;
       case 'RESUME':
+        requested.paused = false;
         surface.resumeCurrentFrame();
         status.phase = 'RUNNING';
         break;
       case 'STOP':
+        requested.broadcasting = false;
+        requested.paused = false;
         surface.stop();
         status.phase = 'IDLE';
         break;
@@ -147,14 +216,18 @@ export function createTf012AutoSenderClient(options: Tf012AutoSenderClientOption
         break;
       case 'RUN_COMPLETE':
       case 'RUN_ABORTED':
+        // Defensive: a completed run must never leave the carrier broadcasting, even if
+        // the STOP message itself were lost. The PO must never have to press Stop.
+        requested.broadcasting = false;
+        requested.paused = false;
+        if (surface.sample().broadcasting) surface.stop();
         status.phase = 'DONE';
         break;
       default:
-        // STEP_COMPLETE / RUN_* are receiver→sender notifications; nothing to do but
-        // keep the run id in sync so the next telemetry is attributed correctly.
         if (action === 'STEP_COMPLETE') status.phase = 'RUNNING';
         break;
     }
+    refreshConfirmation();
     status.commandsApplied += 1;
     status.runId = runId;
     status.stepId = stepId;
@@ -185,7 +258,16 @@ export function createTf012AutoSenderClient(options: Tf012AutoSenderClientOption
     });
     socket.addEventListener('message', (event) => {
       try {
-        apply(JSON.parse(String(event.data)));
+        const parsed = JSON.parse(String(event.data));
+        // The relay announces the phone's handshake: that, not our own socket state, is
+        // what tells the PC panel that a real control peer exists.
+        if (parsed && parsed.type === 'peer' && parsed.event === 'hello') {
+          status.peerSeenAt = Date.now();
+          status.peerConnected = true;
+          options.onStatus?.({...status});
+          return;
+        }
+        apply(parsed);
       } catch {
         status.lastRejected = 'malformed JSON';
         options.onStatus?.({...status});

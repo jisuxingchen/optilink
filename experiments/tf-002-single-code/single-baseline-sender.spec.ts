@@ -1054,6 +1054,74 @@ test('r13 auto test: the sender panel names the run state, the mode, the holdMs 
   await expect(page.locator('#autoPaused')).toHaveText('no');
 });
 
+test('r14 completion: RUN_COMPLETE stops the sender even without a STOP message', async ({page}) => {
+  await page.setViewportSize({width: 1920, height: 1080});
+  await page.goto('/single-baseline.html?holdMs=1000');
+  await page.waitForFunction(() => (document.getElementById('codeCanvas') as HTMLCanvasElement).width > 0);
+
+  await applyControl(page, {type: 'command', action: 'SET_MODE', runId: 'r14', stepId: 'A5', mode: 'static', chunkIndex: 0});
+  await applyControl(page, {type: 'command', action: 'START', runId: 'r14', stepId: 'A5'});
+  expect((await state(page)).broadcasting, 'the carrier is on air before completion').toBe(true);
+
+  // Only RUN_COMPLETE arrives: the defensive stop must still end the broadcast, so the PO
+  // never has to press Stop after a finished run.
+  await applyControl(page, {type: 'command', action: 'RUN_COMPLETE', runId: 'r14', steps: ['A1', 'A2', 'A3', 'A4', 'A5']});
+  const done = await state(page);
+  expect(done.broadcasting, 'RUN_COMPLETE must stop the carrier').toBe(false);
+  expect(done.paused).toBe(false);
+  // No control client is attached in this harness, so the panel stays honest about the
+  // run identity — what matters is that it no longer claims to be running.
+  await expect(page.locator('#autoStatus')).not.toContainText('RUNNING');
+  await expect(page.locator('#autoRequested')).toContainText('STOPPED');
+});
+
+test('r14 PC panel: the sender shows the requested state next to the actual state', async ({page}) => {
+  await page.setViewportSize({width: 1920, height: 1080});
+  await page.goto('/single-baseline.html?holdMs=1000');
+  await page.waitForFunction(() => (document.getElementById('codeCanvas') as HTMLCanvasElement).width > 0);
+
+  // Before any traffic the panel must not pretend to know a peer or a request.
+  await expect(page.locator('#autoPeer')).toHaveText('no control channel');
+  await expect(page.locator('#autoRequested')).toHaveText('—');
+
+  await applyControl(page, {type: 'command', action: 'SET_MODE', runId: 'r14', stepId: 'A2', mode: 'cyclic', chunkIndex: null});
+  await applyControl(page, {type: 'command', action: 'SET_HOLD_MS', runId: 'r14', stepId: 'A2', holdMs: 1000});
+  await applyControl(page, {type: 'command', action: 'START', runId: 'r14', stepId: 'A2'});
+
+  // The phone asked for CYCLIC 1000; the carrier really is cyclic at 1000 ms.
+  await expect(page.locator('#autoRequested')).toHaveText('CYCLIC 1000 ms');
+  await expect(page.locator('#autoActual')).toContainText('CYCLIC 1000 ms');
+  await expect(page.locator('#autoConfirmed')).toHaveText('YES / 已确认');
+  // runId / step / telemetry come from the control channel, so without one the panel
+  // must say so instead of inventing values.
+  await expect(page.locator('#autoRun')).toHaveText('—');
+  await expect(page.locator('#autoStep')).toHaveText('—');
+  await expect(page.locator('#autoTelemetry')).toHaveText('not running / 未运行');
+
+  // A4's freeze: requested and confirmed are both visible.
+  await applyControl(page, {type: 'command', action: 'PAUSE', runId: 'r14', stepId: 'A4', chunkIndex: 3});
+  await expect(page.locator('#autoRequested')).toContainText('PAUSED');
+  await expect(page.locator('#autoConfirmed')).toHaveText('YES / 已确认');
+  await expect(page.locator('#autoActual')).toContainText('PAUSED');
+  await expect(page.locator('#autoPaused')).toHaveText('YES / 已暂停');
+  await applyControl(page, {type: 'command', action: 'RESUME', runId: 'r14', stepId: 'A4'});
+  await expect(page.locator('#autoPaused')).toHaveText('no');
+
+  // r9 interaction made visible: changing holdMs mid-broadcast STOPS the carrier, so the
+  // request can no longer be confirmed. The PC says NO with the reason instead of the
+  // r13 behaviour, where the phone simply measured the wrong thing at 5000 ms.
+  await applyControl(page, {type: 'command', action: 'SET_HOLD_MS', runId: 'r14', stepId: 'A4', holdMs: 5000});
+  await expect(page.locator('#autoRequested')).toHaveText('CYCLIC 5000 ms');
+  await expect(page.locator('#autoActual')).toContainText('STOPPED');
+  await expect(page.locator('#autoConfirmed')).toContainText('NO / 未确认');
+  await expect(page.locator('#autoConfirmed')).toContainText('sender is not broadcasting');
+
+  await applyControl(page, {type: 'command', action: 'STOP', runId: 'r14'});
+  await expect(page.locator('#autoRequested')).toContainText('STOPPED');
+  await expect(page.locator('#autoActual')).toContainText('STOPPED');
+  await expect(page.locator('#autoStatus')).not.toContainText('RUNNING');
+});
+
 test('r11 layout: the long file table is collapsed, and the rendered size readout is honest', async ({page}) => {
   await page.setViewportSize({width: 1440, height: 900});
   await page.goto('/single-baseline.html?holdMs=75');

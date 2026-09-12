@@ -64,6 +64,13 @@ export function allowTf012AutoRelay(role, message) {
 }
 
 /**
+ * The sanctioned "payload path is NONE" declarations. They NAME the payload in order to
+ * deny it, so they are not payload-shaped keys. Without this exemption the run result
+ * itself would be rejected for containing its own `networkPayloadPath: 'NONE'`.
+ */
+const PAYLOAD_PATH_DECLARATIONS = new Set(['payloadpath', 'networkpayloadpath']);
+
+/**
  * The phone may persist its final frozen JSON to the lab. It must be a TF-012 auto-test
  * run, must declare no network payload path, and — because the relay persists it — must
  * not contain any payload-bearing key. This is the second line of defence for the
@@ -89,7 +96,7 @@ export function allowTf012AutoLabResult(role, message) {
     if (!isRecord(value)) return;
     for (const [key, entry] of Object.entries(value)) {
       const lowered = key.toLowerCase();
-      if (key !== 'payloadPath'
+      if (!PAYLOAD_PATH_DECLARATIONS.has(lowered)
         && ['payload', 'filebytes', 'filecontent', 'filedata', 'chunkbytes', 'framebytes',
           'imagedata', 'bitmap', 'reconstructed', 'oracle', 'expected'].some((f) => lowered.includes(f))) {
         offenders.push(`${path}.${key}`);

@@ -38,6 +38,11 @@ import {
   singleBaselineBenchmark,
 } from './optical-core/single-baseline.ts';
 import {validateTf012AutoControlMessage} from './optical-core/tf012-auto-plan.ts';
+import {
+  type Tf012AutoSenderState,
+  tf012AutoSenderStateLabel,
+  tf012AutoSenderStateMismatch,
+} from './optical-core/tf012-auto-plan.ts';
 import {createTf012AutoSenderClient} from './tf012-auto-sender-client.ts';
 
 const params = new URLSearchParams(location.search);
@@ -615,6 +620,36 @@ const autoStepCell = document.getElementById('autoStep');
 const autoModeCell = document.getElementById('autoMode');
 const autoCursorCell = document.getElementById('autoCursor');
 const autoPausedCell = document.getElementById('autoPaused');
+const autoPeerCell = document.getElementById('autoPeer');
+const autoRequestedCell = document.getElementById('autoRequested');
+const autoActualCell = document.getElementById('autoActual');
+const autoConfirmedCell = document.getElementById('autoConfirmed');
+const autoTelemetryCell = document.getElementById('autoTelemetry');
+const AUTO_TELEMETRY_INTERVAL_MS = 500;
+
+/**
+ * The last sender state REQUESTED by the phone, tracked locally for the no-lab case so
+ * the panel can compare request against reality even without a control socket. The
+ * control client keeps its own copy on the wire path; both use the same matcher.
+ */
+const localAutoRequest: {
+  mode: 'static' | 'cyclic' | null;
+  holdMs: number | null;
+  cursor: number | null;
+  paused: boolean | null;
+  broadcasting: boolean | null;
+} = {mode: null, holdMs: null, cursor: null, paused: null, broadcasting: null};
+
+function localAutoExpectedState(sample: ReturnType<typeof autoSurface.sample>): Tf012AutoSenderState | null {
+  if (localAutoRequest.mode == null) return null;
+  return {
+    mode: localAutoRequest.mode,
+    holdMs: localAutoRequest.mode === 'cyclic' ? localAutoRequest.holdMs : null,
+    cursor: localAutoRequest.mode === 'static' ? localAutoRequest.cursor : null,
+    paused: localAutoRequest.paused ?? sample.paused,
+    broadcasting: localAutoRequest.broadcasting ?? sample.broadcasting,
+  };
+}
 
 function renderAutoPanel(): void {
   if (!autoStatusCell) return;
@@ -653,6 +688,53 @@ function renderAutoPanel(): void {
       : `${kind} ${cursor}${sample.paused ? ' (frozen / 已冻结)' : ''}`;
   }
   if (autoPausedCell) autoPausedCell.textContent = sample.paused ? 'YES / 已暂停' : 'no';
+  // r14: the PC must show what the phone ASKED FOR next to what the carrier actually
+  // does, so a control-plane failure is visible here instead of only on the phone.
+  if (autoPeerCell) {
+    autoPeerCell.textContent = !client
+      ? 'no control channel'
+      : client.peerSeenAt == null
+        ? 'WAITING FOR PHONE / 等待手机'
+        : `${Date.now() - client.peerSeenAt} ms ago / 手机在线`;
+  }
+  const localExpected = client ? null : localAutoExpectedState(sample);
+  const localSample: Tf012AutoSenderState = {
+    mode: sample.mode, holdMs: sample.holdMs, cursor: sample.cursor,
+    paused: sample.paused, broadcasting: sample.broadcasting,
+  };
+  const localMismatch = localExpected
+    ? tf012AutoSenderStateMismatch(localSample, localExpected) : null;
+  if (autoRequestedCell) {
+    autoRequestedCell.textContent = client?.requestedLabel
+      ?? (localExpected
+        ? tf012AutoSenderStateLabel(localExpected)
+          + (localAutoRequest.paused === true ? ' · PAUSED' : '')
+          + (localAutoRequest.broadcasting === false ? ' · STOPPED' : '')
+        : '—');
+  }
+  if (autoActualCell) {
+    autoActualCell.textContent = client?.actualLabel
+      ?? (tf012AutoSenderStateLabel(localSample)
+        + (sample.paused ? ' · PAUSED' : '') + (sample.broadcasting ? '' : ' · STOPPED'));
+  }
+  if (autoConfirmedCell) {
+    if (client) {
+      autoConfirmedCell.textContent = client.requestedLabel === '—'
+        ? '—'
+        : client.requestedConfirmed
+          ? 'YES / 已确认'
+          : `NO / 未确认 — ${client.requestedMismatch ?? 'mismatch'}`;
+    } else {
+      autoConfirmedCell.textContent = !localExpected
+        ? '—'
+        : localMismatch === null ? 'YES / 已确认' : `NO / 未确认 — ${localMismatch}`;
+    }
+  }
+  if (autoTelemetryCell) {
+    autoTelemetryCell.textContent = client
+      ? `TELEMETRY ${AUTO_TELEMETRY_INTERVAL_MS} ms · sent ${client.telemetrySent}`
+      : 'not running / 未运行';
+  }
 }
 
 /** Start the lab control channel. `?lab=<wss url>` enables it; without it the page is
@@ -662,6 +744,7 @@ function startAutoClient(url: string): void {
     surface: autoSurface,
     url,
     buildId: params.get('buildId'),
+    telemetryIntervalMs: AUTO_TELEMETRY_INTERVAL_MS,
     onStatus: () => renderAutoPanel(),
   });
   renderAutoPanel();
@@ -744,19 +827,40 @@ window.setInterval(renderAutoPanel, 500);
     if (!check.ok) return 'rejected:' + check.reason;
     const command = message as {action?: string; mode?: string; chunkIndex?: number | null; holdMs?: number};
     switch (command.action) {
-      case 'SET_MODE':
-        autoSurface.setMode(command.mode as 'static' | 'cyclic', command.chunkIndex ?? null);
+      case 'SET_MODE': {
+        const mode = command.mode as 'static' | 'cyclic';
+        localAutoRequest.mode = mode;
+        localAutoRequest.cursor = mode === 'static' ? (command.chunkIndex ?? 0) : null;
+        localAutoRequest.holdMs = mode === 'cyclic' ? localAutoRequest.holdMs : null;
+        localAutoRequest.broadcasting = true;
+        localAutoRequest.paused = false;
+        autoSurface.setMode(mode, command.chunkIndex ?? null);
         break;
+      }
       case 'SET_HOLD_MS':
+        localAutoRequest.holdMs = Number(command.holdMs);
         autoSurface.setHoldMs(Number(command.holdMs));
         break;
-      case 'START': autoSurface.start(); break;
-      case 'PAUSE': autoSurface.pauseCurrentFrame(); break;
-      case 'RESUME': autoSurface.resumeCurrentFrame(); break;
-      case 'STOP': autoSurface.stop(); break;
+      case 'START': autoSurface.start(); localAutoRequest.broadcasting = true; break;
+      case 'PAUSE': autoSurface.pauseCurrentFrame(); localAutoRequest.paused = true; break;
+      case 'RESUME': autoSurface.resumeCurrentFrame(); localAutoRequest.paused = false; break;
+      case 'STOP':
+        autoSurface.stop();
+        localAutoRequest.broadcasting = false;
+        localAutoRequest.paused = false;
+        break;
       case 'RESET_METRICS': autoSurface.resetMetrics(); break;
+      case 'RUN_COMPLETE':
+      case 'RUN_ABORTED':
+        // Same defensive stop as the control client: a finished run must never leave the
+        // carrier broadcasting, even if the STOP message itself was lost.
+        localAutoRequest.broadcasting = false;
+        localAutoRequest.paused = false;
+        if (autoSurface.sample().broadcasting) autoSurface.stop();
+        break;
       default: break;
     }
+    renderAutoPanel();
     return String(command.action).toLowerCase();
   },
   canvasHash,

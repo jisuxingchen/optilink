@@ -47,8 +47,24 @@ does not (0/209 at 1000 ms, ≈14.25 camera frames per code) was investigated as
 senders render **byte-identical** chunk-0 frames (same SHA-256 over the full RGBA
 carrier, same 1020 px geometry, same payload/sequence/CRC, 0 % pixel diff) and that
 starting the cycle never resizes or moves the carrier. **No sender discrepancy exists**
-— the remaining difference is capture-side, and both r11 runs were already below the
-documented `≥ 4 px/cell` limit. See the r12 section. Stage B stays paused.
+— the remaining difference is capture-side. See the r12 section. Stage B stays paused.
+
+**r14 scope:** the r13 automated run produced a `COMPLETE` JSON for an experiment that
+was never under sender control, so r14 fixes the **control plane**: a sender handshake +
+telemetry freshness gate before SETUP, command/state acknowledgement before any
+measurement starts, a static optical invariant, a confirmed STOP before completion, a
+validity gate that refuses to call an unproven run COMPLETE, step-scoped FPS and true
+interval deltas for A4. **No** OptiGrid, locator, decoder, CRC, chunk, matrix,
+reconstruction or protocol change, and the A1–A5 scientific intent is unchanged.
+
+> **`≥ 4 px/cell` is NOT a requirement.** It is a historical *healthy-region* heuristic,
+> kept because early bring-up measurements clustered there. Physical r13 evidence shows
+> the decoder succeeding on **≈2.64 px/cell with `reservedPatternScore ≈ 1.0`**, a healthy
+> contrast and stable geometry: 420/445 (94.4 %), 415/433 (95.8 %) and 275/296 (92.9 %)
+successful decodes in three consecutive intervals. Earlier 100 % CRC failures at
+≈3.1 px/cell were therefore **not** caused by px/cell alone. The setup gate is
+evidence-based and deliberately enforces no px/cell floor; the only width rule is a
+120 px minimum code width, which exists to avoid wasting a run, not as a decode limit.
 
 ## What this is / 这是什么
 
@@ -367,6 +383,72 @@ Every field is `null` when its denominator is 0. A run with no decode attempts h
 `null` (0/0 is undefined), **not** 0 %. These metrics are diagnostic: they rank
 PASSing points and **never decide PASS**.
 
+## r14 CONTROL-PLANE CORRECTNESS / 控制面正确性
+
+**Why r14 exists.** The first one-tap physical run produced a `COMPLETE` JSON for an
+experiment that was never under sender control. Two independent proofs:
+
+* Every frozen step carried the **default sender sample** — `mode: static`, `holdMs: null`,
+  `cursor: null`, `broadcasting: false`, `canvasHash: null`. That is the adapter's initial
+  value, so **no sender telemetry ever arrived**, yet the run still completed.
+* The steps labelled `STATIC chunk0` observed **10 and 9 unique chunks** (SETUP: 6). A
+  static carrier can only ever produce chunk 0, so the carrier was demonstrably cycling
+  while the orchestrator believed it was frozen — i.e. the sender was never told.
+
+**Root cause.** `start()` began SETUP immediately and `senderConnected` was wired to the
+*phone's own* socket (`client.status().connected`), which is always true once the relay is
+reachable. A phone socket is not a sender: nothing required a peer HELLO, nothing required
+telemetry, and nothing compared the requested state with the actual one.
+
+### The rules now enforced
+
+| Rule | Implementation |
+| --- | --- |
+| A sender peer must exist | phase `WAITING_FOR_SENDER` → `SETUP` only when the relay confirms a sender `HELLO` **and** fresh telemetry exists |
+| Telemetry must be fresh | age ≤ `TF012_AUTO_TELEMETRY_FRESH_MS` (1500 ms), and the sample must post-date the command that it confirms |
+| The sender must keep reporting | age > `TF012_AUTO_TELEMETRY_LOSS_MS` (5000 ms) during SETUP/CONFIRMING/RUNNING/STOPPING aborts the run |
+| A request is not an achievement | every step passes through `CONFIRMING`; the measurement timer starts only when live telemetry matches `mode`/`holdMs`/`cursor`/`broadcasting`/`paused` |
+| Unconfirmed state ends the run | bounded timeouts (5000 ms command, 5000 ms pause) → `SENDER_STATE_NOT_CONFIRMED`, never a silent continue |
+| Static means static | during SETUP/A1/A5 any decoded chunk other than 0, or a unique-chunk delta > 1, aborts with `STATIC_INVARIANT_VIOLATION` — an optical cross-check that does not trust the network |
+| A4's freeze must be proven | the run waits for telemetry `paused = true` with a non-null cursor before calling the carrier frozen |
+| Completion is a lifecycle | A5 freezes → `STOP` → wait for `broadcasting = false` → only then build the result; `RUN_COMPLETE`/`RUN_ABORTED` also stop the surface defensively |
+| `COMPLETE` must be earned | a validity gate over nine checks; a run that cannot prove control is `HARNESS_INVALID` (or the specific abort status) |
+
+Note the r14 finding that follows from A4: after `PAUSE CURRENT FRAME` the sender stays
+paused, so the **next** step must `RESUME` before it can ever confirm "running" — the
+orchestrator now does that explicitly.
+
+### Evidence quality
+
+* **Step-scoped FPS.** `autoStepReceiverSample()`'s UI-window FPS (which produced the
+  impossible `callbackFps = 1000`) is never frozen. Every result carries
+  `interval.callbackFps = cameraFramesDelta / interval seconds`, and the `receiver` block is
+  rewritten with that value so the artefact cannot survive in the JSON.
+* **Interval deltas.** Each step carries `interval` (measurement window: confirmation →
+  freeze) and `stepInterval` (whole step, including any pre-confirmation frames) with
+  `durationMs` and deltas for camera/processed/decodeAttempts/successfulDecodes/crcFailures/
+  locateFailures plus the chunk indexes first seen inside that window.
+* **A4 splits properly.** `beforePause` is the cyclic interval (5 s, its own deltas);
+  `duringPause` is the frozen interval (10 s, its own deltas). Neither is a cumulative
+  counter, and no analyst has to subtract anything by hand.
+* **Result deliverable.** `type: 'lab-result'` has its own validator
+  (`validateAutoLabResult`); the control validator is **not** loosened for it. r13 fed the
+  result through `publish()` and it was rejected (`unexpected message type lab-result`), so
+  the run JSON never reached the lab. The phone now reports
+  `resultUpload: pending | success | failed` and keeps the final JSON **locally** regardless.
+
+### UI
+
+* **Phone:** `Run: …` and `Control: …` are separate lines, so a finished verdict can never
+  be overwritten by a later socket update. Before a run it shows
+  `WAITING FOR PC SENDER / 等待电脑发送端`, then `SENDER CONNECTED / 发送端已连接`; per step
+  `Command: CYCLIC 1000 ms`, `Sender confirmed: YES/NO`, `telemetry age`, and for A4
+  `PAUSE requested / confirmed` with the frozen cursor; at the end `AUTO TEST COMPLETE`,
+  `steps frozen`, `sender stopped`, `harness valid`, `result upload`, `final JSON`.
+* **PC:** `Control peer`, `Requested` vs `Actual`, `Confirmed` with the mismatch reason,
+  `Cursor / chunk`, `Paused`, and `TELEMETRY 500 ms · sent N`. The r13 failure mode — a
+  request the carrier never satisfied — is now visible on the PC panel itself.
+
 ## r13 AUTO PHYSICAL TEST HARNESS / 自动物理测试编排器
 
 **Goal:** the PO's per-build physical actions reduce to — compile the Mini Program →
@@ -422,7 +504,9 @@ sender executes commands and reports telemetry.
 Not ready unless: ≥ 1 valid decode, the locator locked at least once, the reserved
 pattern score ≥ 0.55, and the observed code width ≥ 120 px. **2.99 px/cell with a valid
 decode passes** — the existing physical evidence proves it decodes, so a 4 px/cell rule
-would wrongly reject a working setup. On failure the run stops before A1, sends `STOP`,
+would wrongly reject a working setup. **`≥ 4 px/cell` is a historical healthy-region
+heuristic only, never a requirement** (r13 measured ≈2.64 px/cell decoding > 92 % with a
+reserved-pattern score ≈ 1.0). On failure the run stops before A1, sends `STOP`,
 and shows `SETUP NOT READY / 取景条件未就绪` with `observedCodeWidthPx`,
 `pixelsPerCell`, `reservedPatternScore`, `contrast`, `successfulDecodes`, `crcFailures`
 and `locateFailures`.

@@ -16,7 +16,55 @@ const {
   tf012AutoCommand,
   createTf012AutoOrchestrator,
   TF012_AUTO_RECEIVER_ROLE,
+  TF012_AUTO_SENDER_ROLE,
 } = require('./optical-core.js');
+
+/**
+ * Dedicated validation for the ONE message that is a RESULT rather than a control
+ * envelope. The control-message validator is deliberately NOT loosened for it: r13
+ * funnelled the lab-result through `publish()`, which rejected it (`unexpected message
+ * type lab-result`) and the run JSON never reached the lab.
+ */
+function validateAutoLabResult(message) {
+  if (!message || typeof message !== 'object' || message.type !== 'lab-result') {
+    return {ok: false, reason: 'not a lab-result message'};
+  }
+  const run = message.run;
+  if (!run || typeof run !== 'object' || Array.isArray(run)) {
+    return {ok: false, reason: 'lab-result must carry a run object'};
+  }
+  if (run.networkPayloadPath !== 'NONE') {
+    return {ok: false, reason: 'networkPayloadPath must be NONE'};
+  }
+  if (run.kind !== 'tf012-auto-physical') {
+    return {ok: false, reason: 'kind must be tf012-auto-physical'};
+  }
+  if (typeof run.runId !== 'string' || run.runId.length === 0 || run.runId.length > 64) {
+    return {ok: false, reason: 'runId must be a short string'};
+  }
+  // Payload-shaped keys are structurally impossible here, but the check is cheap and
+  // keeps the "no payload over the network" rule enforced on the device as well.
+  // `payloadPath` / `networkPayloadPath` are the sanctioned DECLARATIONS that the path is
+  // NONE — they name the payload, they do not carry it, so they are exempt.
+  const exempt = new Set(['payloadpath', 'networkpayloadpath']);
+  const offenders = [];
+  const walk = (value, path) => {
+    if (Array.isArray(value)) { value.forEach((entry, index) => walk(entry, path + '[' + index + ']')); return; }
+    if (!value || typeof value !== 'object') return;
+    Object.keys(value).forEach((key) => {
+      const lowered = key.toLowerCase();
+      if (!exempt.has(lowered)
+        && ['payload', 'filebytes', 'filecontent', 'filedata', 'chunkbytes', 'framebytes',
+          'imagedata', 'bitmap', 'reconstructed', 'oracle', 'expected'].some((f) => lowered.indexOf(f) >= 0)) {
+        offenders.push(path + '.' + key);
+      }
+      walk(value[key], path + '.' + key);
+    });
+  };
+  walk(run, 'run');
+  if (offenders.length > 0) return {ok: false, reason: 'payload-shaped keys: ' + offenders.join(', ')};
+  return {ok: true, reason: 'ok'};
+}
 
 /** Control client over wx.connectSocket. Control/telemetry only. */
 function createControlClient(options) {
@@ -32,6 +80,21 @@ function createControlClient(options) {
       if (onStatus) onStatus({...status});
       return false;
     }
+    return send(message);
+  };
+
+  /** Publish a RESULT (not a control envelope) through its own validator. */
+  const publishResult = (message) => {
+    const check = validateAutoLabResult(message);
+    if (!check.ok) {
+      status.lastError = 'rejected result: ' + check.reason;
+      if (onStatus) onStatus({...status});
+      return false;
+    }
+    return send(message);
+  };
+
+  const send = (message) => {
     if (!connected || !socket) return false;
     try {
       socket.send({data: JSON.stringify(message)});
@@ -103,6 +166,7 @@ function createControlClient(options) {
   return {
     connect,
     publish,
+    publishResult,
     status: () => ({...status}),
     close: () => {
       if (socket) socket.close({});
@@ -124,11 +188,16 @@ function createAutoTestRunner(options) {
     url, token, buildId, device, runId,
     receiverSample, resetReceiverMetrics,
     onProgress, onStepResult, onRunResult, onStatus, onLog,
-    setDeclaredHoldMs,
+    setDeclaredHoldMs, onUploadStatus,
   } = options;
 
   let orchestrator = null;
   let timer = null;
+  /** Relay-confirmed sender HELLO (host clock) — NOT the phone's own socket state. */
+  let senderHelloAt = null;
+  /** Last sender TELEMETRY (host clock); the freshness rule depends on it. */
+  let telemetryAt = null;
+  let resultUpload = 'pending';
   let lastSenderSample = {
     mode: 'static', holdMs: null, cursor: null, paused: false, broadcasting: false,
     canvasDevicePx: null, canvasHash: null, pausedAt: null, resumedAt: null,
@@ -137,9 +206,37 @@ function createAutoTestRunner(options) {
   const client = createControlClient({
     url, token,
     onMessage: (message) => {
-      if (!message || message.type !== 'command') return;
+      if (!message || typeof message !== 'object') return;
+      // Relay notices: a peer hello names the role that announced itself, and the
+      // result-saved / policy-rejected events tell us whether the run JSON landed.
+      if (message.type === 'peer' && message.event === 'hello') {
+        if (message.role === TF012_AUTO_SENDER_ROLE) {
+          senderHelloAt = Date.now();
+          if (onLog) onLog('sender HELLO confirmed by relay');
+        }
+        return;
+      }
+      if (message.type === 'server') {
+        if (message.event === 'result-saved') {
+          resultUpload = 'success';
+          if (onUploadStatus) onUploadStatus(resultUpload);
+          if (onLog) onLog('run result saved to the lab');
+        } else if (message.event === 'policy-rejected') {
+          resultUpload = 'failed';
+          if (onUploadStatus) onUploadStatus(resultUpload);
+          if (onLog) onLog('lab rejected a message: ' + String(message.reason));
+        }
+        return;
+      }
+      if (message.type !== 'command') return;
+      if (message.action === 'HELLO' && message.role === TF012_AUTO_SENDER_ROLE) {
+        senderHelloAt = Date.now();
+        if (onLog) onLog('sender connected');
+        return;
+      }
       // The sender reports telemetry; the orchestrator owns everything else.
       if (message.action === 'TELEMETRY') {
+        telemetryAt = Date.now();
         lastSenderSample = {
           mode: message.mode === 'static' ? 'static' : 'cyclic',
           holdMs: typeof message.holdMs === 'number' ? message.holdMs : null,
@@ -151,9 +248,6 @@ function createAutoTestRunner(options) {
           pausedAt: typeof message.pausedAt === 'number' ? message.pausedAt : null,
           resumedAt: typeof message.resumedAt === 'number' ? message.resumedAt : null,
         };
-      }
-      if (message.action === 'HELLO' || message.type === 'peer') {
-        if (onLog) onLog('sender connected');
       }
     },
     onStatus, onLog,
@@ -167,13 +261,24 @@ function createAutoTestRunner(options) {
       senderSample: () => ({...lastSenderSample}),
       receiverSample: () => receiverSample(),
       resetReceiverMetrics: () => resetReceiverMetrics(),
+      // Handshake + freshness: the orchestrator refuses to measure anything until a
+      // REAL sender peer has announced itself AND sent fresh telemetry.
+      link: {
+        controlConnected: () => client.status().connected,
+        senderHelloAt: () => senderHelloAt,
+        telemetryAt: () => telemetryAt,
+      },
       onStepResult: (result) => {
         if (onStepResult) onStepResult(result);
       },
       onRunResult: (result) => {
-        // Publish the frozen run to the lab so the PC keeps a copy, then hand it to the
-        // page for local display/copy. The publisher validates that it carries no payload.
-        publish({type: 'lab-result', run: {...result, kind: 'tf012-auto-physical'}});
+        // Publish the frozen run to the lab through the DEDICATED result path, then hand
+        // it to the page for local display/copy. The JSON stays available locally either
+        // way: an upload failure never costs the PO the run.
+        const ok = client.publishResult({type: 'lab-result', run: {...result, kind: 'tf012-auto-physical'}});
+        resultUpload = ok ? 'pending' : 'failed';
+        if (onUploadStatus) onUploadStatus(resultUpload);
+        if (!ok && onLog) onLog('lab-result upload unavailable: ' + String(client.status().lastError));
         if (onRunResult) onRunResult(result);
       },
       onProgress: (progress) => {
@@ -189,7 +294,10 @@ function createAutoTestRunner(options) {
     connect: () => client.connect(),
     status: () => client.status(),
     senderSample: () => ({...lastSenderSample}),
-    /** Start the automated A1..A5 sequence. */
+    senderHelloAt: () => senderHelloAt,
+    telemetryAt: () => telemetryAt,
+    uploadStatus: () => resultUpload,
+    /** Start the automated A1..A5 sequence. The run waits for the sender peer. */
     start: () => {
       if (orchestrator) return false;
       orchestrator = createTf012AutoOrchestrator({
@@ -197,7 +305,6 @@ function createAutoTestRunner(options) {
         buildId: buildId || null,
         device: device || null,
         ports: buildPorts(),
-        senderConnected: () => client.status().connected,
       });
       orchestrator.start(Date.now());
       if (timer) clearInterval(timer);
@@ -228,4 +335,4 @@ function createAutoTestRunner(options) {
   };
 }
 
-module.exports = {createControlClient, createAutoTestRunner};
+module.exports = {createControlClient, createAutoTestRunner, validateAutoLabResult};

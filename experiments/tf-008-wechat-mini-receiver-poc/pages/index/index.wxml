@@ -19,7 +19,11 @@
   <view class="autobar">
     <view class="abhead">
       <text class="abtitle">AUTO PHYSICAL TEST / 自动物理测试</text>
-      <text class="{{autoConnected ? 'abok' : 'abbad'}}">{{autoStatusText}}</text>
+      <text class="abv">{{autoRunStatus}}</text>
+    </view>
+    <view class="abhead">
+      <text class="abk">{{autoControlStatus}}</text>
+      <text class="{{autoSenderConnected ? 'abok' : 'abbad'}}">{{autoHandshake}}</text>
     </view>
     <view class="abctl">
       <input class="abinput" value="{{autoControlUrl}}" bindinput="onAutoControlUrl" placeholder="wss://…/lab" />
@@ -30,6 +34,12 @@
       <view class="abstop" bindtap="onAutoTestStop">Stop / 停止</view>
     </view>
     <view class="abrow"><text class="abk">AUTO TEST</text><text class="abv">{{autoStepLabel}}</text></view>
+    <!-- r14 control-plane evidence: what was requested, whether the sender proved it,
+         and how old the telemetry proving it is. -->
+    <view class="abrow"><text class="abk">{{autoCommand}}</text><text class="abv">Sender confirmed: {{autoSenderConfirmed}}</text></view>
+    <view class="abrow"><text class="abk">telemetry age</text><text class="abv">{{autoTelemetryAge}}</text></view>
+    <view class="abrow"><text class="abk">mismatch</text><text class="abv">{{autoSenderMismatch}}</text></view>
+    <view class="abrow"><text class="abk">A4 pause</text><text class="abv">requested {{autoPauseRequested}} · confirmed {{autoPauseConfirmed}} · frozen cursor {{autoFrozenCursor}}</text></view>
     <view class="abgrid">
       <view class="abcell"><text class="abck">Step</text><text class="abcv">{{autoStepIndex}} / {{autoStepCount}}</text></view>
       <view class="abcell"><text class="abck">holdMs</text><text class="abcv">{{autoStepHoldMs}}</text></view>
@@ -42,11 +52,16 @@
       <view class="abcell"><text class="abck">reserved</text><text class="abcv">{{baselineReservedScore}}</text></view>
       <view class="abcell"><text class="abck">frozen</text><text class="abcv">{{autoFrozenSteps}} / {{autoPlanSteps}}</text></view>
     </view>
-    <view class="abrow"><text class="abk">sender</text><text class="abv">{{autoSenderConnected ? 'CONTROL ONLINE' : 'waiting for PC sender'}}</text></view>
     <view class="abrow"><text class="abk">setup gate</text><text class="abv">{{autoSetupLabel}}</text></view>
     <view class="abrow"><text class="abk">setup notes</text><text class="abv">{{autoSetupReasons}}</text></view>
     <view class="abrow"><text class="abk">last frozen</text><text class="abv">{{autoLastFrozenStep}}</text></view>
     <view class="abrow"><text class="abk">final</text><text class="abv">{{autoFinalStatus}}</text></view>
+    <view class="abrow"><text class="abk">steps frozen</text><text class="abv">{{autoFrozenStepsDone}}</text></view>
+    <view class="abrow"><text class="abk">sender stopped</text><text class="abv">{{autoStoppedConfirmed}}</text></view>
+    <view class="abrow"><text class="abk">harness valid</text><text class="abv">{{autoHarnessValid}}</text></view>
+    <view class="abrow"><text class="abk">validity notes</text><text class="abv">{{autoValidityFailed}}</text></view>
+    <view class="abrow"><text class="abk">result upload</text><text class="abv">{{autoResultUpload}}</text></view>
+    <view class="abrow"><text class="abk">final JSON</text><text class="abv">{{autoFinalJsonReady}}</text></view>
     <view class="abcopy" bindtap="copyAutoFinalResult">Copy final auto JSON / 复制最终 JSON</view>
   </view>
 
