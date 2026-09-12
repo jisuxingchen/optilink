@@ -2,7 +2,7 @@
 
 **Status:** READY for PO physical action (after exact-head CI green + Technical
 Review PASS).
-**Build:** `tf012-r7-<shortsha>` (pinned by the buildId commit) · branch
+**Build:** `tf012-r7-545583a` · build content commit `545583a` · branch
 `spike/tf-012-physical-performance` · Issue #53 · PR #54.
 (The follow-up commit that pins this buildId string changes nothing else in the
 baseline; `utils/optical-core.js` is rebuilt from the same source.)
