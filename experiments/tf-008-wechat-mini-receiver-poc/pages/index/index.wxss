@@ -3,74 +3,8 @@
   box-sizing: border-box;
 }
 
-.banner {
-  background: #166534;
-  color: #dcfce7;
-  font-weight: 700;
-  text-align: center;
-  padding: 18rpx;
-  border-radius: 12rpx;
-  margin-bottom: 10rpx;
-  letter-spacing: 0.06em;
-}
-
-.bootbanner {
-  font-weight: 800;
-  text-align: center;
-  padding: 14rpx;
-  border-radius: 12rpx;
-  margin-bottom: 10rpx;
-  letter-spacing: 0.04em;
-  word-break: break-all;
-}
-
-.bootok {
-  background: #14532d;
-  color: #bbf7d0;
-  border: 1rpx solid #16a34a;
-}
-
-.booterr {
-  background: #7f1d1d;
-  color: #fecaca;
-  border: 1rpx solid #dc2626;
-}
-
-.netbanner {
-  background: #111827;
-  color: #f87171;
-  font-weight: 700;
-  text-align: center;
-  padding: 12rpx;
-  border-radius: 12rpx;
-  margin-bottom: 16rpx;
-  letter-spacing: 0.04em;
-  border: 1rpx solid #7f1d1d;
-}
-
-.receivebanner {
-  background: #14532d;
-  color: #bbf7d0;
-  font-weight: 800;
-  text-align: center;
-  padding: 14rpx;
-  border-radius: 12rpx;
-  margin-bottom: 10rpx;
-  letter-spacing: 0.04em;
-  border: 1rpx solid #16a34a;
-}
-
-.benchbanner {
-  background: #1e3a8a;
-  color: #bfdbfe;
-  font-weight: 800;
-  text-align: center;
-  padding: 14rpx;
-  border-radius: 12rpx;
-  margin-bottom: 10rpx;
-  letter-spacing: 0.04em;
-  border: 1rpx solid #2563eb;
-}
+/* TF-012 r8: the four stacked banners were replaced by the single compact
+   .topstrip row, so the status banner styles below are no longer used. */
 
 .modebtn.modeactive {
   background: #065f46;
@@ -90,16 +24,168 @@
 
 .camera {
   width: 100%;
-  height: 520rpx;
+  /* TF-012 r8: shortened from 520rpx so the viewfinder, the controls and the KEY
+     STATUS panel fit on the first screen without scrolling during a physical run. */
+  height: 360rpx;
   border-radius: 12rpx;
-  margin-bottom: 16rpx;
+  margin-bottom: 12rpx;
 }
 
 .controls {
   display: flex;
   flex-wrap: wrap;
-  gap: 12rpx;
-  margin-bottom: 16rpx;
+  gap: 8rpx;
+  margin-bottom: 12rpx;
+}
+
+/* TF-012 r8: one compact top strip instead of four stacked full-width banners,
+   so the first screen belongs to the viewfinder, the buttons and the key fields. */
+.topstrip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10rpx;
+  background: #0f1720;
+  border: 1rpx solid #1f2937;
+  border-radius: 10rpx;
+  padding: 8rpx 12rpx;
+  margin-bottom: 10rpx;
+  font-size: 22rpx;
+  line-height: 1.6;
+}
+
+.topstrip .tsid {
+  color: #93c5fd;
+  font-weight: 700;
+}
+
+.topstrip .tsmode {
+  color: #d1fae5;
+  font-weight: 700;
+}
+
+.topstrip .tsbuild {
+  color: #fbbf24;
+  font-weight: 700;
+}
+
+.topstrip .tsnet {
+  color: #f87171;
+  font-weight: 700;
+}
+
+.topstrip .tsok {
+  color: #4ade80;
+  font-weight: 700;
+}
+
+.topstrip .tsbad {
+  color: #fecaca;
+  background: #7f1d1d;
+  padding: 0 8rpx;
+  border-radius: 6rpx;
+  font-weight: 700;
+}
+
+/* TF-012 r8 KEY STATUS: soft amber highlight so it is unmissable but not harsh,
+   bold values, and green emphasis for a completed / SHA-exact result. */
+.keystatus {
+  background: #fffbeb;
+  border: 2rpx solid #fde68a;
+  border-radius: 12rpx;
+  padding: 12rpx 14rpx;
+  margin-bottom: 12rpx;
+}
+
+.keystatus .kstitle {
+  font-size: 22rpx;
+  color: #92400e;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin-bottom: 8rpx;
+}
+
+.keystatus .ksrow {
+  display: flex;
+  justify-content: space-between;
+  font-size: 25rpx;
+  line-height: 1.75;
+}
+
+.keystatus .ksk {
+  color: #92400e;
+  flex: 0 0 auto;
+  padding-right: 12rpx;
+}
+
+.keystatus .ksv {
+  color: #0f1720;
+  font-weight: 800;
+  text-align: right;
+  word-break: break-all;
+}
+
+.keystatus .ksv.ok {
+  color: #15803d;
+}
+
+.keystatus .ksv.bad {
+  color: #b91c1c;
+}
+
+.keystatus .ksv.pending {
+  color: #64748b;
+}
+
+.keystatus .ksgrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6rpx 14rpx;
+  margin-top: 8rpx;
+  padding-top: 8rpx;
+  border-top: 1rpx solid #fde68a;
+}
+
+.keystatus .kscell {
+  font-size: 21rpx;
+  color: #78350f;
+  font-weight: 700;
+}
+
+/* TF-012 r8 result history */
+.history {
+  background: #0b1220;
+  border: 1rpx solid #334155;
+  border-radius: 12rpx;
+  padding: 14rpx 16rpx;
+  margin-bottom: 12rpx;
+}
+
+.history .hrow {
+  display: flex;
+  justify-content: space-between;
+  font-size: 24rpx;
+  line-height: 1.8;
+}
+
+.history .hk {
+  color: #94a3b8;
+}
+
+.history .hv {
+  color: #fbbf24;
+  font-weight: 700;
+}
+
+.history .hv.ok {
+  color: #4ade80;
+}
+
+.history .hnote {
+  font-size: 20rpx;
+  color: #64748b;
+  line-height: 1.6;
+  margin-top: 6rpx;
 }
 
 .btn {

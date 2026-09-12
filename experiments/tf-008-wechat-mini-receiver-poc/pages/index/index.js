@@ -27,6 +27,13 @@ const BASELINE_TOTAL_CHUNKS = 16; // TF-012 r4 baseline: 10240 B / 640 B per chu
 const BASELINE_FILE_BYTES = 10240; // TF-012 r4/r6 deterministic source file size
 const BASELINE_DEFAULT_HOLD_MS = 1000; // must match the sender URL ?holdMs=
 
+// TF-012 r8 result history. Every Freeze Test Result appends the FULL frozen JSON
+// to a local, bounded history so several physical runs can be exported at once
+// ("Copy All Results") instead of one at a time. Storage only — no network path.
+const HISTORY_KEY = 'optilink.tf012.testHistory.v1';
+const HISTORY_MAX = 20;          // keep at least the most recent 20 runs
+const HISTORY_BYTES_CAP = 800000; // defensive: keep the key well under the 1 MB limit
+
 // Shared optical acquisition core (bundled from the TF-007H modules).
 // GUARDED LOAD: the page must never fail silently. If the bundle throws at
 // require time (e.g. a missing runtime global), Page() still registers and the
@@ -42,7 +49,7 @@ try {
 
 // Unmistakable build identifier — must be visible on the phone to prove the
 // device is running the latest shared-receive package (not a stale cache).
-const BUILD_ID = 'tf012-r7-545583a';
+const BUILD_ID = 'tf012-r8-dev';
 
 /**
  * Monotonic millisecond clock for the speed-ladder benchmark.
@@ -184,6 +191,7 @@ Page({
     baselineContentPreview: '',
     baselinePreviewLines: 0,
     baselineSelfCheck: '—',
+    baselinePipelineError: '',
 
     // TF-012 r6 speed ladder (declared hold time + corrected active latency +
     // exploratory net goodput). Theoretical rates are DECLARED arithmetic.
@@ -289,6 +297,35 @@ Page({
     frozenResult: '',
     frozenAt: '',
 
+    // TF-012 r8: first-screen KEY STATUS (soft amber) + result history summary.
+    // Only the highest-priority fields live here; everything else stays below in
+    // the collapsed diagnostics block so the viewfinder never needs scrolling.
+    keyBuildId: '—',
+    keyModeLabel: '—',
+    keyHoldMs: '—',
+    keyChunks: '—',
+    keyMissing: '—',
+    keyFirstChunkMs: '—',
+    keyAllChunksMs: '—',
+    keySha: '—',
+    keyShaClass: 'pending',
+    keyReconstruction: '—',
+    keyDeepestStage: '—',
+    keyStageReason: '—',
+    keyLocateFailures: '0',
+    keyCrcFailures: '0',
+    keyDuplicates: '0',
+    keyCodeWidth: '—',
+    keyPixPerCell: '—',
+    showDiagnostics: false,
+    historyMax: HISTORY_MAX,
+    historyCount: 0,
+    lastFreezeAt: '—',
+    historyShaResult: '—',
+    historyShaClass: 'pending',
+    historyChunks: '—',
+    historyNote: 'no frozen run yet / 尚未冻结任何结果',
+
     log: ''
   },
 
@@ -346,6 +383,8 @@ Page({
   baselineFinalized: false,
   baselineResult: null,
   baselineStartAt: 0,
+  // r8 frozen-result history (local storage only; survives Reset Metrics).
+  testHistory: [],
 
   onLoad() {
     this.collectDeviceEvidence();
@@ -367,6 +406,10 @@ Page({
     const ladderLabels = ladder.map((value) => value + ' ms');
     this.setData({ holdMsLadder: ladderLabels, clockSource: CLOCK_SOURCE });
     this.applyHoldMs(BASELINE_DEFAULT_HOLD_MS);
+
+    // TF-012 r8: restore the frozen-result history and the first-screen key panel.
+    this.loadHistory();
+    this.refreshKeyStatus();
 
     // Boot status is VISIBLE and never silent: if the bundle failed to load the
     // page still renders and shows BOOT ERROR with the reason.
@@ -600,6 +643,9 @@ Page({
       baselineContentPreview: '',
       baselinePreviewLines: 0
     });
+    // r8: Reset Metrics clears the LIVE counters only — the frozen-result history
+    // is deliberately left intact (it is the export surface for a speed sweep).
+    this.refreshKeyStatus();
     this.appendLog('metrics reset');  },
 
   toggleHeavy() {
@@ -615,7 +661,7 @@ Page({
   setMode(mode) {
     if (this.data.mode === mode) return;
     this.resetMetrics();
-    this.setData({ mode, receivePipelineError: '' });
+    this.setData(Object.assign({ mode, receivePipelineError: '' }, this.buildKeyStatusPatch(mode)));
     this.appendLog('active mode: ' + mode);
     if (mode === 'receive') this.runReceiveSelfCheck();
     if (mode === 'baseline') this.runBaselineSelfCheck();
@@ -1054,7 +1100,7 @@ Page({
       patch.normalizeSamples = this.normalizeSamples;
     }
 
-    this.setData(patch);
+    this.setData(Object.assign(patch, this.buildKeyStatusPatch()));
   },
 
   onReceiveTick() {
@@ -1140,7 +1186,7 @@ Page({
       ? 'ERROR: RECEIVE PIPELINE NOT RUNNING'
       : '';
 
-    this.setData(patch);
+    this.setData(Object.assign(patch, this.buildKeyStatusPatch()));
   },
 
   // Live single-code baseline panel. Every value here is measured by the
@@ -1152,6 +1198,9 @@ Page({
     const callbackFps = (this.windowReceived / seconds).toFixed(1);
     const processingFps = (this.windowProcessed / seconds).toFixed(1);
     const skipped = Math.max(0, this.baselineFramesReceived - this.baselineFramesProcessed);
+    const skipRatio = this.baselineFramesReceived
+      ? ((skipped / this.baselineFramesReceived) * 100).toFixed(1) + '%'
+      : '0.0%';
     const activeStats = this.baselineActiveStats();
     const avgMs = activeStats.avg != null ? activeStats.avg.toFixed(2) + ' ms' : '—';
     const receiver = this.baselineReceiver;
@@ -1161,13 +1210,13 @@ Page({
     const netGoodput = this.baselineNetGoodputMetrics(receiver, this.baselineResult);
     const efficiency = this.baselineEfficiencyMetrics(receiver);
 
-    this.setData({
+    this.setData(Object.assign({}, this.buildKeyStatusPatch(), {
       callbackFps,
       processingFps,
       totalReceived: this.receivedFrames,
       processed: this.processedFrames,
       skipped,
-      skipRatio: this.baselineFramesReceived ? ((skipped / this.baselineFramesReceived) * 100).toFixed(1) + '%' : '0.0%',
+      skipRatio,
       replaced: this.baselineFramesReplaced,
       avgProcessMs: avgMs,
       activeProcessAvgMs: activeStats.avg != null ? activeStats.avg.toFixed(3) + ' ms' : '—',
@@ -1272,7 +1321,7 @@ Page({
       baselinePipelineError: (this.data.running && this.baselineFramesReceived > 4 && this.baselineFramesProcessed === 0)
         ? 'ERROR: BASELINE PIPELINE NOT RUNNING'
         : ''
-    });
+    }));
   },
 
   baselineStatusText(receiver) {
@@ -1284,31 +1333,251 @@ Page({
     return 'RECEIVING / 接收中';
   },
 
-  // ---- freeze / copy -----------------------------------------------------
-  freezeResult() {    this.clearFrameTimeout();
+  // ---- freeze / copy / history -------------------------------------------
+  // TF-012 r8: every Freeze Test Result appends the FULL frozen JSON to a bounded
+  // local history, so a multi-point sweep (Stage A / Stage B) can be exported in
+  // one copy instead of one run at a time. Storage is local: no network path is
+  // added, and the payload still never leaves the device except by clipboard.
+  freezeResult() {
+    this.clearFrameTimeout();
     this.stopCamera();
 
     const result = this.buildResultPayload();
     const text = JSON.stringify(result, null, 2);
+    const frozenAt = new Date().toLocaleString();
+    const entry = this.buildHistoryEntry(result, text, frozenAt);
 
-    this.setData({
+    this.testHistory.push(entry);
+    while (this.testHistory.length > HISTORY_MAX) this.testHistory.shift();
+    const persisted = this.persistHistory();
+
+    this.setData(Object.assign({
       frozen: true,
-      frozenAt: new Date().toLocaleString(),
+      frozenAt,
       frozenResult: text
-    });
-    this.appendLog('test result frozen');
+    }, this.historySummaryPatch(), this.buildKeyStatusPatch()));
+    this.appendLog('test result frozen #' + this.testHistory.length
+      + (persisted ? '' : ' (history not persisted)'));
   },
 
-  copyResult() {
-    if (!this.data.frozenResult) {
+  /** Small, self-describing envelope around one immutable frozen JSON payload. */
+  buildHistoryEntry(payload, text, frozenAt) {
+    const baseline = this.data.mode === 'baseline' ? this.baselineReceiver : null;
+    const sha = payload && payload.completion
+      ? payload.completion.shaResult
+      : (payload && payload.reconstruction ? payload.reconstruction.shaResult : null);
+    return {
+      frozenAt,
+      frozenAtIso: new Date().toISOString(),
+      buildId: this.data.buildId,
+      appMode: this.data.mode,
+      modeLabel: this.modeLabelText(this.data.mode),
+      holdMs: this.data.mode === 'baseline' ? this.data.holdMsDeclared : null,
+      shaResult: sha || null,
+      uniqueReceived: baseline ? baseline.receivedUniqueCount : (payload && payload.chunks ? payload.chunks.uniqueReceived : null),
+      totalChunks: baseline && baseline.totalChunks ? baseline.totalChunks : (payload && payload.transfer ? payload.transfer.totalChunks : null),
+      pass: payload && typeof payload.pass === 'boolean' ? payload.pass : null,
+      byteLength: text.length,
+      payload
+    };
+  },
+
+  loadHistory() {
+    const raw = storageAdapter.load(HISTORY_KEY);
+    let entries = [];
+    if (raw) {
+      try {
+        const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (Array.isArray(parsed)) entries = parsed.filter((entry) => entry && entry.payload);
+      } catch (err) {
+        storageAdapter.remove(HISTORY_KEY);
+        entries = [];
+      }
+    }
+    this.testHistory = entries.slice(-HISTORY_MAX);
+    this.setData(this.historySummaryPatch());
+  },
+
+  /** Persist the bounded history. Returns false when storage rejected it. */
+  persistHistory() {
+    let entries = this.testHistory.slice(-HISTORY_MAX);
+    // Defensive byte budget: drop the OLDEST runs until the key fits comfortably.
+    let text = JSON.stringify(entries);
+    while (entries.length > 1 && text.length > HISTORY_BYTES_CAP) {
+      entries = entries.slice(1);
+      text = JSON.stringify(entries);
+    }
+    if (entries.length !== this.testHistory.length) {
+      this.testHistory = entries;
+      this.appendLog('history trimmed to ' + entries.length + ' runs to fit storage');
+    }
+    return storageAdapter.save(HISTORY_KEY, text);
+  },
+
+  /** historyCount / lastFreezeAt / latest SHA / latest chunks, for the first screen. */
+  historySummaryPatch() {
+    const count = this.testHistory.length;
+    const latest = count ? this.testHistory[count - 1] : null;
+    const sha = latest && latest.shaResult ? latest.shaResult : '—';
+    const chunks = latest && latest.totalChunks
+      ? latest.uniqueReceived + ' / ' + latest.totalChunks
+      : (latest ? String(latest.uniqueReceived) : '—');
+    return {
+      historyCount: count,
+      lastFreezeAt: latest ? latest.frozenAt : '—',
+      historyShaResult: sha,
+      historyShaClass: sha === 'MATCH' ? 'ok' : (sha === 'MISMATCH' ? 'bad' : 'pending'),
+      historyChunks: chunks,
+      historyNote: count
+        ? (count + ' frozen run(s) stored locally · use Copy All Results for one JSON array')
+        : 'no frozen run yet / 尚未冻结任何结果'
+    };
+  },
+
+  copyLatestResult() {
+    const latest = this.testHistory.length ? this.testHistory[this.testHistory.length - 1] : null;
+    const text = latest ? JSON.stringify(latest.payload, null, 2) : this.data.frozenResult;
+    if (!text) {
       wx.showToast({ title: 'No frozen result', icon: 'none' });
       return;
     }
+    this.copyToClipboard(text, 'Latest result copied');
+  },
+
+  /**
+   * Copy All Results: ONE JSON ARRAY of the complete frozen JSON of every stored
+   * run, oldest first. Array format (not line-delimited) so a sweep pastes back
+   * as a single valid JSON document.
+   */
+  copyAllResults() {
+    if (!this.testHistory.length) {
+      wx.showToast({ title: 'History empty', icon: 'none' });
+      return;
+    }
+    const payloads = this.testHistory.map((entry) => entry.payload);
+    const text = JSON.stringify(payloads, null, 2);
+    this.copyToClipboard(text, this.testHistory.length + ' results copied');
+  },
+
+  clearHistory() {
+    if (!this.testHistory.length) {
+      wx.showToast({ title: 'History empty', icon: 'none' });
+      return;
+    }
+    wx.showModal({
+      title: 'Clear History',
+      content: 'Delete all ' + this.testHistory.length + ' frozen result(s) on this device? The latest on-screen result is kept.',
+      confirmText: 'Clear',
+      success: (res) => {
+        if (!res.confirm) return;
+        this.testHistory = [];
+        storageAdapter.remove(HISTORY_KEY);
+        this.setData(this.historySummaryPatch());
+        this.appendLog('history cleared');
+        wx.showToast({ title: 'History cleared', icon: 'success' });
+      }
+    });
+  },
+
+  copyToClipboard(text, label) {
     wx.setClipboardData({
-      data: this.data.frozenResult,
-      success: () => wx.showToast({ title: 'Copied', icon: 'success' }),
+      data: text,
+      success: () => wx.showToast({ title: label, icon: 'success' }),
       fail: () => wx.showToast({ title: 'Copy failed', icon: 'none' })
     });
+  },
+
+  toggleDiagnostics() {
+    this.setData({ showDiagnostics: !this.data.showDiagnostics });
+  },
+
+  // ---- first-screen KEY STATUS / 关键状态 ---------------------------------
+  modeLabelText(mode) {
+    if (mode === 'baseline') return 'Single-Code Baseline / 单码基线';
+    if (mode === 'receive') return 'Shared Receive Pipeline / 共享接收';
+    return 'Camera Benchmark / 相机基准';
+  },
+
+  refreshKeyStatus() {
+    this.setData(this.buildKeyStatusPatch());
+  },
+
+  /**
+   * The highest-priority fields, kept on the first screen next to the viewfinder.
+   * Values are read from the same measured state the frozen JSON uses; nothing here
+   * is derived differently, so the panel and the export cannot disagree.
+   */
+  buildKeyStatusPatch(modeOverride) {
+    const mode = modeOverride || this.data.mode;
+    const patch = {
+      keyBuildId: this.data.buildId,
+      keyModeLabel: this.modeLabelText(mode),
+      keyHoldMs: this.data.holdMsDeclared + ' ms (declared)'
+    };
+
+    if (mode === 'baseline') {
+      const receiver = this.baselineReceiver;
+      const metrics = receiver ? receiver.metrics : null;
+      const total = receiver && receiver.totalChunks ? receiver.totalChunks : BASELINE_TOTAL_CHUNKS;
+      const missing = receiver ? receiver.missingIndices() : [];
+      const reconstruction = this.baselineResult;
+      const sha = reconstruction
+        ? (reconstruction.match ? 'MATCH' : 'MISMATCH')
+        : (this.data.baselineShaStatus || '—');
+      patch.keyChunks = (receiver ? receiver.receivedUniqueCount : 0) + ' / ' + total;
+      patch.keyMissing = missing.length ? missing.join(', ') : 'none';
+      patch.keyFirstChunkMs = metrics && metrics.firstChunkMs >= 0 ? metrics.firstChunkMs.toFixed(0) + ' ms' : '—';
+      patch.keyAllChunksMs = metrics && metrics.allChunksMs >= 0 ? metrics.allChunksMs.toFixed(0) + ' ms' : '—';
+      patch.keySha = sha;
+      patch.keyShaClass = sha === 'MATCH' ? 'ok' : (sha === 'MISMATCH' ? 'bad' : 'pending');
+      patch.keyReconstruction = this.data.baselineReconstructionStatus || '—';
+      patch.keyDeepestStage = metrics ? metrics.locatorStage : '—';
+      patch.keyStageReason = metrics && metrics.locatorStageReason ? metrics.locatorStageReason : '—';
+      patch.keyLocateFailures = metrics ? String(metrics.locateFailures) : '0';
+      patch.keyCrcFailures = metrics ? String(metrics.crcFailures) : '0';
+      patch.keyDuplicates = metrics ? String(metrics.duplicateChunks) : '0';
+      patch.keyCodeWidth = metrics && metrics.codeWidthPx ? metrics.codeWidthPx.toFixed(0) + ' px' : '—';
+      patch.keyPixPerCell = metrics && metrics.pixPerCellX
+        ? metrics.pixPerCellX.toFixed(2) + '/' + metrics.pixPerCellY.toFixed(2)
+        : '—';
+      return patch;
+    }
+
+    if (mode === 'receive') {
+      const core = this.receiveCore;
+      const sha = this.data.shaStatus || '—';
+      patch.keyChunks = core ? (core.solvedCount + ' / ' + core.sourceCount) : '—';
+      patch.keyMissing = core && core.complete ? 'none' : (core ? String(core.sourceCount - core.solvedCount) + ' block(s) missing' : '—');
+      patch.keyFirstChunkMs = '—';
+      patch.keyAllChunksMs = '—';
+      patch.keySha = sha;
+      patch.keyShaClass = sha === 'MATCH' ? 'ok' : (sha === 'MISMATCH' ? 'bad' : 'pending');
+      patch.keyReconstruction = this.data.reconstructionStatus || '—';
+      patch.keyDeepestStage = core ? core.stage.toUpperCase() : 'UNAVAILABLE';
+      patch.keyStageReason = this.data.productStage || '—';
+      patch.keyLocateFailures = String(this.data.rejected || 0);
+      patch.keyCrcFailures = String(this.data.rejected || 0);
+      patch.keyDuplicates = String(this.data.duplicates || 0);
+      patch.keyCodeWidth = '—';
+      patch.keyPixPerCell = '—';
+      return patch;
+    }
+
+    patch.keyChunks = 'n/a (benchmark mode)';
+    patch.keyMissing = 'n/a';
+    patch.keyFirstChunkMs = 'n/a';
+    patch.keyAllChunksMs = 'n/a';
+    patch.keySha = 'n/a';
+    patch.keyShaClass = 'pending';
+    patch.keyReconstruction = 'n/a';
+    patch.keyDeepestStage = 'n/a';
+    patch.keyStageReason = 'n/a';
+    patch.keyLocateFailures = 'n/a';
+    patch.keyCrcFailures = 'n/a';
+    patch.keyDuplicates = 'n/a';
+    patch.keyCodeWidth = '—';
+    patch.keyPixPerCell = '—';
+    return patch;
   },
 
   buildResultPayload() {

@@ -1,10 +1,13 @@
 <view class="page">
-  <view class="banner">OptiLink · OPTICAL CAMERA FRAME — LOCAL ONLY</view>
-  <view class="bootbanner {{bootStatus === 'BOOT OK' ? 'bootok' : 'booterr'}}">{{bootStatus}} · buildId {{buildId}}{{bootError ? ' · ' + bootError : ''}}</view>
-  <view class="netbanner">Network payload path: NONE</view>
-  <view class="receivebanner" wx:if="{{mode === 'receive'}}">SHARED RECEIVE PIPELINE ACTIVE · buildId {{buildId}}</view>
-  <view class="benchbanner" wx:if="{{mode === 'baseline'}}">SINGLE-CODE BASELINE 单码基线 ACTIVE · buildId {{buildId}}</view>
-  <view class="benchbanner" wx:if="{{mode === 'benchmark'}}">CAMERA BENCHMARK MODE ACTIVE · buildId {{buildId}}</view>
+  <!-- TF-012 r8: one compact strip instead of four stacked banners. The viewfinder,
+       the buttons and the KEY STATUS panel must share the first screen. -->
+  <view class="topstrip">
+    <text class="tsid">OptiLink</text>
+    <text class="tsmode">{{keyModeLabel}}</text>
+    <text class="tsbuild">buildId {{buildId}}</text>
+    <text class="tsnet">Network payload path: NONE</text>
+    <text class="{{bootStatus === 'BOOT OK' ? 'tsok' : 'tsbad'}}">{{bootStatus}}{{bootError ? ' · ' + bootError : ''}}</text>
+  </view>
 
   <camera
     device-position="back"
@@ -27,6 +30,53 @@
     <button class="btn" wx:if="{{mode === 'benchmark'}}" bindtap="toggleHeavy">{{heavy ? 'Normalization 1280x720: ON' : 'Normalization 1280x720: OFF'}}</button>
   </view>
 
+  <!-- ================= KEY STATUS / 关键状态 (first screen) ================= -->
+  <view class="keystatus">
+    <view class="kstitle">KEY STATUS · 关键状态</view>
+    <view class="ksrow"><text class="ksk">buildId</text><text class="ksv">{{keyBuildId}}</text></view>
+    <view class="ksrow"><text class="ksk">mode / 模式</text><text class="ksv">{{keyModeLabel}}</text></view>
+    <view class="ksrow" wx:if="{{mode === 'baseline'}}"><text class="ksk">hold / 每码停留</text><text class="ksv">{{keyHoldMs}}</text></view>
+    <view class="ksrow"><text class="ksk">chunks 分片</text><text class="ksv">{{keyChunks}}</text></view>
+    <view class="ksrow"><text class="ksk">missing 缺失</text><text class="ksv">{{keyMissing}}</text></view>
+    <view class="ksrow" wx:if="{{mode === 'baseline'}}"><text class="ksk">first chunk 首片</text><text class="ksv">{{keyFirstChunkMs}}</text></view>
+    <view class="ksrow" wx:if="{{mode === 'baseline'}}"><text class="ksk">all chunks 收齐</text><text class="ksv">{{keyAllChunksMs}}</text></view>
+    <view class="ksrow"><text class="ksk">SHA-256</text><text class="ksv {{keyShaClass}}">{{keySha}}</text></view>
+    <view class="ksrow"><text class="ksk">reconstruction 重构</text><text class="ksv {{keyShaClass}}">{{keyReconstruction}}</text></view>
+    <view class="ksrow" wx:if="{{mode === 'baseline'}}"><text class="ksk">deepest stage 最深阶段</text><text class="ksv">{{keyDeepestStage}}</text></view>
+    <view class="ksrow" wx:if="{{mode === 'baseline'}}"><text class="ksk">stage reason 阶段原因</text><text class="ksv">{{keyStageReason}}</text></view>
+    <view class="ksrow"><text class="ksk">locate fails 定位失败</text><text class="ksv">{{keyLocateFailures}}</text></view>
+    <view class="ksrow"><text class="ksk">CRC fails</text><text class="ksv">{{keyCrcFailures}}</text></view>
+    <view class="ksrow"><text class="ksk">duplicates 重复</text><text class="ksv">{{keyDuplicates}}</text></view>
+    <view class="ksgrid">
+      <text class="kscell">code {{keyCodeWidth}}</text>
+      <text class="kscell">px/cell {{keyPixPerCell}}</text>
+      <text class="kscell">cb FPS {{callbackFps}}</text>
+      <text class="kscell">proc FPS {{processingFps}}</text>
+      <text class="kscell">net {{netGoodputText}}</text>
+    </view>
+  </view>
+
+  <!-- ================= RESULT HISTORY / 历史结果 ================= -->
+  <view class="history">
+    <view class="kstitle">RESULT HISTORY · 历史结果 (max {{historyMax}})</view>
+    <view class="hrow"><text class="hk">historyCount 条数</text><text class="hv">{{historyCount}}</text></view>
+    <view class="hrow"><text class="hk">lastFreezeAt 最近冻结</text><text class="hv">{{lastFreezeAt}}</text></view>
+    <view class="hrow"><text class="hk">latest SHA result</text><text class="hv {{historyShaClass}}">{{historyShaResult}}</text></view>
+    <view class="hrow"><text class="hk">latest chunks</text><text class="hv">{{historyChunks}}</text></view>
+    <view class="hnote">{{historyNote}}</view>
+    <view class="controls">
+      <button class="btn" bindtap="freezeResult">Freeze Test Result</button>
+      <button class="btn primary" bindtap="copyLatestResult" disabled="{{!historyCount}}">Copy Latest Result 复制本次结果</button>
+      <button class="btn" bindtap="copyAllResults" disabled="{{!historyCount}}">Copy All Results 全部复制</button>
+      <button class="btn" bindtap="clearHistory" disabled="{{!historyCount}}">Clear History 清空历史</button>
+    </view>
+  </view>
+
+  <view class="controls">
+    <button class="btn" bindtap="toggleDiagnostics">{{showDiagnostics ? 'Hide diagnostics 收起详细诊断' : 'Show diagnostics 展开详细诊断'}}</button>
+  </view>
+
+  <view wx:if="{{showDiagnostics}}">
   <view class="panel">
     <view class="section">status</view>
     <view class="row"><text class="k">camera permission</text><text class="v">{{permissionStatus}}</text></view>
@@ -244,15 +294,11 @@
     <view class="err" wx:for="{{errors}}" wx:key="*this">{{item}}</view>
   </view>
 
-  <view class="controls">
-    <button class="btn" bindtap="freezeResult">Freeze Test Result</button>
-    <button class="btn" bindtap="copyResult" disabled="{{!frozenResult}}">Copy Result</button>
-  </view>
-
   <view class="panel" wx:if="{{frozenResult}}">
-    <view class="section">frozen result ({{frozenAt}})</view>
+    <view class="section">latest frozen result ({{frozenAt}}) — copy it from the buttons above</view>
     <text class="frozen" selectable="true">{{frozenResult}}</text>
   </view>
 
   <view class="log">{{log}}</view>
+  </view>
 </view>
