@@ -33,6 +33,33 @@
 
 /* TF-012 r9 SENDER holdMs DECLARATION — deliberately loud and on the first
    screen, because the PO could not find the control when it lived lower down. */
+/* TF-012 r13 AUTO PHYSICAL TEST panel: the one-tap entry point, on the first screen. */
+.autobar {
+  margin: 12rpx 16rpx;
+  padding: 16rpx 18rpx;
+  border: 3rpx solid #2563eb;
+  border-radius: 14rpx;
+  background: #eff6ff;
+}
+.autobar .abhead { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.autobar .abtitle { font-size: 26rpx; font-weight: 800; color: #1e3a8a; }
+.autobar .abok { font-size: 22rpx; font-weight: 800; color: #166534; background: #dcfce7; padding: 4rpx 12rpx; border-radius: 999rpx; }
+.autobar .abbad { font-size: 22rpx; font-weight: 800; color: #991b1b; background: #fee2e2; padding: 4rpx 12rpx; border-radius: 999rpx; }
+.autobar .abctl { display: flex; gap: 10rpx; margin-top: 12rpx; }
+.autobar .abinput { flex: 1; font-size: 22rpx; padding: 10rpx 12rpx; border: 1rpx solid #93c5fd; border-radius: 10rpx; background: #fff; }
+.autobar .abtoken { flex: 0 0 34%; }
+.autobar .abmain { display: flex; gap: 12rpx; margin-top: 12rpx; }
+.autobar .abstart { flex: 1; text-align: center; font-size: 30rpx; font-weight: 800; color: #fff; background: #1d4ed8; padding: 20rpx 0; border-radius: 14rpx; }
+.autobar .abstop { flex: 0 0 26%; text-align: center; font-size: 26rpx; font-weight: 700; color: #1e3a8a; background: #dbeafe; padding: 20rpx 0; border-radius: 14rpx; }
+.autobar .abrow { display: flex; gap: 10rpx; margin-top: 10rpx; align-items: flex-start; }
+.autobar .abk { flex: 0 0 26%; font-size: 22rpx; color: #1e40af; }
+.autobar .abv { flex: 1; font-size: 22rpx; font-weight: 800; color: #0f1720; word-break: break-all; }
+.autobar .abgrid { display: flex; flex-wrap: wrap; margin-top: 10rpx; }
+.autobar .abcell { flex: 0 0 33.33%; padding: 6rpx 0; }
+.autobar .abck { display: block; font-size: 20rpx; color: #1e40af; }
+.autobar .abcv { display: block; font-size: 24rpx; font-weight: 800; color: #0f1720; }
+.autobar .abcopy { margin-top: 12rpx; text-align: center; font-size: 24rpx; font-weight: 700; color: #1e3a8a; background: #dbeafe; padding: 14rpx 0; border-radius: 12rpx; }
+
 .holdbar {
   background: #fffbeb;
   border: 3rpx solid #f59e0b;

@@ -5,13 +5,22 @@ import {promisify} from 'node:util';
 import {WebSocketServer, WebSocket} from 'ws';
 import {createServer as createViteServer} from 'vite';
 import {allowTiledHello, allowTiledLabResult, allowTiledRelay} from './tiled-control-policy.mjs';
+import {
+  TF012_AUTO_RECEIVER_ROLE,
+  TF012_AUTO_SENDER_ROLE,
+  allowTf012AutoHello,
+  allowTf012AutoLabResult,
+  allowTf012AutoRelay,
+} from './tf012-auto-policy.mjs';
+
+const TF012_AUTO_MODE = 'tf012auto';
 
 const execFileAsync = promisify(execFile);
 const port = Number(process.env.PORT || 5173);
 const host = process.env.HOST || '0.0.0.0';
 const labToken = process.env.OPTILINK_LAB_TOKEN || '';
 const requestedMode = process.env.OPTILINK_LAB_PAGE || 'baseline';
-const labMode = ['baseline', 'fountain', 'optigrid', 'tiled'].includes(requestedMode) ? requestedMode : 'baseline';
+const labMode = ['baseline', 'fountain', 'optigrid', 'tiled', TF012_AUTO_MODE].includes(requestedMode) ? requestedMode : 'baseline';
 const labInstanceId = process.env.OPTILINK_LAB_INSTANCE_ID || '';
 const clients = new Map();
 let latestRun = null;
@@ -44,6 +53,7 @@ function maybeSetAuthCookie(req, res) {
 }
 
 function htmlEntryForPath(pathname) {
+  if (pathname === '/single-baseline.html') return 'single-baseline.html';
   if (pathname === '/fountain.html') return 'fountain.html';
   if (pathname === '/optigrid.html') return 'optigrid.html';
   if (pathname === '/tiled-physical.html') return 'tiled-physical.html';
@@ -112,6 +122,19 @@ function broadcastTiled(payload, except, sourceRole) {
     ? 'tf007v3-tiled-receiver'
     : sourceRole === 'tf007v3-tiled-receiver'
       ? 'tf007v3-tiled-sender'
+      : null;
+  if (!targetRole) return;
+  for (const [ws, meta] of clients.entries()) {
+    if (ws !== except && meta.role === targetRole) safeSend(ws, payload);
+  }
+}
+
+/** TF-012 r13: relay between the phone (orchestrator) and the PC sender only. */
+function broadcastTf012Auto(payload, except, sourceRole) {
+  const targetRole = sourceRole === TF012_AUTO_SENDER_ROLE
+    ? TF012_AUTO_RECEIVER_ROLE
+    : sourceRole === TF012_AUTO_RECEIVER_ROLE
+      ? TF012_AUTO_SENDER_ROLE
       : null;
   if (!targetRole) return;
   for (const [ws, meta] of clients.entries()) {
@@ -235,6 +258,17 @@ wss.on('connection', (ws, req) => {
     try { message = JSON.parse(String(raw)); } catch { return; }
     const meta = clients.get(ws) || {role: 'unknown'};
     if (message.type === 'hello') {
+      if (labMode === TF012_AUTO_MODE) {
+        const verdict = allowTf012AutoHello(message);
+        if (!verdict.ok) {
+          safeSend(ws, {type: 'server', event: 'policy-rejected', reason: verdict.reason});
+          return;
+        }
+        meta.role = message.role;
+        clients.set(ws, meta);
+        broadcastTf012Auto({type: 'peer', event: 'hello', role: meta.role}, ws, meta.role);
+        return;
+      }
       if (labMode === 'tiled') {
         if (!allowTiledHello(message)) {
           safeSend(ws, {type: 'server', event: 'policy-rejected', reason: 'TF-007 tiled hello boundary'});
@@ -251,6 +285,15 @@ wss.on('connection', (ws, req) => {
       return;
     }
     if (message.type === 'telemetry' || message.type === 'command' || message.type === 'state') {
+      if (labMode === TF012_AUTO_MODE) {
+        const verdict = allowTf012AutoRelay(meta.role, message);
+        if (!verdict.ok) {
+          safeSend(ws, {type: 'server', event: 'policy-rejected', reason: verdict.reason});
+          return;
+        }
+        broadcastTf012Auto(message, ws, meta.role);
+        return;
+      }
       if (labMode === 'tiled') {
         if (!allowTiledRelay(meta.role, message)) {
           safeSend(ws, {type: 'server', event: 'policy-rejected', reason: 'TF-007 tiled control-plane boundary'});
@@ -263,6 +306,13 @@ wss.on('connection', (ws, req) => {
       return;
     }
     if (message.type === 'lab-result') {
+      if (labMode === TF012_AUTO_MODE) {
+        const verdict = allowTf012AutoLabResult(meta.role, message);
+        if (!verdict.ok) {
+          safeSend(ws, {type: 'server', event: 'policy-rejected', reason: verdict.reason});
+          return;
+        }
+      }
       if (labMode === 'tiled' && !allowTiledLabResult(meta.role, message)) {
         safeSend(ws, {type: 'server', event: 'policy-rejected', reason: 'TF-007 tiled result boundary'});
         return;
@@ -286,5 +336,6 @@ server.listen(port, host, () => {
   console.log('Fountain:     /fountain.html?role=sender|receiver');
   console.log('OptiGrid:     /optigrid.html?role=sender|receiver');
   console.log('TF-007 tiled: /tiled-physical.html?role=sender|receiver');
+  console.log('TF-012 auto:   /single-baseline.html?lab=wss://<host>/lab&role=' + TF012_AUTO_RECEIVER_ROLE);
   console.log('Latest result endpoint: /api/lab/latest');
 });

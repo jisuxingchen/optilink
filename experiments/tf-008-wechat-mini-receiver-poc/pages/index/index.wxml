@@ -13,6 +13,43 @@
        r9: moved to the FIRST SCREEN, above the viewfinder, because the PO could
        not find it before. It is annotation + theoretical metrics ONLY: it never
        touches decode, frame processing, the protocol or reconstruction. -->
+  <!-- ========== TF-012 r13 AUTO PHYSICAL TEST / 自动物理测试 ==========
+       ONE tap runs the whole SETUP gate + A1..A5 sequence. The control channel carries
+       CONTROL and TELEMETRY only — the payload path stays optical-only (NONE). -->
+  <view class="autobar">
+    <view class="abhead">
+      <text class="abtitle">AUTO PHYSICAL TEST / 自动物理测试</text>
+      <text class="{{autoConnected ? 'abok' : 'abbad'}}">{{autoStatusText}}</text>
+    </view>
+    <view class="abctl">
+      <input class="abinput" value="{{autoControlUrl}}" bindinput="onAutoControlUrl" placeholder="wss://…/lab" />
+      <input class="abinput abtoken" value="{{autoControlToken}}" bindinput="onAutoControlToken" placeholder="token (optional)" />
+    </view>
+    <view class="abmain">
+      <view class="abstart" bindtap="onAutoTest">Start Auto Test / 开始自动测试</view>
+      <view class="abstop" bindtap="onAutoTestStop">Stop / 停止</view>
+    </view>
+    <view class="abrow"><text class="abk">AUTO TEST</text><text class="abv">{{autoStepLabel}}</text></view>
+    <view class="abgrid">
+      <view class="abcell"><text class="abck">Step</text><text class="abcv">{{autoStepIndex}} / {{autoStepCount}}</text></view>
+      <view class="abcell"><text class="abck">holdMs</text><text class="abcv">{{autoStepHoldMs}}</text></view>
+      <view class="abcell"><text class="abck">remaining</text><text class="abcv">{{autoRemainingS}} s</text></view>
+      <view class="abcell"><text class="abck">paused</text><text class="abcv">{{autoPaused ? 'YES' : 'no'}}</text></view>
+      <view class="abcell"><text class="abck">decode ok</text><text class="abcv">{{baselineDecodeSuccess}}</text></view>
+      <view class="abcell"><text class="abck">CRC fail</text><text class="abcv">{{baselineCrcFailures}}</text></view>
+      <view class="abcell"><text class="abck">code px</text><text class="abcv">{{baselineCodeWidth}}</text></view>
+      <view class="abcell"><text class="abck">px/cell</text><text class="abcv">{{baselinePixPerCell}}</text></view>
+      <view class="abcell"><text class="abck">reserved</text><text class="abcv">{{baselineReservedScore}}</text></view>
+      <view class="abcell"><text class="abck">frozen</text><text class="abcv">{{autoFrozenSteps}} / {{autoPlanSteps}}</text></view>
+    </view>
+    <view class="abrow"><text class="abk">sender</text><text class="abv">{{autoSenderConnected ? 'CONTROL ONLINE' : 'waiting for PC sender'}}</text></view>
+    <view class="abrow"><text class="abk">setup gate</text><text class="abv">{{autoSetupLabel}}</text></view>
+    <view class="abrow"><text class="abk">setup notes</text><text class="abv">{{autoSetupReasons}}</text></view>
+    <view class="abrow"><text class="abk">last frozen</text><text class="abv">{{autoLastFrozenStep}}</text></view>
+    <view class="abrow"><text class="abk">final</text><text class="abv">{{autoFinalStatus}}</text></view>
+    <view class="abcopy" bindtap="copyAutoFinalResult">Copy final auto JSON / 复制最终 JSON</view>
+  </view>
+
   <view class="holdbar">
     <view class="hbhead">
       <text class="hbtitle">Sender holdMs declaration / 发送端每码停留声明</text>

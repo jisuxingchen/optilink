@@ -47,6 +47,25 @@ try {
   opticalCoreLoadError = String(err && err.message ? err.message : err);
 }
 
+// TF-012 r13 auto physical test adapter (control channel + orchestrator glue).
+// Same guarded-load discipline: a failure here must be visible, not silent.
+let autoHarness = null;
+let autoHarnessLoadError = '';
+try {
+  autoHarness = require('../../utils/tf012-auto.js');
+} catch (err) {
+  autoHarnessLoadError = String(err && err.message ? err.message : err);
+}
+const createAutoTestRunner = autoHarness && typeof autoHarness.createAutoTestRunner === 'function'
+  ? autoHarness.createAutoTestRunner
+  : null;
+
+// TF-012 r13: the number of planned auto-test steps, read from the SHARED plan so the
+// phone cannot disagree with the orchestrator about how long the run is.
+const TF012_AUTO_STEP_COUNT = (opticalCore && Number.isFinite(opticalCore.TF012_AUTO_STEP_COUNT))
+  ? opticalCore.TF012_AUTO_STEP_COUNT
+  : 5;
+
 // Unmistakable build identifier — must be visible on the phone to prove the
 // device is running the latest shared-receive package (not a stale cache).
 const BUILD_ID = 'tf012-r11-871a198';
@@ -320,6 +339,29 @@ Page({
     showDiagnostics: false,
     historyMax: HISTORY_MAX,
     historyCount: 0,
+    // TF-012 r13 AUTO PHYSICAL TEST state (one-tap run).
+    autoControlUrl: '',
+    autoControlToken: '',
+    autoConnected: false,
+    autoRunning: false,
+    autoPhase: 'IDLE',
+    autoStatusText: 'IDLE / 未开始',
+    autoStepLabel: '—',
+    autoStepIndex: 0,
+    autoStepCount: TF012_AUTO_STEP_COUNT,
+    autoRemainingS: 0,
+    autoStepHoldMs: '—',
+    autoPaused: false,
+    autoSenderConnected: false,
+    autoFrozenSteps: 0,
+    autoLastFrozenStep: '—',
+    autoFinalStatus: '—',
+    autoFinalJson: '',
+    autoSetupLabel: '—',
+    autoSetupReasons: '—',
+    holdMsDeclarationLocked: false,
+    autoHarnessError: autoHarnessLoadError,
+    autoPlanSteps: TF012_AUTO_STEP_COUNT,
     lastFreezeAt: '—',
     historyShaResult: '—',
     historyShaClass: 'pending',
@@ -1069,6 +1111,200 @@ Page({
     this.windowStartAt = Date.now();
     this.windowReceived = 0;
     this.windowProcessed = 0;
+
+    // TF-012 r13: refresh the one-tap auto-test panel from the shared orchestrator.
+    this.autoTick();
+  },
+
+  // ---- TF-012 r13 AUTO PHYSICAL TEST / 自动物理测试 ----------------------
+  //
+  // The PO's physical actions per build reduce to: compile → open on the phone →
+  // fix the phone position → tap ONE button. Everything else (setup gate, A1..A5,
+  // holdMs on both sides, pause split, per-step frozen results, final JSON) is
+  // driven by the SHARED orchestrator in utils/optical-core.js.
+  //
+  // The control channel carries CONTROL and TELEMETRY only. The optical display →
+  // phone camera remains the ONLY payload path: networkPayloadPath stays NONE and
+  // every outbound message is validated against the shared schema first.
+
+  /** Live LOCAL optical-receiver evidence, in the orchestrator's sample shape. */
+  autoStepReceiverSample() {
+    const receiver = this.baselineReceiver;
+    const metrics = receiver ? receiver.metrics : null;
+    const activeStats = this.baselineActiveStats();
+    const elapsed = Math.max(1, Date.now() - this.windowStartAt) / 1000;
+    return {
+      observedCodeWidthPx: metrics && Number.isFinite(metrics.codeWidthPx) ? metrics.codeWidthPx : null,
+      pixelsPerCellX: metrics && Number.isFinite(metrics.pixPerCellX) ? metrics.pixPerCellX : null,
+      pixelsPerCellY: metrics && Number.isFinite(metrics.pixPerCellY) ? metrics.pixPerCellY : null,
+      reservedPatternScore: metrics && Number.isFinite(metrics.reservedScore) ? metrics.reservedScore : null,
+      contrast: metrics && Number.isFinite(metrics.contrast) ? metrics.contrast : null,
+      frameRotationIndex: metrics && Number.isFinite(metrics.rotation) ? metrics.rotation : null,
+      callbackFps: this.windowReceived > 0 ? this.windowReceived / elapsed : null,
+      processingFps: this.windowProcessed > 0 ? this.windowProcessed / elapsed : null,
+      activeProcessAvgMs: Number.isFinite(activeStats.avg) ? activeStats.avg : null,
+      activeProcessP95Ms: Number.isFinite(activeStats.p95) ? activeStats.p95 : null,
+      cameraFrames: this.baselineFramesReceived,
+      decodeAttempts: metrics ? metrics.decodeAttempts : 0,
+      successfulDecodes: metrics ? metrics.decodeSuccess : 0,
+      crcFailures: metrics ? metrics.crcFailures : 0,
+      locateFailures: metrics ? metrics.locateFailures : 0,
+      uniqueReceived: receiver ? receiver.receivedUniqueCount : 0,
+      decodedChunkIndexes: receiver && typeof receiver.receivedIndices === 'function'
+        ? receiver.receivedIndices().slice(0, 64)
+        : []
+    };
+  },
+
+  /** Reset the LOCAL receiver metrics at a step boundary (never touches history). */
+  autoResetMetrics() {
+    this.resetMetrics();
+  },
+
+  /** One tap: connect the control channel and run the automated sequence. */
+  onAutoTest() {
+    if (this.autoRunner && this.autoRunner.isRunning()) {
+      wx.showToast({title: 'Auto test already running / 自动测试进行中', icon: 'none'});
+      return;
+    }
+    const url = this.data.autoControlUrl;
+    if (!createAutoTestRunner) {
+      this.setData({autoStatusText: 'AUTO HARNESS UNAVAILABLE / 自动测试模块未加载'});
+      wx.showToast({title: 'Auto harness unavailable: ' + autoHarnessLoadError, icon: 'none'});
+      return;
+    }
+    if (!url) {
+      this.setData({autoStatusText: 'CONTROL URL MISSING / 缺少控制地址'});
+      wx.showToast({title: 'Set the control channel URL first / 请先填写控制地址', icon: 'none'});
+      return;
+    }
+    const runner = createAutoTestRunner({
+      url,
+      token: this.data.autoControlToken || '',
+      buildId: this.data.buildId,
+      device: this.data.deviceLabel || null,
+      receiverSample: () => this.autoStepReceiverSample(),
+      resetReceiverMetrics: () => this.autoResetMetrics(),
+      setDeclaredHoldMs: (holdMs) => {
+        // The phone declaration follows the ACTIVE STEP automatically. Static steps
+        // declare no hold time; the sender is told the same thing by the orchestrator.
+        if (typeof holdMs === 'number') this.applyHoldMs(holdMs);
+        this.setData({
+          holdMsDeclarationLocked: typeof holdMs === 'number',
+          holdMsDeclared: typeof holdMs === 'number' ? holdMs : this.data.holdMsDeclared
+        });
+      },
+      onProgress: (progress) => this.setData(this.autoProgressPatch(progress)),
+      onStepResult: (result) => this.onAutoStepResult(result),
+      onRunResult: (result) => this.onAutoRunResult(result),
+      onLog: (text) => this.appendLog('auto: ' + text),
+      onStatus: (status) => this.setData({autoConnected: status.connected, autoStatusText: status.connected
+        ? 'CONTROL ONLINE / 控制通道已连接'
+        : 'CONTROL OFFLINE / 控制通道未连接'})
+    });
+    this.autoRunner = runner;
+    this.autoResults = [];
+    runner.connect();
+    runner.start();
+    this.appendLog('AUTO TEST started / 自动测试已开始');
+  },
+
+  onAutoTestStop() {
+    if (this.autoRunner) this.autoRunner.abort('STOPPED_BY_PO');
+    this.setData({autoRunning: false, autoStatusText: 'STOPPED / 已停止'});
+  },
+
+  onAutoControlUrl(event) {
+    const value = (event.detail && event.detail.value) || '';
+    storageAdapter.save('optilink.tf012.autoControlUrl', value);
+    this.setData({autoControlUrl: value});
+  },
+
+  onAutoControlToken(event) {
+    const value = (event.detail && event.detail.value) || '';
+    storageAdapter.save('optilink.tf012.autoControlToken', value);
+    this.setData({autoControlToken: value});
+  },
+
+  autoProgressPatch(progress) {
+    return {
+      autoRunning: progress.phase === 'SETUP' || progress.phase === 'STEP',
+      autoPhase: progress.phase,
+      autoStepLabel: progress.label,
+      autoStepIndex: progress.stepIndex,
+      autoStepCount: progress.stepCount,
+      autoRemainingS: Math.ceil(progress.remainingMs / 1000),
+      autoStepHoldMs: progress.holdMs == null ? 'static' : progress.holdMs + ' ms',
+      autoPaused: progress.paused,
+      autoSenderConnected: progress.senderConnected,
+      autoStatusText: progress.senderConnected
+        ? (progress.phase === 'DONE' ? 'COMPLETE / 完成' : 'RUNNING / 运行中')
+        : 'WAITING FOR SENDER / 等待发送端'
+    };
+  },
+
+  /** One immutable frozen result per step; earlier steps are never overwritten. */
+  onAutoStepResult(result) {
+    if (!Array.isArray(this.autoResults)) this.autoResults = [];
+    this.autoResults.push(result);
+    // Also append to the local history so the PO can Copy All without waiting for
+    // the run to finish. History is bounded and local: no network path is added.
+    const text = JSON.stringify(result, null, 2);
+    const entry = this.buildHistoryEntry(result, text, new Date().toLocaleString());
+    entry.autoStepId = result.stepId;
+    this.testHistory.push(entry);
+    while (this.testHistory.length > HISTORY_MAX) this.testHistory.shift();
+    this.persistHistory();
+    this.setData(Object.assign({
+      autoFrozenSteps: this.autoResults.length,
+      autoLastFrozenStep: result.stepId,
+      frozenResult: text
+    }, this.historySummaryPatch()));
+    this.appendLog('AUTO step frozen: ' + result.stepId + ' (' + this.autoResults.length + '/'
+      + TF012_AUTO_STEP_COUNT + ')');
+  },
+
+  onAutoRunResult(result) {
+    const text = JSON.stringify(result, null, 2);
+    this.autoFinalResult = result;
+    this.setData({
+      autoRunning: false,
+      autoStatusText: result.status === 'COMPLETE' ? 'COMPLETE / 完成' : ('ABORTED: ' + result.status),
+      autoFinalJson: text,
+      autoFinalStatus: result.status,
+      autoSetupLabel: result.setupGate ? result.setupGate.label : '—',
+      autoSetupReasons: result.setupGate && result.setupGate.reasons.length
+        ? result.setupGate.reasons.join('; ')
+        : 'none'
+    });
+    if (result.status === 'SETUP_NOT_READY') {
+      wx.showModal({
+        title: 'SETUP NOT READY / 取景条件未就绪',
+        content: 'observedCodeWidthPx=' + this.autoStepReceiverSample().observedCodeWidthPx
+          + '\npixelsPerCell=' + this.autoStepReceiverSample().pixelsPerCellX
+          + '\nreservedPatternScore=' + this.autoStepReceiverSample().reservedPatternScore
+          + '\ncontrast=' + this.autoStepReceiverSample().contrast
+          + '\nsuccessfulDecodes=' + this.autoStepReceiverSample().successfulDecodes
+          + '\ncrcFailures=' + this.autoStepReceiverSample().crcFailures
+          + '\nlocateFailures=' + this.autoStepReceiverSample().locateFailures,
+        showCancel: false
+      });
+    }
+    this.appendLog('AUTO TEST finished: ' + result.status + ' (' + result.stepsCompleted + '/'
+      + result.stepsPlanned + ')' );
+  },
+
+  autoTick() {
+    if (!this.autoRunner || !this.autoRunner.isRunning()) return;
+    this.setData(Object.assign({
+      autoConnected: this.autoRunner.status().connected,
+      autoFrozenSteps: Array.isArray(this.autoResults) ? this.autoResults.length : 0
+    }, this.buildKeyStatusPatch()));
+  },
+
+  copyAutoFinalResult() {
+    if (!this.data.autoFinalJson) return;
+    this.copyToClipboard(this.data.autoFinalJson, 'Auto test JSON copied / 已复制');
   },
 
   onBenchmarkTick() {

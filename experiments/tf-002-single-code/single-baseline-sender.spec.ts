@@ -33,6 +33,7 @@ type SenderState = {
   hintHidden?: boolean;
   pillHidden?: boolean;
   pillFits?: boolean;
+  paused?: boolean;
   opticalFullscreen?: boolean;
   canvasDevicePx?: number;
   cellPixels?: number;
@@ -833,6 +834,183 @@ test('r12 equivalence: the carrier stays stable for the whole hold period', asyn
 
   expect(result.cursors.length, 'the hold window must cover at least one chunk').toBeGreaterThanOrEqual(1);
   expect(result.unstable, 'the canvas must not change while a chunk is held').toEqual([]);
+});
+
+/**
+ * TF-012 r13 — PAUSE CURRENT FRAME.
+ *
+ * The A4 auto-test step asks whether decode success appears only once a cyclic frame
+ * is frozen. That question is only meaningful if pausing leaves the optical frame
+ * EXACTLY as it was: same pixels, same cursor, same chunk, sender still "on air" so
+ * the phone keeps decoding. These tests drive the pause through the same control
+ * message path the orchestrator uses (`__SINGLE_BASELINE_SENDER__.applyAutoMessage`).
+ */
+async function canvasBytes(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const canvas = document.getElementById('codeCanvas') as HTMLCanvasElement;
+    const context = canvas.getContext('2d') as CanvasRenderingContext2D;
+    const image = context.getImageData(0, 0, canvas.width, canvas.height);
+    let hash = 0x811c9dc5;
+    for (let index = 0; index < image.data.length; index += 3) {
+      hash ^= image.data[index];
+      hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    let nonWhite = 0;
+    for (let index = 0; index < image.data.length; index += 4) {
+      if (image.data[index] < 128) nonWhite += 1;
+    }
+    return `${hash.toString(16)}:${nonWhite}`;
+  });
+}
+
+async function applyControl(page: Page, message: Record<string, unknown>): Promise<string> {
+  return page.evaluate((payload: string) => (window as unknown as {
+    __SINGLE_BASELINE_SENDER__: {applyAutoMessage: (value: unknown) => string};
+  }).__SINGLE_BASELINE_SENDER__.applyAutoMessage(JSON.parse(payload)), JSON.stringify(message));
+}
+
+test('r13 pause: PAUSE CURRENT FRAME does not alter a single canvas pixel', async ({page}) => {
+  await page.setViewportSize({width: 1920, height: 1080});
+  await page.goto('/single-baseline.html?holdMs=1000');
+  await page.waitForFunction(() => (document.getElementById('codeCanvas') as HTMLCanvasElement).width > 0);
+
+  await page.locator('#startButton').click();
+  await page.waitForTimeout(400);
+
+  const before = await canvasBytes(page);
+  const beforeState = await state(page);
+  expect(beforeState.broadcasting).toBe(true);
+  expect(beforeState.paused).toBe(false);
+
+  expect(await applyControl(page, {
+    type: 'command', action: 'PAUSE', runId: 'r-test', stepId: 'A4', chunkIndex: beforeState.cursor,
+  })).toBe('pause');
+
+  // Sample repeatedly across the whole freeze window: every frame must be identical.
+  const hashes: string[] = [before];
+  for (let index = 0; index < 6; index += 1) {
+    await page.waitForTimeout(200);
+    hashes.push(await canvasBytes(page));
+  }
+  expect(new Set(hashes).size, 'the canvas must not change at all while paused').toBe(1);
+
+  // The frame is still on screen and still being broadcast — NOT stopped.
+  const pausedState = await state(page);
+  expect(pausedState.paused).toBe(true);
+  expect(pausedState.broadcasting, 'pause must not stop the broadcast').toBe(true);
+  expect(pausedState.canvasDevicePx).toBe(beforeState.canvasDevicePx);
+  expect(pausedState.holdMs, 'pause must not change the declared hold time').toBe(beforeState.holdMs);
+  expect(hashes[0].split(':')[1], 'the frozen frame must not be blank').not.toBe('0');
+  await expect(page.locator('#statusText')).toHaveText('Paused / 已暂停');
+});
+
+test('r13 pause: the cursor does not advance while paused, and RESUME continues it', async ({page}) => {
+  await page.setViewportSize({width: 1920, height: 1080});
+  await page.goto('/single-baseline.html?holdMs=1000');
+  await page.waitForFunction(() => (document.getElementById('codeCanvas') as HTMLCanvasElement).width > 0);
+  await page.locator('#startButton').click();
+  await page.waitForTimeout(300);
+
+  const started = await state(page);
+  await applyControl(page, {type: 'command', action: 'PAUSE', runId: 'r-test', stepId: 'A4', chunkIndex: started.cursor});
+
+  const frozenCursor = (await state(page)).cursor;
+  const frozenCycle = (await state(page)).cycleCount;
+  const frozenHash = await canvasBytes(page);
+  // Far longer than one hold period: if the timer were still live the cursor would
+  // have advanced several times by now.
+  await page.waitForTimeout(2500);
+  const stillFrozen = await state(page);
+  expect(stillFrozen.cursor, 'the cursor must not advance while paused').toBe(frozenCursor);
+  expect(stillFrozen.cycleCount, 'the cycle counter must not advance while paused').toBe(frozenCycle);
+  expect(await canvasBytes(page)).toBe(frozenHash);
+
+  // The receiver keeps its target: the frame is pinned, so a RESUME must continue
+  // from the SAME cursor rather than restarting the cycle.
+  expect(await applyControl(page, {type: 'command', action: 'RESUME', runId: 'r-test', stepId: 'A4'})).toBe('resume');
+  await page.waitForTimeout(1200);
+  const resumed = await state(page);
+  expect(resumed.paused).toBe(false);
+  expect(resumed.cycleCount, 'resume continues the same cycle').toBe(frozenCycle);
+  expect(resumed.cursor, 'the cursor advances again after RESUME').not.toBe(frozenCursor);
+  expect(await canvasBytes(page)).not.toBe(frozenHash);
+});
+
+test('r13 pause: a paused sender still reports itself as on air', async ({page}) => {
+  await page.setViewportSize({width: 1920, height: 1080});
+  await page.goto('/single-baseline.html?holdMs=1000');
+  await page.waitForFunction(() => (document.getElementById('codeCanvas') as HTMLCanvasElement).width > 0);
+  await page.locator('#startButton').click();
+  await applyControl(page, {type: 'command', action: 'PAUSE', runId: 'r-test', stepId: 'A4', chunkIndex: 0});
+
+  // Telemetry is what the orchestrator records for the duringPause block, so it must
+  // carry the paused flag, the frozen cursor and the canvas digest.
+  const sample = await page.evaluate(() => (window as unknown as {
+    __SINGLE_BASELINE_SENDER__: {autoSample: () => Record<string, unknown>};
+  }).__SINGLE_BASELINE_SENDER__.autoSample());
+  expect(sample.paused).toBe(true);
+  expect(sample.broadcasting).toBe(true);
+  expect(typeof sample.canvasHash).toBe('string');
+  expect((sample.canvasHash as string).length).toBeGreaterThan(0);
+  const clientStatus = await page.evaluate(() => (window as unknown as {
+    __SINGLE_BASELINE_SENDER__: {state: () => Record<string, unknown>};
+  }).__SINGLE_BASELINE_SENDER__.state());
+  expect(clientStatus.pillHidden, 'the code is on air, so the control strip stays available').toBe(false);
+});
+
+test('r13 control channel: the page rejects payload-shaped control messages', async ({page}) => {
+  await page.setViewportSize({width: 1920, height: 1080});
+  await page.goto('/single-baseline.html?holdMs=1000');
+  await page.waitForFunction(() => (document.getElementById('codeCanvas') as HTMLCanvasElement).width > 0);
+
+  expect(await applyControl(page, {type: 'command', action: 'SET_HOLD_MS', holdMs: 5000, fileBytes: 'AA'}))
+    .toBe('rejected:field fileBytes is not allowed on SET_HOLD_MS');
+  expect(await applyControl(page, {type: 'command', action: 'START', chunkPayload: 'AAEC'}))
+    .toBe('rejected:field chunkPayload is not allowed on START');
+  expect(await applyControl(page, {type: 'command', action: 'START', expectedDecodedChunk: 0}))
+    .toBe('rejected:field expectedDecodedChunk is not allowed on START');
+  expect(await applyControl(page, {type: 'command', action: 'SEND_FILE'}))
+    .toBe('rejected:unknown action SEND_FILE');
+  // A legal receiver-metrics message (measurements only, payloadPath NONE) is accepted.
+  expect(await applyControl(page, {
+    type: 'command', action: 'RECEIVER_METRICS', runId: 'r1', stepId: 'A3', phase: 'STEP',
+    payloadPath: 'NONE', successfulDecodes: 0, crcFailures: 209,
+  })).toBe('receiver_metrics');
+});
+
+test('r13 auto test: the sender applies the orchestrator command sequence', async ({page}) => {
+  await page.setViewportSize({width: 1920, height: 1080});
+  await page.goto('/single-baseline.html?holdMs=1000');
+  await page.waitForFunction(() => (document.getElementById('codeCanvas') as HTMLCanvasElement).width > 0);
+
+  // Exactly the messages the A1..A5 orchestrator emits, in order.
+  const script: Array<Record<string, unknown>> = [
+    {type: 'command', action: 'SET_MODE', runId: 'r1', stepId: 'A1', mode: 'static', chunkIndex: 0},
+    {type: 'command', action: 'START', runId: 'r1', stepId: 'A1'},
+  ];
+  for (const message of script) expect(await applyControl(page, message)).not.toMatch(/^rejected:/);
+  let current = await state(page);
+  expect(current.diagnosticMode, 'A1 is the static diagnostic step').toBe(true);
+  expect(current.broadcasting).toBe(true);
+  expect(current.cursor).toBe(0);
+
+  await applyControl(page, {type: 'command', action: 'SET_MODE', runId: 'r1', stepId: 'A2', mode: 'cyclic', chunkIndex: null});
+  await applyControl(page, {type: 'command', action: 'SET_HOLD_MS', runId: 'r1', stepId: 'A2', holdMs: 5000});
+  await applyControl(page, {type: 'command', action: 'START', runId: 'r1', stepId: 'A2'});
+  current = await state(page);
+  expect(current.diagnosticMode, 'A2 is cyclic').toBe(false);
+  expect(current.holdMs, 'the sender hold time follows the active step').toBe(5000);
+  expect(current.broadcasting).toBe(true);
+  await expect(page.locator('#holdMsSelect')).toHaveValue('5000');
+  await expect(page.locator('#holdTime')).toHaveText('5000 ms');
+
+  await applyControl(page, {type: 'command', action: 'SET_HOLD_MS', runId: 'r1', stepId: 'A3', holdMs: 1000});
+  expect((await state(page)).holdMs).toBe(1000);
+
+  await applyControl(page, {type: 'command', action: 'STOP', runId: 'r1'});
+  const stopped = await state(page);
+  expect(stopped.broadcasting).toBe(false);
+  expect(stopped.paused).toBe(false);
 });
 
 test('r11 layout: the long file table is collapsed, and the rendered size readout is honest', async ({page}) => {

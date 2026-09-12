@@ -37,6 +37,8 @@ import {
   clampSingleBaselineHoldMs,
   singleBaselineBenchmark,
 } from './optical-core/single-baseline.ts';
+import {validateTf012AutoControlMessage} from './optical-core/tf012-auto-plan.ts';
+import {createTf012AutoSenderClient} from './tf012-auto-sender-client.ts';
 
 const params = new URLSearchParams(location.search);
 // Speed ladder: 1500 … 33 ms. Values outside the ladder are still honoured
@@ -122,11 +124,26 @@ function parseHeldChunk(raw: string | null): number | null {
 }
 
 const heldChunk = parseHeldChunk(params.get('diagnostic'));
-const diagnosticMode = heldChunk !== null;
+// r13: the auto-test orchestrator switches modes at runtime, so this is mutable.
+let diagnosticMode = heldChunk !== null;
 
 let cursor = 0;
 let cycleCount = 0;
 let broadcasting = false;
+/**
+ * r13 PAUSE CURRENT FRAME.
+ *
+ * Pausing stops FUTURE cursor advancement only. It must never clear or redraw the
+ * canvas, never reset the cursor and never change the payload/frame: the phone keeps
+ * decoding the very same optical frame it was decoding a moment ago. This is what
+ * makes it possible to ask "does decode success appear only after freezing a cyclic
+ * frame?". It is explicitly NOT Stop.
+ */
+let paused = false;
+let pausedAt: number | null = null;
+let resumedAt: number | null = null;
+/** The chunk index that static mode holds; A4 freezes this same index. */
+let heldChunkIndex = heldChunk ?? 0;
 let timer: number | null = null;
 let cellPixels = 10;
 
@@ -209,21 +226,23 @@ function drawChunk(chunkIndex: number): void {
 }
 
 function updateReadout(): void {
-  const current = diagnosticMode ? (heldChunk as number) : cursor % transfer.totalChunks;
+  const current = diagnosticMode ? heldChunkIndex : cursor % transfer.totalChunks;
   currentChunkCell.textContent = `${current} / ${transfer.totalChunks - 1}`;
   cycleCountCell.textContent = String(cycleCount);
-  const label = diagnosticMode
-    ? (broadcasting ? 'Holding / 固定中' : 'Stopped / 已停止')
-    : (broadcasting ? 'Broadcasting / 广播中' : 'Stopped / 已停止');
+  const label = paused
+    ? 'Paused / 已暂停'
+    : diagnosticMode
+      ? (broadcasting ? 'Holding / 固定中' : 'Stopped / 已停止')
+      : (broadcasting ? 'Broadcasting / 广播中' : 'Stopped / 已停止');
   statusTextCell.textContent = label;
   broadcastStatus.textContent = label;
-  broadcastStatus.className = broadcasting ? 'live' : 'stopped';
+  broadcastStatus.className = broadcasting && !paused ? 'live' : 'stopped';
   pillStatus.textContent = label;
   pillHold.textContent = diagnosticMode ? 'diagnostic' : `${holdMs} ms`;
 }
 
 function renderCurrent(): void {
-  drawChunk(diagnosticMode ? (heldChunk as number) : cursor % transfer.totalChunks);
+  drawChunk(diagnosticMode ? heldChunkIndex : cursor % transfer.totalChunks);
   updateReadout();
 }
 
@@ -272,6 +291,8 @@ function toggleOpticalFullscreen(force?: boolean): void {
 
 function stopBroadcast(): void {
   broadcasting = false;
+  paused = false;
+  pausedAt = null;
   if (timer !== null) {
     window.clearInterval(timer);
     timer = null;
@@ -359,6 +380,24 @@ function setHoldNote(text: string, warn: boolean): void {
 }
 
 /**
+ * r13: the auto-test plan holds frames far longer than the manual ladder (A2 = 5000 ms),
+ * so the dropdown gains a transient option for the active value. Without this the select
+ * would silently show "no selection" while the sender was really holding 5000 ms — the
+ * control would lie about the state.
+ */
+const AUTO_HOLD_OPTION_ID = 'autoHoldMsOption';
+function syncHoldMsOption(value: number): void {
+  document.getElementById(AUTO_HOLD_OPTION_ID)?.remove();
+  const existing = Array.from(holdMsSelect.options).some((option) => option.value === String(value));
+  if (existing) return;
+  const option = document.createElement('option');
+  option.id = AUTO_HOLD_OPTION_ID;
+  option.value = String(value);
+  option.textContent = `AUTO TEST ${value} ms / 自动测试`;
+  holdMsSelect.appendChild(option);
+}
+
+/**
  * Apply a new hold time. Called from the dropdown, the harness and ?holdMs=.
  * Returns the value actually applied (clamped).
  */
@@ -371,6 +410,7 @@ function applyHoldMs(next: number): number {
   }
   holdMs = applied;
   benchmark = singleBaselineBenchmark(holdMs);
+  syncHoldMsOption(holdMs);
   holdMsSelect.value = String(holdMs);
   syncHoldMsUrl(holdMs);
   renderHoldReadout();
@@ -408,14 +448,60 @@ function startBroadcast(): void {
   // sidebar itself stays — it is a separate column and cannot cover the carrier.
   applyOverlayVisibility();
   if (diagnosticMode) {
-    // Static diagnostic mode: ONE known chunk, held indefinitely, no timer.
-    cursor = heldChunk as number;
+    // Static mode: ONE known chunk, held indefinitely, no timer.
+    cursor = heldChunkIndex;
     renderCurrent();
     return;
   }
   cursor = 0;
   renderCurrent();
   timer = window.setInterval(step, holdMs);
+}
+
+/**
+ * r13 PAUSE CURRENT FRAME. Stops future cursor advancement by clearing ONLY the
+ * timer: the canvas, the cursor, the chunk index, the payload and the frame are all
+ * left exactly as they are, so the phone can keep decoding the same optical frame.
+ * Explicitly NOT Stop — `broadcasting` stays true and the strip keeps reporting.
+ */
+function pauseCurrentFrame(): boolean {
+  if (!broadcasting || paused) return false;
+  if (timer !== null) {
+    window.clearInterval(timer);
+    timer = null;
+  }
+  paused = true;
+  pausedAt = Date.now();
+  resumedAt = null;
+  updateReadout();
+  return true;
+}
+
+/** Resume after PAUSE CURRENT FRAME: the cycle continues from the frozen cursor. */
+function resumeCurrentFrame(): boolean {
+  if (!broadcasting || !paused) return false;
+  paused = false;
+  resumedAt = Date.now();
+  if (!diagnosticMode) timer = window.setInterval(step, holdMs);
+  updateReadout();
+  return true;
+}
+
+/**
+ * r13: switch the sender between static (one held chunk) and cyclic at runtime, so
+ * the auto-test orchestrator can drive A1..A5 without the PO reloading the page.
+ */
+function applyAutoMode(mode: 'static' | 'cyclic', chunkIndex: number | null): void {
+  const wasBroadcasting = broadcasting;
+  stopBroadcast();
+  diagnosticMode = mode === 'static';
+  if (chunkIndex != null && Number.isFinite(chunkIndex)) {
+    const clamped = Math.min(transfer.totalChunks - 1, Math.max(0, Math.trunc(chunkIndex)));
+    heldChunkIndex = clamped;
+    cursor = clamped;
+  }
+  if (wasBroadcasting) startBroadcast();
+  else renderCurrent();
 }
 
 /** Stop button: freeze the current chunk on screen (the button state lives in stopBroadcast). */
@@ -484,6 +570,86 @@ updateReadout();
 layout();
 renderCurrent();
 
+// ---------------------------------------------------------------------------
+// r13 AUTO TEST surface
+// ---------------------------------------------------------------------------
+//
+// One control surface, used by the auto-test client below AND by the browser tests,
+// so the pause semantics are exercised through exactly the path the orchestrator uses.
+
+/** Cheap deterministic digest of the current carrier pixels (telemetry only). */
+function canvasHash(): string {
+  const image = context.getImageData(0, 0, canvas.width, canvas.height);
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < image.data.length; index += 977) {
+    hash ^= image.data[index];
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16);
+}
+
+const autoSurface = {
+  setMode: (mode: 'static' | 'cyclic', chunkIndex: number | null) => applyAutoMode(mode, chunkIndex),
+  setHoldMs: (value: number) => applyHoldMs(value),
+  start: startBroadcast,
+  pauseCurrentFrame,
+  resumeCurrentFrame,
+  stop: stopAndFreeze,
+  resetMetrics: () => { cycleCount = 0; },
+  sample: () => ({
+    mode: (diagnosticMode ? 'static' : 'cyclic') as 'static' | 'cyclic',
+    holdMs: diagnosticMode ? null : holdMs,
+    cursor: diagnosticMode ? heldChunkIndex : cursor,
+    paused,
+    broadcasting,
+    canvasDevicePx: canvas.width,
+    canvasHash: canvasHash(),
+    pausedAt,
+    resumedAt,
+  }),
+};
+
+const autoStatusCell = document.getElementById('autoStatus');
+const autoRunCell = document.getElementById('autoRun');
+const autoStepCell = document.getElementById('autoStep');
+const autoModeCell = document.getElementById('autoMode');
+const autoPausedCell = document.getElementById('autoPaused');
+
+function renderAutoPanel(): void {
+  if (!autoStatusCell) return;
+  const sample = autoSurface.sample();
+  const client = autoClient?.status();
+  const connected = Boolean(client?.connected);
+  autoStatusCell.textContent = client
+    ? (connected ? 'AUTO TEST CONTROL ONLINE / 控制通道已连接' : 'CONTROL CHANNEL OFFLINE / 控制通道未连接')
+    : 'AUTO TEST LOCAL / 本机自动测试（未连接控制通道）';
+  autoStatusCell.className = client ? (connected ? 'live' : 'stopped') : 'stopped';
+  if (autoRunCell) autoRunCell.textContent = client?.runId ?? '—';
+  if (autoStepCell) autoStepCell.textContent = client?.stepId ?? '—';
+  if (autoModeCell) autoModeCell.textContent = sample.mode === 'static'
+    ? 'STATIC chunk0'
+    : `CYCLIC ${sample.holdMs ?? '—'} ms`;
+  if (autoPausedCell) autoPausedCell.textContent = sample.paused ? 'YES / 已暂停' : 'no';
+}
+
+/** Start the lab control channel. `?lab=<wss url>` enables it; without it the page is
+ *  a purely local auto-test target (used by the browser tests). */
+function startAutoClient(url: string): void {
+  autoClient = createTf012AutoSenderClient({
+    surface: autoSurface,
+    url,
+    buildId: params.get('buildId'),
+    onStatus: () => renderAutoPanel(),
+  });
+  renderAutoPanel();
+}
+
+let autoClient: ReturnType<typeof createTf012AutoSenderClient> | null = null;
+const labUrl = params.get('lab');
+if (labUrl) startAutoClient(labUrl);
+renderAutoPanel();
+window.setInterval(renderAutoPanel, 500);
+
 // Harness / diagnostic surface (read-only intent): the PO can verify the exact
 // transfer identity and force a chunk for physical debugging.
 (window as unknown as Record<string, unknown>).__SINGLE_BASELINE_SENDER__ = {
@@ -512,10 +678,14 @@ renderCurrent();
   },
   state: () => ({
     broadcasting,
-    cursor: diagnosticMode ? (heldChunk as number) : cursor,
+    cursor: diagnosticMode ? heldChunkIndex : cursor,
     cycleCount,
     holdMs,
     diagnosticMode,
+    /** r13: Pause Current Frame state, reported so both ends agree. */
+    paused,
+    pausedAt,
+    resumedAt,
     benchmark: diagnosticMode ? null : benchmark,
     stageBLadder: SINGLE_BASELINE_STAGE_B_LADDER.slice(),
     selectValue: holdMsSelect.value,
@@ -540,6 +710,33 @@ renderCurrent();
   relayout: () => layout(),
   start: startBroadcast,
   stop: stopAndFreeze,
+  // r13 auto-test surface (same code path the orchestrator drives).
+  auto: autoSurface,
+  autoSample: () => autoSurface.sample(),
+  applyAutoMessage: (message: unknown) => {
+    if (autoClient) return autoClient.apply(message);
+    // Without a connected lab the test harness still applies messages through the
+    // identical validator, so control-plane behaviour is testable in isolation.
+    const check = validateTf012AutoControlMessage(message);
+    if (!check.ok) return 'rejected:' + check.reason;
+    const command = message as {action?: string; mode?: string; chunkIndex?: number | null; holdMs?: number};
+    switch (command.action) {
+      case 'SET_MODE':
+        autoSurface.setMode(command.mode as 'static' | 'cyclic', command.chunkIndex ?? null);
+        break;
+      case 'SET_HOLD_MS':
+        autoSurface.setHoldMs(Number(command.holdMs));
+        break;
+      case 'START': autoSurface.start(); break;
+      case 'PAUSE': autoSurface.pauseCurrentFrame(); break;
+      case 'RESUME': autoSurface.resumeCurrentFrame(); break;
+      case 'STOP': autoSurface.stop(); break;
+      case 'RESET_METRICS': autoSurface.resetMetrics(); break;
+      default: break;
+    }
+    return String(command.action).toLowerCase();
+  },
+  canvasHash,
   showChunk: (index: number) => {
     cursor = ((index % transfer.totalChunks) + transfer.totalChunks) % transfer.totalChunks;
     renderCurrent();

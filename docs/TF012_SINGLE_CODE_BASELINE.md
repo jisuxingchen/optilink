@@ -367,6 +367,97 @@ Every field is `null` when its denominator is 0. A run with no decode attempts h
 `null` (0/0 is undefined), **not** 0 %. These metrics are diagnostic: they rank
 PASSing points and **never decide PASS**.
 
+## r13 AUTO PHYSICAL TEST HARNESS / 自动物理测试编排器
+
+**Goal:** the PO's per-build physical actions reduce to — compile the Mini Program →
+open it on the phone → fix the phone position → **tap ONE button**
+`Start Auto Test / 开始自动测试`. Everything after that is automatic.
+
+### Architecture
+
+```
+phone (orchestrator + receiver)                 PC (sender)
+  utils/optical-core.js                          src/single-baseline-sender-main.ts
+    tf012-auto-plan.ts        ── plan + schema ──   tf012-auto-plan.ts (same file)
+    tf012-auto-orchestrator.ts (deterministic)      src/tf012-auto-sender-client.ts
+  utils/tf012-auto.js (wx.connectSocket glue)            │
+        │                                                │
+        └──────── wss://<lab>/lab  (control + telemetry) ─┘
+                     lab-server.mjs  +  tf012-auto-policy.mjs
+```
+
+The **plan, the strict schema and the orchestrator are shared code** in the
+platform-neutral bundle, so the phone and the sender read the *same* step definition —
+they cannot drift apart on `holdMs` or step order. The phone runs the orchestrator; the
+sender executes commands and reports telemetry.
+
+### Control channel — CONTROL and TELEMETRY only
+
+* `networkPayloadPath` stays **NONE**; the optical display → phone camera remains the
+  ONLY payload path.
+* Every message is flat, fully enumerated and validated by ONE function
+  (`validateTf012AutoControlMessage`): an **exact-key allowlist per action**, no nested
+  objects, flat bounded arrays, a string-length budget, and rejection of hex/base64 blob
+  shapes. The **lab relay applies the same validator** (`tf012-auto-policy.mjs` imports
+  the same module) plus a **direction rule**: the sender may only emit
+  `HELLO`/`TELEMETRY`, the receiver may only emit control + metrics. A `lab-result`
+  publish is additionally scanned for payload-shaped keys before it is persisted.
+* Actions: `HELLO`, `SET_MODE`, `SET_HOLD_MS`, `START`, `PAUSE`, `RESUME`, `STOP`,
+  `RESET_METRICS`, `STEP_COMPLETE`, `RUN_COMPLETE`, `RUN_ABORTED`, `TELEMETRY`,
+  `RECEIVER_METRICS`.
+
+### Plan (planVersion `tf012-auto-v1`)
+
+| Step | Mode | holdMs | Duration | Purpose |
+| --- | --- | --- | --- | --- |
+| SETUP | static chunk0 | — | 5 s | evidence gate; aborts the run if unusable |
+| A1 | static chunk0 | — | 10 s | static reference |
+| A2 | cyclic | 5000 | 25 s | slow cyclic |
+| A3 | cyclic | 1000 | 25 s | the hold time that produced 0/209 decodes |
+| A4 | cyclic | 1000 | 15 s | 5 s cyclic → **PAUSE CURRENT FRAME** → 10 s frozen |
+| A5 | static chunk0 | — | 10 s | drift control |
+
+### SETUP GATE — evidence-based, no hard px/cell threshold
+
+Not ready unless: ≥ 1 valid decode, the locator locked at least once, the reserved
+pattern score ≥ 0.55, and the observed code width ≥ 120 px. **2.99 px/cell with a valid
+decode passes** — the existing physical evidence proves it decodes, so a 4 px/cell rule
+would wrongly reject a working setup. On failure the run stops before A1, sends `STOP`,
+and shows `SETUP NOT READY / 取景条件未就绪` with `observedCodeWidthPx`,
+`pixelsPerCell`, `reservedPatternScore`, `contrast`, `successfulDecodes`, `crcFailures`
+and `locateFailures`.
+
+### PAUSE CURRENT FRAME (r13) — not Stop
+
+`pauseCurrentFrame()` clears **only** the interval: the canvas is not cleared, not
+redrawn, the cursor and chunk index are unchanged, the payload/frame is identical, and
+`broadcasting` stays true so the strip still reports. The phone keeps decoding the very
+same optical frame. `resumeCurrentFrame()` continues from the frozen cursor (the cycle
+does not restart). A4 splits its metrics into **`beforePause`** and **`duringPause`** so
+the run answers "does decode success appear only after freezing a cyclic frame?".
+
+### Result shape
+
+Each step freezes ONE immutable result (`Object.freeze`, append-only, never
+overwritten) into the phone's bounded history *and* into the run; A4 additionally
+carries `beforePause`/`duringPause`. The final JSON is
+`{runId, buildId, planVersion, device, startedAtIso, finishedAtIso, status, setupGate,
+steps[], stepsCompleted, stepsPlanned, networkPayloadPath: 'NONE'}`, per step:
+`sender {mode, holdMs, cursor, canvasDevicePx, canvasHash, pausedAt/resumedAt…}` and
+`receiver {observedCodeWidthPx, pixelsPerCellX/Y, reservedPatternScore, contrast,
+frameRotationIndex, callbackFps, processingFps, activeProcessAvgMs, activeProcessP95Ms,
+cameraFrames, decodeAttempts, successfulDecodes, crcFailures, locateFailures,
+uniqueReceived, decodedChunkIndexes}`.
+
+### One-tap PO usage
+
+1. PC: `npm run lab` (optionally behind the tunnel) and open
+   `/single-baseline.html?lab=wss://<host>/lab&holdMs=1000`; wait for
+   `CONTROL CHANNEL ONLINE` in the sidebar's AUTO TEST block.
+2. Phone: open the Mini Program, paste the control URL (and token) once in the AUTO
+   TEST panel, fix the phone position, then tap **Start Auto Test / 开始自动测试**.
+3. Watch the panel; at the end tap **Copy final auto JSON / 复制最终 JSON**.
+
 ## r12 sender-path equivalence — evidence, not assumption / r12 发送端等价性
 
 **Question raised by physical evidence.** Static diagnostic chunk 0 decoded
