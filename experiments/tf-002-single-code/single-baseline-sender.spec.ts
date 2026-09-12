@@ -57,42 +57,73 @@ const showChunk = async (page: Page, index: number): Promise<void> => {
 };
 
 /**
- * r10: how much of the carrier canvas the *visible* overlays cover, in percent of
- * the canvas area. This is the number the PO's physical result depends on, so a
- * regression test can assert it directly instead of trusting a screenshot.
- * Hidden elements contribute 0 — that is the point.
+ * r11: the carrier bounding box must not intersect ANY other visible element.
+ *
+ * This is deliberately generic — it walks the whole document instead of naming a
+ * few ids, so a future `position:fixed` overlay (which is exactly what broke the
+ * PO's physical run) fails the test automatically. Ancestors and descendants of
+ * the canvas necessarily contain it and are skipped; zero-area and invisible
+ * elements contribute nothing.
+ *
+ * Returns the worst offender with its intersection area in CSS px².
  */
-async function panelOverlapCanvasPercent(page: Page): Promise<number> {
+async function carrierIntersection(page: Page): Promise<{total: number; worst: string; worstArea: number}> {
   return page.evaluate(() => {
     const canvas = document.getElementById('codeCanvas') as HTMLCanvasElement;
     const rect = canvas.getBoundingClientRect();
-    const area = rect.width * rect.height;
-    if (!area) return -1;
-    let covered = 0;
-    for (const node of Array.from(document.querySelectorAll('#panel,#hint,#pill'))) {
-      const element = node as HTMLElement;
+    const ancestors = new Set<Element>();
+    for (let node: Element | null = canvas; node; node = node.parentElement) ancestors.add(node);
+
+    let total = 0;
+    let worst = '';
+    let worstArea = 0;
+    for (const element of Array.from(document.querySelectorAll<HTMLElement>('body *'))) {
+      if (ancestors.has(element)) continue;
+      if (element.contains(canvas)) continue;
       const style = window.getComputedStyle(element);
-      if (style.display === 'none' || style.visibility === 'hidden') continue;
+      if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) continue;
       const box = element.getBoundingClientRect();
+      if (box.width <= 0 || box.height <= 0) continue;
       const width = Math.max(0, Math.min(box.right, rect.right) - Math.max(box.left, rect.left));
       const height = Math.max(0, Math.min(box.bottom, rect.bottom) - Math.max(box.top, rect.top));
-      covered += width * height;
+      const area = Math.round(width * height);
+      if (area <= 0) continue;
+      total += area;
+      if (area > worstArea) {
+        worstArea = area;
+        worst = `${element.tagName.toLowerCase()}#${element.id || ''}.${element.className || ''}`;
+      }
     }
-    return Math.round((covered / area) * 10000) / 100;
+    return {total, worst, worstArea};
   });
 }
 
+/** Intersection area (CSS px²) of the carrier with one specific element. */
+async function intersectionWith(page: Page, selector: string): Promise<number> {
+  return page.evaluate((target: string) => {
+    const canvas = document.getElementById('codeCanvas') as HTMLCanvasElement;
+    const node = document.querySelector<HTMLElement>(target);
+    if (!node) return -1;
+    const style = window.getComputedStyle(node);
+    if (style.display === 'none' || style.visibility === 'hidden') return 0;
+    const rect = canvas.getBoundingClientRect();
+    const box = node.getBoundingClientRect();
+    const width = Math.max(0, Math.min(box.right, rect.right) - Math.max(box.left, rect.left));
+    const height = Math.max(0, Math.min(box.bottom, rect.bottom) - Math.max(box.top, rect.top));
+    return Math.round(width * height);
+  }, selector);
+}
+
 /**
- * r10: the carrier size formula. layout() derives the whole canvas from the
- * viewport alone, so this must hold with the benchmark UI present. If a future UI
- * change starts feeding the overlays into layout(), this assertion fails.
+ * r11: the carrier is sized from the STAGE box — the viewport minus the sidebar —
+ * with the reserved control-strip band subtracted, so the strip and the sidebar
+ * always live outside it.
  */
-function expectedCanvasDevicePx(width: number, height: number, dpr: number, quietCells: number): number {
-  const stage = Math.min(width, height) * 0.98;
+function expectedCarrierPx(stageWidth: number, stageHeight: number, dpr: number, quietCells: number): number {
+  const available = Math.min(stageWidth, stageHeight - 30) * 0.98;
   const scale = Math.min(2, Math.max(1, dpr));
   const totalCells = SINGLE_BASELINE_MATRIX + quietCells * 2;
-  const cellPixels = Math.max(2, Math.floor((stage * scale) / totalCells));
-  return cellPixels * totalCells;
+  return Math.max(2, Math.floor((available * scale) / totalCells)) * totalCells;
 }
 
 /** Sample the real sender canvas at every cell centre (single readback). */
@@ -358,10 +389,9 @@ test('holdMs dropdown: changing the value updates the readout and the URL', asyn
   expect(after.urlHoldMs, 'the URL query is kept in sync').toBe('60');
   expect(after.broadcasting).toBe(false, 'a stopped sender stays stopped');
 
-  // r10: while stopped the controls must be usable — the overlay policy hides them
-  // only while broadcasting (or in optical fullscreen).
-  expect(after.panelHidden).toBe(false, 'the panel is visible while stopped');
-  expect(after.pillHidden).toBe(true, 'the compact pill is broadcast-only');
+  // r11: while stopped the sidebar is visible and the strip is not needed.
+  expect(after.panelHidden).toBe(false, 'the sidebar is visible while stopped');
+  expect(after.pillHidden).toBe(true, 'the control strip is only needed while the code is on screen');
   await expect(page.locator('#holdMsSelect')).toBeVisible();
 });
 
@@ -371,21 +401,19 @@ test('holdMs dropdown: a running broadcast is stopped, never retimed mid-cycle',
   await expect(page.locator('#statusText')).toHaveText('Broadcasting / 广播中');
   await page.waitForTimeout(600);
 
-  // r10: starting a broadcast hides the controls so nothing can cover the code,
-  // and the compact pill (which sits in a margin the centred canvas never uses)
-  // becomes the only overlay. This is the whole point of the r10 fix.
+  // r11: the code is on screen, so the non-essential help text disappears and the
+  // strip below the carrier takes over. The sidebar stays because it is a separate
+  // column, and NOTHING intersects the carrier in this state.
   const casting = await state(page);
-  expect(casting.panelHidden, 'the control panel auto-hides while broadcasting').toBe(true);
-  expect(casting.hintHidden).toBe(true);
+  expect(casting.panelHidden, 'the sidebar stays usable while broadcasting').toBe(false);
+  expect(casting.hintHidden, 'help text hides while broadcasting').toBe(true);
   expect(casting.pillHidden).toBe(false);
   await expect(page.locator('#pill')).toBeVisible();
-  expect(await panelOverlapCanvasPercent(page), 'a broadcasting overlay must cover 0% of the canvas').toBe(0);
+  expect(await carrierIntersection(page), 'nothing may touch the carrier while broadcasting')
+    .toEqual({total: 0, worst: '', worstArea: 0});
 
-  // The pill's Show button brings the controls back WITHOUT stopping the broadcast,
-  // so a PO can still change the hold time mid-run.
-  await page.locator('#pillShow').click();
+  // The hold time is still changeable mid-run (the sidebar was never hidden).
   await expect(page.locator('#holdMsSelect')).toBeVisible();
-
   await page.selectOption('#holdMsSelect', '100');
 
   const after = await state(page);
@@ -402,24 +430,22 @@ test('holdMs dropdown: a running broadcast is stopped, never retimed mid-cycle',
   await expect(page.locator('#startButton')).toBeEnabled();
   await expect(page.locator('#stopButton')).toBeDisabled();
 
-  // Pressing Start again really uses the new period, and re-hides the controls.
+  // Pressing Start again really uses the new period.
   await page.locator('#startButton').click();
   await expect(page.locator('#statusText')).toHaveText('Broadcasting / 广播中');
   expect((await state(page)).cycleCount).toBe(0);
   await expect(page.locator('#startButton')).toBeDisabled();
   await expect(page.locator('#stopButton')).toBeEnabled();
-  expect((await state(page)).panelHidden, 'restarting re-hides the controls').toBe(true);
+  expect((await state(page)).hintHidden, 'restarting hides the help text again').toBe(true);
   await page.waitForTimeout(700);
   expect((await state(page)).cursor, '100 ms advances at least 5 chunks in 700 ms').toBeGreaterThanOrEqual(5);
 
-  // Stopping from the pill restores the full control panel.
+  // Stopping from the strip returns to the idle state.
   await page.locator('#pillStop').click();
   await expect(page.locator('#startButton')).toBeEnabled();
   await expect(page.locator('#panel')).toBeVisible();
   expect((await state(page)).pillHidden).toBe(true);
-  // NOTE: deliberately bringing the panel back mid-broadcast (the Show button) does
-  // cover part of the carrier — that is the PO's explicit choice. The DEFAULT
-  // broadcast path is the one that must be clean, and that was asserted above.
+  expect(await carrierIntersection(page), 'the idle page must not touch the carrier either').toEqual({total: 0, worst: '', worstArea: 0});
 });
 
 test('holdMs dropdown: the harness applies the same value as the dropdown', async ({page}) => {
@@ -437,24 +463,80 @@ test('holdMs dropdown: the harness applies the same value as the dropdown', asyn
 // r10 鈥?layout regression guard (visual-layout only, no protocol change)
 // ---------------------------------------------------------------------------
 //
-// The physical failure that triggered r10 was a decode collapse (647/647 CRC
-// failures, 3.0 px/cell observed by the camera). Measurement showed the r9 UI did
-// NOT shrink the carrier, but it made the control panel 170 px taller and pushed
-// its overlap of the canvas from 3.9-15.8% up to 5.3-21.2%. These tests freeze the
-// two invariants that protect the physical result:
+// r10/r11 layout regression guard.
 //
-//   1. the carrier size depends on the viewport ONLY (adding UI never shrinks it);
-//   2. while broadcasting, the overlays cover 0% of the canvas.
+// The physical failure that triggered this work was a decode collapse (647/647 CRC
+// failures, 3.0 px/cell observed by the camera). Measurement showed the UI did NOT
+// shrink the carrier, but the fixed control panel and the bottom-right help text
+// covered part of it (up to 21.2% of the canvas area). r11 removed every overlay:
+// the sidebar is a separate flex column and the control strip is a flow element in
+// a band BELOW the carrier that `layout()` reserves.
+//
+// These tests freeze the invariants that protect the physical result:
+//
+//   1. the carrier is sized from the stage box (viewport minus sidebar, minus the
+//      reserved strip band) and never collapses below 4 px/cell;
+//   2. NO visible element intersects the carrier bounding box — not the help text,
+//      not the controls, not the strip — in any state and at any viewport.
 
-/** A desktop viewport set representative of the PO's PC sender. */
+/** The viewport set the PO's PC sender uses; all six must be overlap-free. */
 const FIXED_VIEWPORTS = [
   {width: 1920, height: 1080},
   {width: 1600, height: 900},
   {width: 1440, height: 900},
   {width: 1366, height: 768},
+  {width: 1280, height: 800},
+  {width: 1024, height: 768},
 ];
 
-test('r10 layout: the code display size does not shrink when the benchmark UI is present', async ({page}) => {
+test('r11 layout: the help text and the controls never intersect the carrier', async ({page}) => {
+  for (const viewport of FIXED_VIEWPORTS) {
+    const label = `${viewport.width}x${viewport.height}`;
+    await page.setViewportSize(viewport);
+    await page.goto('/single-baseline.html?holdMs=75');
+    await page.waitForFunction(() => (document.getElementById('codeCanvas') as HTMLCanvasElement).width > 0);
+
+    // Stopped: the sidebar (controls + readout + help) is on screen.
+    await expect(page.locator('#hint')).toBeVisible();
+    expect(await intersectionWith(page, '#hint'), `help text ∩ carrier while stopped at ${label}`).toBe(0);
+    expect(await intersectionWith(page, '#panel'), `sidebar ∩ carrier while stopped at ${label}`).toBe(0);
+
+    // Broadcasting: the code is on screen and the help text is gone.
+    await page.locator('#startButton').click();
+    await expect(page.locator('#pill')).toBeVisible();
+    expect((await state(page)).hintHidden, `help hidden while broadcasting at ${label}`).toBe(true);
+    expect(await intersectionWith(page, '#panel'), `sidebar ∩ carrier while broadcasting at ${label}`).toBe(0);
+    expect(await intersectionWith(page, '#pill'), `strip ∩ carrier while broadcasting at ${label}`).toBe(0);
+    // The strict, generic requirement: nothing at all may touch the carrier.
+    expect(await carrierIntersection(page), `any element ∩ carrier while broadcasting at ${label}`)
+      .toEqual({total: 0, worst: '', worstArea: 0});
+
+    await page.locator('#pillStop').click();
+
+    // Optical fullscreen: sidebar and help gone, only the code plus the out-of-carrier
+    // strip.
+    await page.locator('#fullscreenButton').click();
+    const fullscreen = await state(page);
+    expect(fullscreen.opticalFullscreen).toBe(true);
+    expect(fullscreen.panelHidden, `sidebar hidden in fullscreen at ${label}`).toBe(true);
+    await expect(page.locator('#hint')).toBeHidden();
+    expect(await intersectionWith(page, '#panel'), `sidebar ∩ carrier in fullscreen at ${label}`).toBe(0);
+    expect(await intersectionWith(page, '#pill'), `strip ∩ carrier in fullscreen at ${label}`).toBe(0);
+    expect(await carrierIntersection(page), `any element ∩ carrier in fullscreen at ${label}`)
+      .toEqual({total: 0, worst: '', worstArea: 0});
+    // The only controls left are Stop and Exit, both outside the carrier.
+    await expect(page.locator('#pillStop')).toBeVisible();
+    await expect(page.locator('#pillShow')).toHaveText('Exit Fullscreen / 退出全屏');
+    await expect(page.locator('#pillShow')).toBeVisible();
+    // Explanatory text is gone.
+    await expect(page.locator('#panel')).toBeHidden();
+
+    await page.locator('#pillShow').click();
+    expect((await state(page)).opticalFullscreen).toBe(false);
+  }
+});
+
+test('r11 layout: the carrier is sized from the stage box and never collapses', async ({page}) => {
   for (const viewport of FIXED_VIEWPORTS) {
     await page.setViewportSize(viewport);
     await page.goto('/single-baseline.html?holdMs=75');
@@ -467,73 +549,73 @@ test('r10 layout: the code display size does not shrink when the benchmark UI is
     const measured = await page.evaluate(() => {
       const canvas = document.getElementById('codeCanvas') as HTMLCanvasElement;
       const rect = canvas.getBoundingClientRect();
-      return {devicePx: canvas.width, cssPx: rect.width, dpr: window.devicePixelRatio || 1};
+      const stage = document.getElementById('stage') as HTMLElement;
+      const stageRect = stage.getBoundingClientRect();
+      return {
+        devicePx: canvas.width,
+        cssPx: Math.round(rect.width),
+        dpr: window.devicePixelRatio || 1,
+        stageWidth: Math.round(stageRect.width),
+        stageHeight: Math.round(stageRect.height),
+      };
     });
 
-    const expected = expectedCanvasDevicePx(viewport.width, viewport.height, measured.dpr, quiet);
+    const expected = expectedCarrierPx(measured.stageWidth, measured.stageHeight, measured.dpr, quiet);
     expect(measured.devicePx, `carrier device px at ${viewport.width}x${viewport.height}`).toBe(expected);
-    expect(measured.devicePx, 'the canvas must never collapse to a token size').toBeGreaterThanOrEqual(408);
-    // A 96-cell OptiGrid needs real pixels per cell to survive a camera.
+    // The carrier must not be squeezed into a token size on a desktop sender.
+    expect(measured.devicePx, `carrier floor at ${viewport.width}x${viewport.height}`).toBeGreaterThanOrEqual(408);
     expect(Math.floor(measured.devicePx / (SINGLE_BASELINE_MATRIX + quiet * 2)),
       `cell pixels at ${viewport.width}x${viewport.height}`).toBeGreaterThanOrEqual(4);
+
+    // The carrier is fully inside the stage, and the strip sits in its reserved band.
+    const inside = await page.evaluate(() => {
+      const canvas = document.getElementById('codeCanvas') as HTMLCanvasElement;
+      const stage = document.getElementById('stage') as HTMLElement;
+      const crate = canvas.getBoundingClientRect();
+      const srect = stage.getBoundingClientRect();
+      return {
+        contained: crate.left >= srect.left - 0.5 && crate.right <= srect.right + 0.5
+          && crate.top >= srect.top - 0.5 && crate.bottom <= srect.bottom + 0.5,
+        bandPx: Math.round(srect.bottom - crate.bottom),
+      };
+    });
+    expect(inside.contained, `carrier inside the stage at ${viewport.width}x${viewport.height}`).toBe(true);
+    expect(inside.bandPx, `reserved strip band at ${viewport.width}x${viewport.height}`).toBeGreaterThanOrEqual(24);
   }
 });
 
-test('r10 layout: a broadcasting overlay never covers the canvas, and fullscreen hides everything', async ({page}) => {
+test('r11 layout: optical fullscreen releases the sidebar and keeps the carrier clean', async ({page}) => {
   for (const viewport of FIXED_VIEWPORTS) {
     await page.setViewportSize(viewport);
     await page.goto('/single-baseline.html?holdMs=75');
     await page.waitForFunction(() => (document.getElementById('codeCanvas') as HTMLCanvasElement).width > 0);
+    const windowed = await state(page);
 
-    const stopped = await state(page);
-    expect(stopped.panelHidden, `panel visible while stopped at ${viewport.width}x${viewport.height}`).toBe(false);
-    expect(stopped.pillHidden, 'the pill is broadcast-only').toBe(true);
-
-    await page.locator('#startButton').click();
-    await expect(page.locator('#pill')).toBeVisible();
-
-    const casting = await state(page);
-    expect(casting.panelHidden, 'the panel auto-hides while broadcasting').toBe(true);
-    expect(casting.hintHidden, 'the hint auto-hides while broadcasting').toBe(true);
-    // The regression that broke the physical run: clickable UI sitting on top of
-    // the code. Zero, not "small".
-    expect(await panelOverlapCanvasPercent(page),
-      `overlay occlusion while broadcasting at ${viewport.width}x${viewport.height}`).toBe(0);
-    // Hiding UI must not touch the established carrier geometry.
-    expect(casting.canvasDevicePx, 'broadcasting must not resize the carrier').toBe(stopped.canvasDevicePx);
-    expect(casting.cellPixels).toBe(stopped.cellPixels);
-
-    await page.locator('#pillStop').click();
-    await expect(page.locator('#panel')).toBeVisible();
-
-    // Optical fullscreen additionally hides the panel and the hint. The compact
-    // pill stays because it is measured at 0% overlap and is the only visible way
-    // back out — without it the mode would be a trap.
     await page.locator('#fullscreenButton').click();
     const fullscreen = await state(page);
-    expect(fullscreen.opticalFullscreen).toBe(true);
-    expect(fullscreen.panelHidden, 'optical fullscreen hides the panel').toBe(true);
-    expect(fullscreen.hintHidden).toBe(true);
-    expect(await panelOverlapCanvasPercent(page), 'fullscreen must leave only the code on screen').toBe(0);
-    expect(fullscreen.canvasDevicePx, 'fullscreen must not resize the carrier').toBe(stopped.canvasDevicePx);
 
-    // The pill's button is the visible exit from fullscreen.
-    await expect(page.locator('#pillShow')).toHaveText('Exit Fullscreen / 退出全屏');
+    // The sidebar column is released, so the carrier can only grow or stay equal.
+    expect(fullscreen.canvasDevicePx, `fullscreen must not shrink the carrier at ${viewport.width}x${viewport.height}`)
+      .toBeGreaterThanOrEqual(windowed.canvasDevicePx);
+    expect(fullscreen.stageWidth).toBeGreaterThan(windowed.stageWidth);
+    expect(await carrierIntersection(page), 'fullscreen must leave the carrier untouched')
+      .toEqual({total: 0, worst: '', worstArea: 0});
+
     await page.locator('#pillShow').click();
-    await expect(page.locator('#panel')).toBeVisible();
-    expect((await state(page)).opticalFullscreen).toBe(false);
-    expect((await state(page)).canvasDevicePx, 'leaving fullscreen must not resize the carrier')
-      .toBe(stopped.canvasDevicePx);
+    const restored = await state(page);
+    expect(restored.canvasDevicePx, 'leaving fullscreen restores the windowed carrier size')
+      .toBe(windowed.canvasDevicePx);
+    expect(await carrierIntersection(page), 'the restored page must not touch the carrier')
+      .toEqual({total: 0, worst: '', worstArea: 0});
   }
 });
 
 /**
- * The compact pill is the only overlay that stays on screen while broadcasting,
- * so it must clear the carrier even at the small default Playwright viewport
- * (480x480) — that is where the centred code gets closest to the corners.
+ * The strip lives in the band the carrier reserves below itself, so even at the
+ * small default Playwright viewport (480x480) it must clear the code completely.
  */
-test('r10 layout: the compact pill clears the carrier at a small viewport', async ({page}) => {
-  for (const viewport of [{width: 480, height: 480}, {width: 1024, height: 768}]) {
+test('r11 layout: the control strip clears the carrier at a small viewport', async ({page}) => {
+  for (const viewport of [{width: 480, height: 480}, {width: 800, height: 600}]) {
     await page.setViewportSize(viewport);
     await page.goto('/single-baseline.html?holdMs=75');
     await page.waitForFunction(() => (document.getElementById('codeCanvas') as HTMLCanvasElement).width > 0);
@@ -547,24 +629,23 @@ test('r10 layout: the compact pill clears the carrier at a small viewport', asyn
     await page.locator('#startButton').click();
     await expect(page.locator('#pill')).toBeVisible();
     const pill = await page.locator('#pill').boundingBox();
-    expect(pill, 'the pill must be measurable while broadcasting').not.toBeNull();
-    // The pill is docked to the bottom-right corner and must sit BELOW the code.
-    expect((await state(page)).pillFits, `the pill must fit at ${viewport.width}x${viewport.height}`).toBe(true);
-    expect(pill!.y, `pill top must be below the carrier at ${viewport.width}x${viewport.height}`)
+    expect(pill, 'the strip must be measurable while broadcasting').not.toBeNull();
+    expect((await state(page)).pillFits, `the strip must fit at ${viewport.width}x${viewport.height}`).toBe(true);
+    expect(pill!.y, `strip top must be below the carrier at ${viewport.width}x${viewport.height}`)
       .toBeGreaterThanOrEqual(geometry.bottom);
-    expect(pill!.height, 'the pill height is capped so it can clear the carrier').toBe(24);
-    expect(await panelOverlapCanvasPercent(page),
-      `overlay occlusion at ${viewport.width}x${viewport.height}`).toBe(0);
+    expect(pill!.height, 'the strip height is capped').toBe(24);
+    expect(await carrierIntersection(page), `nothing may touch the carrier at ${viewport.width}x${viewport.height}`)
+      .toEqual({total: 0, worst: '', worstArea: 0});
 
     await page.locator('#pillStop').click();
   }
 });
 
-test('r10 layout: the long file table is collapsed, and the rendered size readout is honest', async ({page}) => {
+test('r11 layout: the long file table is collapsed, and the rendered size readout is honest', async ({page}) => {
   await page.setViewportSize({width: 1440, height: 900});
   await page.goto('/single-baseline.html?holdMs=75');
 
-  // The r9 regression was 170 px of extra panel height; the file table is the
+  // The r9 regression was 170 px of extra sidebar height; the file table is the
   // reason, so it starts collapsed and stays reachable behind one button.
   await expect(page.locator('#details')).toBeHidden();
   await expect(page.locator('#fileSha')).toBeHidden();
@@ -585,11 +666,16 @@ test('r10 layout: the long file table is collapsed, and the rendered size readou
   const geometry = await page.evaluate(() => {
     const canvas = document.getElementById('codeCanvas') as HTMLCanvasElement;
     const rect = canvas.getBoundingClientRect();
+    const stage = document.getElementById('stage') as HTMLElement;
+    const stageRect = stage.getBoundingClientRect();
     const cellPixels = Number.parseInt((document.getElementById('renderSize')?.textContent ?? '')
       .match(/(\d+) device px\/cell/)?.[1] ?? '0', 10);
-    return {devicePx: canvas.width, cssPx: Math.round(rect.width), cellPixels};
+    return {
+      devicePx: canvas.width, cssPx: Math.round(rect.width), cellPixels,
+      stageWidth: Math.round(stageRect.width), stageHeight: Math.round(stageRect.height),
+    };
   });
-  expect(geometry.devicePx).toBe(expectedCanvasDevicePx(1440, 900, 1, 3));
+  expect(geometry.devicePx).toBe(expectedCarrierPx(geometry.stageWidth, geometry.stageHeight, 1, 3));
   expect(geometry.cellPixels).toBe(Math.floor(geometry.devicePx / 102));
   expect(text, 'the readout quotes the real canvas device size')
     .toContain(`${geometry.devicePx}${times}${geometry.devicePx} canvas device px`);

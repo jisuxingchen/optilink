@@ -59,9 +59,10 @@ const $ = <T extends HTMLElement>(id: string): T => {
 
 const canvas = $<HTMLCanvasElement>('codeCanvas');
 const panel = $<HTMLElement>('panel');
+const stageBox = $<HTMLElement>('stage');
+const statusBar = $<HTMLElement>('statusbar');
 const startButton = $<HTMLButtonElement>('startButton');
 const stopButton = $<HTMLButtonElement>('stopButton');
-const hideButton = $<HTMLButtonElement>('hideButton');
 const broadcastStatus = $<HTMLElement>('broadcastStatus');
 const fileNameCell = $<HTMLElement>('fileName');
 const fileSizeCell = $<HTMLElement>('fileSize');
@@ -129,28 +130,46 @@ let broadcasting = false;
 let timer: number | null = null;
 let cellPixels = 10;
 
-// The compact pill is the ONE overlay that stays on screen while broadcasting, so
-// its geometry is part of the optical budget: it is docked to the very bottom edge
-// and capped at this height, and layout() proves it fits in the free band below
-// the carrier before it is ever shown.
+// ---------------------------------------------------------------------------
+// r11 carrier layout — nothing on this page may overlap the OptiGrid
+// ---------------------------------------------------------------------------
+//
+// MEASURED PROBLEM (r8 / r9 / r10): every control was a fixed overlay, so at common
+// window sizes the panel or the help text covered part of the code (r8: 3.9-15.8 %,
+// r9: 5.3-21.2 % of the canvas area) and the PO's screenshot showed the bottom-right
+// help text sitting on the carrier. A covered carrier cannot be decoded reliably.
+//
+// r11 removes the overlay approach entirely: the page is a two-column flex layout,
+// the sidebar is outside the stage, and the control strip is a normal flow element
+// in a band BELOW the carrier that the carrier is sized to leave free. Nothing is
+// `position:fixed` / `absolute` over the canvas any more, so the overlap is 0 by
+// construction in every state and at every viewport.
+
+/** The band the control strip occupies below the carrier, in CSS px. */
+const STATUS_BAR_PX = 30;
+/** The compact strip's own height; it must fit inside STATUS_BAR_PX. */
 const PILL_HEIGHT_PX = 24;
-const PILL_DOCK_PX = 2;
+
+let opticalFullscreen = false;
+/** Defensive: true when the reserved band can hold the strip without touching the code. */
+let pillFits = true;
 
 function layout(): void {
-  const stage = Math.min(window.innerWidth, window.innerHeight) * 0.98;
+  const box = stageBox.getBoundingClientRect();
   const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
-  cellPixels = Math.max(2, Math.floor((stage * dpr) / totalCells));
+  // The carrier is sized from the STAGE box with the reserved strip band subtracted,
+  // so it can never grow into that band. The stage's own size does not depend on the
+  // canvas (it is a fixed-height flex column with overflow hidden), so this cannot
+  // feed back into itself.
+  const available = Math.min(box.width, Math.max(0, box.height - STATUS_BAR_PX)) * 0.98;
+  cellPixels = Math.max(2, Math.floor((available * dpr) / totalCells));
   const pixels = cellPixels * totalCells;
   canvas.width = pixels;
   canvas.height = pixels;
   canvas.style.width = `${Math.round(pixels / dpr)}px`;
   canvas.style.height = `${Math.round(pixels / dpr)}px`;
-  // layout() floors to whole cells, so the centred carrier leaves a free band of
-  // (viewport - canvas) / 2 above and below it. The pill lives in the bottom band.
-  const freeBand = (window.innerHeight - Math.round(pixels / dpr)) / 2;
-  pillFits = freeBand >= PILL_HEIGHT_PX + PILL_DOCK_PX + 1;
+  pillFits = statusBar.getBoundingClientRect().height >= PILL_HEIGHT_PX;
   updateRenderSize();
-  applyOverlayVisibility();
 }
 
 /**
@@ -208,66 +227,46 @@ function renderCurrent(): void {
 }
 
 // ---------------------------------------------------------------------------
-// r10 overlay policy — the optical carrier is never covered while measuring
+// r11 visibility policy — what is on screen per state
 // ---------------------------------------------------------------------------
 //
-// MEASURED PROBLEM: the control panel is a fixed overlay, so at common window sizes
-// it covered part of the code (r8: 3.9-15.8 % of the canvas area, r9: 5.3-21.2 %
-// because the hold-time controls made it 170 px taller). A covered carrier cannot be
-// decoded reliably, so the controls must get out of the way:
+//   stopped      → sidebar visible (controls + readout + help), strip hidden
+//   broadcasting → sidebar STILL visible (it is outside the carrier, so it is not
+//                  an obstruction and the PO keeps the live readout); the help text
+//                  disappears because it is non-essential; the strip below the
+//                  carrier shows the state and Stop
+//   fullscreen   → sidebar hidden so the carrier owns the whole width; the help is
+//                  gone with it; the strip keeps ONLY the out-of-carrier Stop and
+//                  Exit controls — every word of explanatory text is hidden
 //
-//   broadcasting  → control panel and hint HIDDEN; only the compact pill remains,
-//                   docked to the bottom edge strictly BELOW the carrier (0 %)
-//   stopped       → panel + hint visible; the long file table stays collapsed
-//   optical full  → panel + hint hidden as well, for an unobstructed shot
-//
-// The carrier's own size is NOT affected by any of this: layout() depends only on
-// the viewport, so hiding the UI can never change the established code size. This is
-// asserted by the r10 layout regression tests.
+// In no state is any of this drawn over the carrier: the sidebar is a separate
+// column and the strip is in the reserved band below the canvas.
 
-let overlaysHidden = false;
-let autoHiddenForBroadcast = false;
-let opticalFullscreen = false;
-/** Set by layout(): false when the viewport is too short for the pill to clear the carrier. */
-let pillFits = true;
-
-function setPanelHidden(hidden: boolean): void {
-  panel.classList.toggle('hidden', hidden);
-  hideButton.textContent = hidden ? 'Show / 显示' : 'Hide / 隐藏';
-}
-
-/** Apply the one overlay policy. Called from start/stop and the toggles. */
+/** Apply the one visibility policy. Called from start/stop and the fullscreen toggle. */
 function applyOverlayVisibility(): void {
-  if (opticalFullscreen) {
-    setPanelHidden(true);
-    hintBox.classList.add('hidden');
-  } else {
-    // Starting a broadcast is what HIDES the controls (it sets overlaysHidden), so
-    // this is purely the user's current overlay choice. The Show button on the pill
-    // therefore really brings the controls back — even mid-broadcast — which is how
-    // a PO changes the hold time without hunting for a hidden panel.
-    setPanelHidden(overlaysHidden);
-    hintBox.classList.toggle('hidden', overlaysHidden);
-  }
-  // The compact pill lives in the bottom-right margin, which the centred carrier
-  // never reaches — measured at 0% overlap at every tested viewport. It therefore
-  // stays available whenever there is something to control, and it is the ONLY way
-  // back out of optical fullscreen. Hiding it would trap a PO with no visible exit.
-  // If the viewport is too short to clear the carrier, the pill is dropped entirely
-  // and the keyboard shortcuts (F / S) remain the control path.
+  panel.classList.toggle('hidden', opticalFullscreen);
+  // Non-essential explanatory text disappears as soon as the code is on screen.
+  hintBox.classList.toggle('hidden', broadcasting || opticalFullscreen);
+  // The strip is needed whenever the code is on screen (Stop) or when the sidebar is
+  // gone (Exit). When idle and not fullscreen the sidebar already has both buttons.
   pill.classList.toggle('hidden', !pillFits || !(broadcasting || opticalFullscreen));
-  pillShowButton.textContent = opticalFullscreen ? 'Exit Fullscreen / 退出全屏' : 'Controls / 控制';
-  pillStatus.textContent = broadcasting ? 'Broadcasting / 广播中' : 'Stopped / 已停止';
-  pillHold.textContent = diagnosticMode ? 'diagnostic' : `${holdMs} ms`;
+  pillStopButton.disabled = !broadcasting;
+  pillShowButton.classList.toggle('hidden', !opticalFullscreen);
+  pillStatus.classList.toggle('hidden', opticalFullscreen);
+  pillHold.classList.toggle('hidden', opticalFullscreen);
 }
 
-/** Optical Fullscreen / 光学全屏: hide every overlay so only the code is on screen. */
+/** Optical Fullscreen / 光学全屏: sidebar and help gone, only the OptiGrid plus an
+ *  out-of-carrier Stop / Exit strip. The carrier is re-measured because the sidebar
+ *  releases its column — it can only grow, never shrink. */
 function toggleOpticalFullscreen(force?: boolean): void {
   opticalFullscreen = force === undefined ? !opticalFullscreen : force;
   fullscreenButton.textContent = opticalFullscreen
     ? 'Exit Fullscreen / 退出全屏'
     : 'Optical Fullscreen / 光学全屏';
   applyOverlayVisibility();
+  layout();
+  renderCurrent();
 }
 
 function stopBroadcast(): void {
@@ -278,10 +277,6 @@ function stopBroadcast(): void {
   }
   startButton.disabled = false;
   stopButton.disabled = true;
-  if (autoHiddenForBroadcast) {
-    autoHiddenForBroadcast = false;
-    overlaysHidden = false;
-  }
   applyOverlayVisibility();
   updateReadout();
 }
@@ -408,10 +403,8 @@ function startBroadcast(): void {
   broadcasting = true;
   startButton.disabled = true;
   stopButton.disabled = false;
-  // r10: the controls get out of the way for the whole measurement, so no overlay
-  // can ever cover the optical carrier while the phone is decoding.
-  autoHiddenForBroadcast = true;
-  overlaysHidden = true;
+  // r11: the code is on screen now, so the non-essential help text disappears. The
+  // sidebar itself stays — it is a separate column and cannot cover the carrier.
   applyOverlayVisibility();
   if (diagnosticMode) {
     // Static diagnostic mode: ONE known chunk, held indefinitely, no timer.
@@ -429,17 +422,8 @@ function stopAndFreeze(): void {
   stopBroadcast();
 }
 
-/** Manual Show/Hide of the control panel; also leaves the automatic policy. */
-function togglePanel(): void {
-  overlaysHidden = !panel.classList.contains('hidden');
-  autoHiddenForBroadcast = false;
-  if (opticalFullscreen) toggleOpticalFullscreen(false);
-  applyOverlayVisibility();
-}
-
 startButton.addEventListener('click', startBroadcast);
 stopButton.addEventListener('click', stopAndFreeze);
-hideButton.addEventListener('click', togglePanel);
 fullscreenButton.addEventListener('click', () => toggleOpticalFullscreen());
 detailsButton.addEventListener('click', () => {
   detailsBox.classList.toggle('hidden');
@@ -447,24 +431,16 @@ detailsButton.addEventListener('click', () => {
 });
 pillStopButton.addEventListener('click', stopAndFreeze);
 pillShowButton.addEventListener('click', () => {
-  // In optical fullscreen this button is the visible way out; the panel button is
+  // In optical fullscreen this button is the visible way out; the sidebar button is
   // hidden by definition in that mode.
-  const wasFullscreen = opticalFullscreen;
-  overlaysHidden = false;
-  autoHiddenForBroadcast = false;
-  if (wasFullscreen) {
-    toggleOpticalFullscreen(false);
-  }
-  applyOverlayVisibility();
+  if (opticalFullscreen) toggleOpticalFullscreen(false);
 });
 window.addEventListener('keydown', (event) => {
-  if (event.key === 'h' || event.key === 'H') {
-    togglePanel();
-  } else if (event.key === 'f' || event.key === 'F') {
+  if (event.key === 'f' || event.key === 'F') {
     toggleOpticalFullscreen();
   } else if (event.key === 's' || event.key === 'S') {
     // Pair for every toggle: this is the guaranteed control path even when the
-    // pill is dropped because the viewport is too short to clear the carrier.
+    // viewport is too small for the strip.
     if (broadcasting) {
       stopAndFreeze();
     } else {
@@ -544,8 +520,8 @@ renderCurrent();
     selectValue: holdMsSelect.value,
     applyNote: holdApplyNote.textContent,
     urlHoldMs: new URLSearchParams(location.search).get('holdMs'),
-    // r10: overlay policy + display-side geometry, so a test can prove the carrier
-    // is neither resized nor covered when the benchmark UI is present.
+    // r11: visibility policy + display-side geometry, so a test can prove the
+    // carrier is neither unexpectedly resized nor touched by any UI element.
     panelHidden: panel.classList.contains('hidden'),
     hintHidden: hintBox.classList.contains('hidden'),
     pillHidden: pill.classList.contains('hidden'),
@@ -553,11 +529,14 @@ renderCurrent();
     opticalFullscreen,
     canvasDevicePx: canvas.width,
     cellPixels,
+    stageWidth: Math.round(stageBox.getBoundingClientRect().width),
+    stageHeight: Math.round(stageBox.getBoundingClientRect().height),
+    statusBarPx: STATUS_BAR_PX,
     renderSizeText: renderSizeCell.textContent,
   }),
   setHoldMs: (value: number) => applyHoldMs(value),
-  togglePanel,
   toggleOpticalFullscreen,
+  relayout: () => layout(),
   start: startBroadcast,
   stop: stopAndFreeze,
   showChunk: (index: number) => {

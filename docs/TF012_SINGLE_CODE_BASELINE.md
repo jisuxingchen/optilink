@@ -31,6 +31,16 @@ broadcasting, and the invariant is now enforced by test. **No protocol, matrix,
 chunk, encoding, locator or CRC change.** Stage B is **paused** until the static
 chunk-0 point is reproduced.
 
+**r11 scope:** the PO's screenshot showed the bottom-right explanatory text covering
+the OptiGrid. r11 **removes every overlay from the sender page** — the help text and
+the control panel are normal flow content in a left sidebar, and the status strip
+sits in a band the carrier reserves below itself. Nothing on the page is
+`position:fixed` over the canvas any more, so the carrier overlap is **0 at every
+viewport in every state**, and a generic regression test (every visible non-carrier
+element must not intersect the carrier) enforces it. **No protocol, matrix, chunk,
+encoding, locator or CRC change.** Stage B stays paused until the static chunk-0
+point is reproduced.
+
 ## What this is / 这是什么
 
 The **primary physical bring-up path** for OptiLink. A deliberately simple, slow,
@@ -347,6 +357,72 @@ Every field is `null` when its denominator is 0. A run with no decode attempts h
 **no** decode success ratio, and 0 unique chunks from 0 successful decodes is
 `null` (0/0 is undefined), **not** 0 %. These metrics are diagnostic: they rank
 PASSing points and **never decide PASS**.
+
+## r11 sender layout — nothing is drawn over the carrier / r11 布局
+
+**Report:** the PO's pre-test screenshot proved the bottom-right explanatory text
+covered the OptiGrid. r10's "keep the overlay in a margin" approach was still an
+overlay, so r11 removes the overlay approach entirely.
+
+**The page is now a two-column flex layout with no `position:fixed`/`absolute`
+element over the canvas at all:**
+
+```
+#layout  ──  #panel (left sidebar, in flow)  │  #stage (flex column)
+                                                 ├─ <canvas id="codeCanvas">
+                                                 └─ #statusbar (reserved 30 px band)
+```
+
+* the **help / 说明 text moved into the sidebar bottom** as small print (it was the
+  fixed bottom-right block);
+* the **control panel is a sidebar column**, not a floating card;
+* the **status strip is a flow element** in a band `layout()` reserves *below* the
+  carrier — the carrier is sized from `min(stageWidth, stageHeight − 30) × 0.98`, so
+  it can never grow into that band;
+* the sidebar also yields width (`max-width:calc(100% - 210px)`) so the stage can
+  never become narrower than the smallest possible carrier.
+
+**Per state:**
+
+| State | On screen |
+| --- | --- |
+| stopped | sidebar (controls, hold time, readout, rendered size, collapsed file table, **help text**); strip hidden |
+| broadcasting | sidebar stays (outside the carrier, so not an obstruction) **without** the help text; strip below the carrier shows the live state + `Stop` |
+| optical fullscreen | sidebar and all help gone; only the OptiGrid plus a below-carrier strip with `Stop` and `Exit Fullscreen`; the carrier can only grow |
+
+**Measured (Playwright, `overlap` = total intersection area of the carrier with
+every other visible element, in CSS px²):**
+
+| Viewport | carrier device px (windowed) | `cellPixels` | carrier in fullscreen | overlap stopped / broadcasting / fullscreen |
+| --- | --- | --- | --- | --- |
+| 1920×1080 | 1020 | 10 | 1020 | 0 / 0 / 0 |
+| 1600×900 | 816 | 8 | 816 | 0 / 0 / 0 |
+| 1440×900 | 816 | 8 | 816 | 0 / 0 / 0 |
+| 1366×768 | 714 | 7 | 714 | 0 / 0 / 0 |
+| 1280×800 | 714 | 7 | 714 | 0 / 0 / 0 |
+| 1024×768 | 612 | 6 | **714** | 0 / 0 / 0 |
+
+At five of the six viewports the carrier is **exactly the same size as r8/r9/r10**
+(all of them height-limited). At 1024×768 the sidebar has to occupy the left column,
+so the carrier is 612 px (6 px/cell, above the 4 px/cell floor); leaving the sidebar
+in optical fullscreen gives 714 px back. The six target viewports all stay above
+4 px/cell and no element intersects the carrier in any state.
+
+**Regression tests** (`single-baseline-sender.spec.ts`):
+
+* `r11 layout: the help text and the controls never intersect the carrier` —
+  `intersection(carrier, #hint) == 0` and `intersection(carrier, #panel) == 0` while
+  stopped, `== 0` for the sidebar/strip while broadcasting, and **every visible
+  non-carrier element `== 0`** (a generic DOM walk, not a hard-coded id list) while
+  broadcasting and in fullscreen, at all six viewports;
+* `r11 layout: the carrier is sized from the stage box and never collapses` — the
+  carrier equals `min(stageW, stageH − 30) × 0.98` floored to whole cells, ≥ 408 px,
+  ≥ 4 px/cell, fully inside the stage, with a ≥ 24 px free band below it;
+* `r11 layout: optical fullscreen releases the sidebar and keeps the carrier clean` —
+  the carrier never shrinks, the stage widens, nothing intersects, and leaving
+  fullscreen restores the windowed size;
+* `r11 layout: the control strip clears the carrier at a small viewport` — 480×480
+  and 800×600 are overlap-free too.
 
 ## r10 visual-layout regression / r10 视觉布局回归
 
