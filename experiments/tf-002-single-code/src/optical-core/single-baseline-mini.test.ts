@@ -56,7 +56,7 @@ test('16 · Mini Program page boot smoke (Page() registers with baseline surface
   const page = captured as unknown as Record<string, unknown>;
   const data = page.data as Record<string, unknown>;
   assert.equal(data.mode, 'receive', 'default mode is the shared receive pipeline');
-  assert.match(String(data.buildId), /^tf012-r10-/, 'buildId uses the tf012-r10 prefix');
+  assert.match(String(data.buildId), /^tf012-r11-/, 'buildId uses the tf012-r11 prefix');
   assert.equal(data.baselineStatus, 'WAITING / 等待', 'baseline status is part of the initial data');
   assert.equal(data.baselineReceivedChunks, '0 / 16', 'baseline chunk counter is part of the initial data');
   assert.ok('baselineSelfCheck' in data, 'baseline self-check field present');
