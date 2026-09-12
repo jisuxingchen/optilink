@@ -449,6 +449,22 @@ frameRotationIndex, callbackFps, processingFps, activeProcessAvgMs, activeProces
 cameraFrames, decodeAttempts, successfulDecodes, crcFailures, locateFailures,
 uniqueReceived, decodedChunkIndexes}`.
 
+### PC sender panel during an auto run
+
+The sidebar's AUTO TEST block must answer "is a run live right now?" without the PO
+inferring it from the numbers. Its state label is driven by a phase, not by the socket:
+`AUTO TEST RUNNING / 自动测试运行中`, `AUTO TEST PAUSED / 自动测试已暂停`,
+`AUTO TEST DONE / 自动测试已完成`, `AUTO TEST CONTROL ONLINE / 控制通道已连接`,
+`CONTROL CHANNEL OFFLINE / 控制通道未连接`, and for a local run without `?lab=`
+`AUTO TEST LOCAL RUNNING / 本机自动测试运行中`. Alongside it the panel shows the
+`runId`, the current step, the mode with its holdMs (`CYCLIC 1000 ms` / `STATIC chunk0`),
+`Cursor / chunk 位置` and `Paused / 已暂停`.
+
+The cursor row speaks each mode's own units — `chunk 0` while static, `frame 37` while
+cyclic — and while paused it reads `frame 37 (frozen / 已冻结)`. That is deliberately the
+same number the receiver's `PAUSE` reports back, so the frozen step and the sender panel
+can never disagree about which frame was held.
+
 ### One-tap PO usage
 
 1. PC: `npm run lab` (optionally behind the tunnel) and open

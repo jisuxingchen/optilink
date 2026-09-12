@@ -1013,6 +1013,47 @@ test('r13 auto test: the sender applies the orchestrator command sequence', asyn
   expect(stopped.paused).toBe(false);
 });
 
+test('r13 auto test: the sender panel names the run state, the mode, the holdMs and the frozen cursor', async ({page}) => {
+  await page.setViewportSize({width: 1920, height: 1080});
+  await page.goto('/single-baseline.html?holdMs=1000');
+  await page.waitForFunction(() => (document.getElementById('codeCanvas') as HTMLCanvasElement).width > 0);
+
+  // The PO must be able to read the run state off the sidebar without inferring it.
+  // A4's sequence: cyclic at 1000 ms, then PAUSE CURRENT FRAME.
+  await applyControl(page, {type: 'command', action: 'SET_MODE', runId: 'r9', stepId: 'A4', mode: 'cyclic', chunkIndex: null});
+  await applyControl(page, {type: 'command', action: 'SET_HOLD_MS', runId: 'r9', stepId: 'A4', holdMs: 1000});
+  await applyControl(page, {type: 'command', action: 'START', runId: 'r9', stepId: 'A4'});
+  await expect(page.locator('#autoStatus')).toContainText('RUNNING');
+  await expect(page.locator('#autoMode')).toHaveText('CYCLIC 1000 ms');
+  await expect(page.locator('#autoPaused')).toHaveText('no');
+  // The cursor readout is the frame the receiver's PAUSE will report.
+  const cyclicCursor = (await state(page)).cursor;
+  await expect(page.locator('#autoCursor')).toHaveText(`frame ${cyclicCursor}`);
+
+  await applyControl(page, {type: 'command', action: 'PAUSE', runId: 'r9', stepId: 'A4', chunkIndex: cyclicCursor});
+  const frozen = await state(page);
+  expect(frozen.paused, 'PAUSE CURRENT FRAME pauses without stopping').toBe(true);
+  expect(frozen.broadcasting, 'a paused sender is still on air').toBe(true);
+  expect(frozen.cursor, 'PAUSE must not move the cursor').toBe(cyclicCursor);
+  await expect(page.locator('#autoStatus')).toContainText('PAUSED');
+  await expect(page.locator('#autoPaused')).toHaveText('YES / 已暂停');
+  await expect(page.locator('#autoCursor')).toHaveText(`frame ${cyclicCursor} (frozen / 已冻结)`);
+
+  await applyControl(page, {type: 'command', action: 'RESUME', runId: 'r9', stepId: 'A4'});
+  await expect(page.locator('#autoPaused')).toHaveText('no');
+  await expect(page.locator('#autoCursor')).not.toContainText('frozen');
+
+  // A static step keeps the chunk vocabulary, so the two ends never mix units.
+  await applyControl(page, {type: 'command', action: 'SET_MODE', runId: 'r9', stepId: 'A5', mode: 'static', chunkIndex: 0});
+  await expect(page.locator('#autoMode')).toHaveText('STATIC chunk0');
+  await expect(page.locator('#autoCursor')).toHaveText('chunk 0');
+
+  // Stopping must return the panel to a non-running state, not leave it green.
+  await applyControl(page, {type: 'command', action: 'STOP', runId: 'r9'});
+  await expect(page.locator('#autoStatus')).not.toContainText('RUNNING');
+  await expect(page.locator('#autoPaused')).toHaveText('no');
+});
+
 test('r11 layout: the long file table is collapsed, and the rendered size readout is honest', async ({page}) => {
   await page.setViewportSize({width: 1440, height: 900});
   await page.goto('/single-baseline.html?holdMs=75');

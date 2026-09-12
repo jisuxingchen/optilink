@@ -613,6 +613,7 @@ const autoStatusCell = document.getElementById('autoStatus');
 const autoRunCell = document.getElementById('autoRun');
 const autoStepCell = document.getElementById('autoStep');
 const autoModeCell = document.getElementById('autoMode');
+const autoCursorCell = document.getElementById('autoCursor');
 const autoPausedCell = document.getElementById('autoPaused');
 
 function renderAutoPanel(): void {
@@ -620,15 +621,37 @@ function renderAutoPanel(): void {
   const sample = autoSurface.sample();
   const client = autoClient?.status();
   const connected = Boolean(client?.connected);
+  // The panel must answer "is an auto test running right now?" without the PO having to
+  // infer it from the numbers, so the label is driven by a phase, not by the socket. A
+  // local run (no ?lab= control channel) still reports its own phase from the surface.
+  const phase: 'IDLE' | 'RUNNING' | 'PAUSED' | 'DONE' = client
+    ? client.phase
+    : sample.broadcasting ? (sample.paused ? 'PAUSED' : 'RUNNING') : 'IDLE';
   autoStatusCell.textContent = client
-    ? (connected ? 'AUTO TEST CONTROL ONLINE / 控制通道已连接' : 'CONTROL CHANNEL OFFLINE / 控制通道未连接')
-    : 'AUTO TEST LOCAL / 本机自动测试（未连接控制通道）';
-  autoStatusCell.className = client ? (connected ? 'live' : 'stopped') : 'stopped';
+    ? (!connected ? 'CONTROL CHANNEL OFFLINE / 控制通道未连接'
+      : phase === 'RUNNING' ? 'AUTO TEST RUNNING / 自动测试运行中'
+        : phase === 'PAUSED' ? 'AUTO TEST PAUSED / 自动测试已暂停'
+          : phase === 'DONE' ? 'AUTO TEST DONE / 自动测试已完成'
+            : 'AUTO TEST CONTROL ONLINE / 控制通道已连接')
+    : (phase === 'RUNNING' ? 'AUTO TEST LOCAL RUNNING / 本机自动测试运行中'
+      : phase === 'PAUSED' ? 'AUTO TEST LOCAL PAUSED / 本机自动测试已暂停'
+        : 'AUTO TEST LOCAL / 本机自动测试（未连接控制通道）');
+  autoStatusCell.className = client ? (connected ? 'live' : 'stopped') : (phase === 'IDLE' ? 'stopped' : 'live');
   if (autoRunCell) autoRunCell.textContent = client?.runId ?? '—';
   if (autoStepCell) autoStepCell.textContent = client?.stepId ?? '—';
   if (autoModeCell) autoModeCell.textContent = sample.mode === 'static'
     ? 'STATIC chunk0'
     : `CYCLIC ${sample.holdMs ?? '—'} ms`;
+  if (autoCursorCell) {
+    // Which frame the carrier is showing, in the sender's own terminology: a chunk index
+    // while static, the cyclic cursor otherwise. This is the number the receiver's PAUSE
+    // reports back, so both ends speak the same units.
+    const cursor = sample.cursor;
+    const kind = sample.mode === 'static' ? 'chunk' : 'frame';
+    autoCursorCell.textContent = cursor == null
+      ? '—'
+      : `${kind} ${cursor}${sample.paused ? ' (frozen / 已冻结)' : ''}`;
+  }
   if (autoPausedCell) autoPausedCell.textContent = sample.paused ? 'YES / 已暂停' : 'no';
 }
 

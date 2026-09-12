@@ -50,6 +50,15 @@ export interface Tf012AutoClientStatus {
   url: string;
   runId: string | null;
   stepId: string | null;
+  /**
+   * The auto-test run phase as seen from THIS end. Derived purely from the control
+   * messages the receiver sent, so the panel never has to guess whether a run is live:
+   *   IDLE    — connected (or not), no run started yet
+   *   RUNNING — after SET_MODE / START / STEP_COMPLETE
+   *   PAUSED  — after PAUSE (A4's freeze), back to RUNNING on RESUME
+   *   DONE    — after RUN_COMPLETE / RUN_ABORTED
+   */
+  phase: 'IDLE' | 'RUNNING' | 'PAUSED' | 'DONE';
   lastRejected: string | null;
   telemetrySent: number;
   commandsApplied: number;
@@ -65,7 +74,7 @@ export function createTf012AutoSenderClient(options: Tf012AutoSenderClientOption
   let runId: string | null = null;
   let stepId: string | null = null;
   const status: Tf012AutoClientStatus = {
-    connected: false, url: options.url, runId: null, stepId: null,
+    connected: false, url: options.url, runId: null, stepId: null, phase: 'IDLE',
     lastRejected: null, telemetrySent: 0, commandsApplied: 0,
   };
 
@@ -112,28 +121,38 @@ export function createTf012AutoSenderClient(options: Tf012AutoSenderClientOption
       case 'SET_MODE':
         surface.setMode(command.mode as 'static' | 'cyclic',
           command.chunkIndex === null || command.chunkIndex === undefined ? null : Number(command.chunkIndex));
+        status.phase = 'RUNNING';
         break;
       case 'SET_HOLD_MS':
         surface.setHoldMs(Number(command.holdMs));
         break;
       case 'START':
         surface.start();
+        status.phase = 'RUNNING';
         break;
       case 'PAUSE':
         surface.pauseCurrentFrame();
+        status.phase = 'PAUSED';
         break;
       case 'RESUME':
         surface.resumeCurrentFrame();
+        status.phase = 'RUNNING';
         break;
       case 'STOP':
         surface.stop();
+        status.phase = 'IDLE';
         break;
       case 'RESET_METRICS':
         surface.resetMetrics();
         break;
+      case 'RUN_COMPLETE':
+      case 'RUN_ABORTED':
+        status.phase = 'DONE';
+        break;
       default:
         // STEP_COMPLETE / RUN_* are receiver→sender notifications; nothing to do but
         // keep the run id in sync so the next telemetry is attributed correctly.
+        if (action === 'STEP_COMPLETE') status.phase = 'RUNNING';
         break;
     }
     status.commandsApplied += 1;
