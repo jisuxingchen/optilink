@@ -345,10 +345,11 @@ reported at the exact sub-stage it reached, with its best failed score — a bar
 ## Cross-cutting gates / 横向门
 
 - **Speed / 速度**: characterised, **not optimised**. The single degree of freedom
-  is the broadcast hold time `?holdMs=` (1500 / 1000 / 750 / 500 / 333 / 250 / 200 /
-  150 / 100 / 75 / 50 / 33 ms). G1–G13 are unchanged by it; only the time each
-  chunk stays on screen changes. No Fountain, no 3-code mode, no matrix change, no
-  chunk-size change, no Worker, no locator change for speed.
+  is the broadcast hold time `?holdMs=`. Stage A = 1500 / 1000 / 750 / 500 / 333 /
+  250 / 200 / 150 / 100 / 75 / 50 / 33 ms; **Stage B = 100 / 90 / 75 / 60 / 50 /
+  40 ms**. G1–G13 are unchanged by it; only the time each chunk stays on screen
+  changes. No Fountain, no 3-code mode, no matrix change, no chunk-size change, no
+  Worker, no locator change for speed.
 - **One-way only / 仅单向**: no ACK, no retransmission request, no receiver
   feedback, no network payload. The sender never learns anything about the receiver.
 - **Evidence class / 证据等级**: on phone success this is
@@ -356,8 +357,10 @@ reported at the exact sub-stage it reached, with its best failed score — a bar
   by default, **not** G0.
 - **PASS per speed point / 每个速度点的通过条件 (real phone only)**:
   `uniqueReceived == 16`, `missing == []`, `reconstructedBytes == 10240`,
-  `shaResult == MATCH`. There is **no software-only PASS for a speed point** and no
-  speed point may be declared stable from one lucky run (3/3 required).
+  `shaResult == MATCH`. There is **no software-only PASS for a speed point**.
+  PASS alone does **not** rank a point: rank by timeToAllChunks, Net Goodput, CRC
+  failure ratio, locate failure ratio, `newUniqueChunkYield` and repeat consistency —
+  never by smallest `holdMs` alone.
 - **Which gate degrades first / 哪个门先退化**: when a speed point fails, the frozen
   JSON identifies the deepest G7 sub-stage reached and the counter that grew, so the
   first degraded gate is named by evidence rather than guessed.
@@ -470,20 +473,107 @@ baseline-only elapsed window, inflating it. It now uses `baselineFramesReceived`
 | G8–G13 (software) | **PASS** | same receiver, same reconstruction, same SHA-256 |
 | Sender `?holdMs=` ladder | **PASS** | all 12 ladder values honoured; the fast end is no longer clamped to 100 ms |
 | Frozen JSON | **PASS** | `benchmark` / `physical` / `completion` sections for each speed run |
-| G6–G13 (real phone, per speed point) | **NOT YET TESTED** | Stage A coarse ladder is the next PO run |
+| G6–G13 (real phone, per speed point) | **PASS** | Stage A complete — see the physical table below |
 
-**Speed-ladder measurement plan / 速度阶梯测量计划**
+**Single-Code Baseline — r6 Stage A REAL PHYSICAL RESULTS (build `tf012-r6-a0e180b`)**
 
-- **Stage A — coarse ladder (coarse transition search):** 1500, 750, 333, 150, 75, 33 ms.
-  One run each. Record PASS/FAIL, `timeToAllChunksMs`, SHA, CRC failures, locate
-  failures, and exploratory Net Goodput (or `null`).
-- **Stage B — boundary refinement:** once the transition region is known
-  (e.g. 150 PASS / 75 FAIL), test intermediates around the last stable PASS and
-  the first FAIL (e.g. 125, 100, 90, 80).
-- **Stability:** the fastest candidate PASS is repeated **3 times**; a speed point
-  is only "stable PASS" at 3/3 exact SHA MATCH. The next faster point is also run
-  3 times and recorded as 3/3, 2/3, 1/3 or 0/3.
-- The PO is **not** asked to run all 12 values up front.
+Camera: real **Motorola XT2321-2**, Android 16, WeChat 8.0.72, CameraFrame ≈30 FPS.
+These are the measured values exactly as reported. **Nothing is smoothed or
+"corrected".**
+
+| holdMs | PASS/FAIL | camera FPS | frames/code (theoretical) | successful decode ratio | CRC failures | locate failures | timeToFirstValidChunk | timeToAllChunks | exploratory Net Goodput | pixels/cell | notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1500 | **PASS** | ≈30 | 45.0 | 1674/1970 = 0.850 | 295 | 1 | not reported | **65637 ms** | **≈156 B/s** | ≈3.7–4.0 | slow but healthy; many duplicates |
+| 750 | **FAIL — ANOMALOUS / OUTLIER CANDIDATE** | ≈30 | 22.5 | **0/586 = 0.000** | **583** | 3 | n/a | never completed | n/a | **≈3.733** | `frameRotationIndex = 2`, `reservedPatternScore ≈ 0.8017`, `activeProcessAvgMs ≈ 158`, `processing FPS ≈ 6.29` |
+| 333 | **PASS** | ≈30 | 10.0 | 607/701 = 0.866 | 94 | 0 | not reported | **23597 ms** | **≈434 B/s** | ≈3.7–4.0 | healthy, moderately fast |
+| 150 | **PASS** | ≈30 | 4.5 | 806/1033 = 0.780 | 223 | 4 | not reported | **34463 ms** | **≈297 B/s** | slower completion than 333 ms despite a faster sender |
+| 75 | **PASS — best measured point** | ≈30 | 2.25 | 356/398 = 0.895 | 42 | 0 | not reported | **13255 ms** | **≈773 B/s** | highest decode ratio, lowest CRC count, fastest completion |
+| 33 | **PASS but PERFORMANCE COLLAPSE** | ≈30 | 1.0 | 2226/3281 = 0.679 | **1048** | 7 | not reported | **166505 ms** | **≈61.5 B/s** | functionally viable, operationally inefficient |
+
+**The Stage A data is NON-MONOTONIC.** 1500 PASS, 750 FAIL, then 333 PASS, 150 PASS,
+75 PASS (best) and 33 PASS-with-collapse. Therefore the problem is **not** simply
+"faster sender = more failures", and Stage B must **not** use a
+"first FAIL below the last PASS" search.
+
+**Observed code size varied across the Stage A runs (~358 / 383 / 400 / 402 /
+440 px), so `holdMs` was NOT the only changing variable.** Stage B must be run under
+a fixed physical setup (same phone, monitor, sender window size, browser zoom,
+full-screen state, phone orientation, distance, angle and on-screen code size, with
+a phone stand strongly recommended).
+
+**750 ms — ANOMALOUS / OUTLIER CANDIDATE, not a speed-boundary failure.** It is not
+placed on the speed–performance curve as a normal datapoint because much faster
+points succeed, and because the run differed in ways unrelated to speed: all 586
+decode attempts failed at the CRC (`crcFailureRatio ≈ 0.995`), and the geometry
+readings were off-neighbourhood (`frameRotationIndex = 2`,
+`reservedPatternScore ≈ 0.8017`, `pixels/cell ≈ 3.733`) with
+`activeProcessAvgMs ≈ 158` and `processing FPS ≈ 6.29` — i.e. the phone appears to
+have been locked/grasped to a different, poorer geometry. One controlled repeat
+under the Stage B fixed setup is requested. **No locator change is made because of
+this point.** If the repeat PASSes normally the original run is a setup/lock
+outlier; if it FAILs again, the interaction between that hold time and
+acquisition/tracking is investigated.
+
+**33 ms — PHYSICAL PASS but PERFORMANCE COLLAPSE, not FAIL.** The run proves all 16
+chunks can eventually arrive, SHA-256 MATCH is possible, and the locator and
+geometry still work. But CRC failures are very high (1048), completion time is
+extremely long (166 505 ms) and exploratory Net Goodput collapses to ≈61.5 B/s.
+Wording: **"33 ms remains functionally viable but operationally inefficient under
+the measured setup."** The hypothesis that this is caused by camera/display phase
+interaction **must remain explicitly unproven** until further evidence.
+
+**Per-frame correctness vs whole-file collection efficiency.** At 75 ms the decoder
+is healthy (85–90 % of attempts decode, locate failures zero, modest CRC) yet it
+needed **356 successful decodes to collect 16 unique chunks** — a unique yield near
+4 %. Per-frame decoder correctness and whole-file collection efficiency are
+**different things**, which is why r7 adds the efficiency metrics below.
+
+**R7 DIAGNOSTIC EFFICIENCY METRICS (rank PASSing points — never decide PASS)**
+
+| Metric | Formula | Meaning |
+| --- | --- | --- |
+| `theoreticalCameraFramesPerCode` | `callbackFps × holdMs / 1000` | Theoretical CameraFrame opportunities per code / 每码理论相机采样机会. **Not** decode opportunities — a frame landing on a display transition still counts here and may still fail CRC. |
+| `decodeSuccessRatio` | `successfulDecodes / decodeAttempts` | Per-frame decoder correctness |
+| `crcFailureRatio` | `crcFailures / decodeAttempts` | Locked but CRC-rejected frames |
+| `locateFailureRatio` | `locateFailures / decodeAttempts` | No geometric lock at all |
+| `newUniqueChunkYield` | `uniqueReceived / successfulDecodes` | How much decoded work became NEW data |
+| `duplicateRatio` | `duplicates / successfulDecodes` | Re-observation of already-held chunks |
+
+Every field is `null` when its denominator is 0: a run with no decode attempts has
+**no** decode success ratio, and 0 unique chunks from 0 successful decodes is
+`null` (0/0 is undefined), not 0 %. `theoreticalCameraFramesPerCode` at a 30 FPS
+cadence: 100 ms → 3.0, 90 → 2.7, 75 → 2.25, 60 → 1.8, 50 → 1.5, 40 → 1.2,
+33 → ≈1.0 (sender switching cadence ≈ camera cadence).
+
+**Stage A interpretation per gate**
+
+| holdMs | G7 decode quality | G8/G9 collection | G10 all-chunks |
+| --- | --- | --- | --- |
+| 75 | healthy (0.895, 0 locate failures, 42 CRC) | heavy duplication | **fastest measured** |
+| 33 | still reaches CRC PASS often, but CRC failure rate rises sharply (1048) | extreme duplication | extremely slow |
+| 750 | abnormal — not consistent with neighbouring speed points | no data collected | never reached |
+
+**Revised Stage B / 修正后的阶段 B**
+
+- **Stage B set: 100, 90, 75, 60, 50, 40 ms** (75 ms re-tested as the reference
+  point). **125 ms and 80 ms are deliberately excluded** until Stage B results
+  justify them.
+- Plus **one 750 ms repeat** under the same fixed setup, for outlier verification
+  only. **33 ms is not re-run yet.**
+- Objective changed from "find the minimum `holdMs` that still PASSes" to
+  **"find the best stable operating window for the current architecture"**:
+  maximise real file completion efficiency and reliability, not minimise hold time.
+- **Ranking of PASSing points** (PASS alone is insufficient): 1) lower
+  `timeToAllChunksMs`, 2) higher exploratory Net Goodput, 3) lower CRC failure
+  ratio, 4) lower locate failure ratio, 5) higher `newUniqueChunkYield`,
+  6) consistency across repeats. **Never rank solely by smallest `holdMs`.**
+- **Stability:** the best-performing region is identified first, then the candidate
+  best point is repeated **3 times** (3/3 with 16/16, SHA MATCH and no catastrophic
+  completion-time outlier), then the adjacent faster point 3 times. Record
+  completion time and Net Goodput as **min / median / max**, with CRC failure ratio
+  and `newUniqueChunkYield`. A single run never establishes a "stable limit".
+- No Worker, no locator rewrite, no matrix change, no chunk-size change, no 3-code
+  mode, no Fountain **until Stage B characterises the operating region**.
 
 **Data flow per speed run / 每次速度运行的数据流**
 

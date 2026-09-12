@@ -102,6 +102,21 @@ test('16 · Mini Program page boot smoke (Page() registers with baseline surface
   // Net Goodput is gated by the shared core, never computed inline on the phone.
   assert.match(PAGE_JS, /singleBaselineNetGoodput\(/u, 'net goodput uses the shared definition');
   assert.match(PAGE_JS, /clampSingleBaselineHoldMs\(/u, 'hold ms uses the shared ladder clamp');
+
+  // TF-012 r7 Stage B operating-window metrics: diagnostic only, ranking PASSing
+  // points — never the PASS condition, never "decode opportunities".
+  assert.equal(typeof page.baselineEfficiencyMetrics, 'function', 'page exposes baselineEfficiencyMetrics');
+  assert.match(PAGE_JS, /singleBaselineEfficiency\(/u, 'efficiency uses the shared definition');
+  assert.match(PAGE_JS, /SINGLE_BASELINE_HOLD_MS_PRESETS/u, 'the phone picker uses the merged preset list');
+  assert.match(PAGE_JS, /efficiency: \{/u, 'the frozen result carries an efficiency block');
+  for (const field of ['theoreticalCameraFramesPerCode', 'decodeSuccessRatio', 'crcFailureRatio', 'locateFailureRatio', 'newUniqueChunkYield', 'duplicateRatio']) {
+    assert.ok(PAGE_JS.includes(field), 'frozen result carries ' + field);
+    assert.ok(field in data, 'page data exposes ' + field);
+    assert.ok(PAGE_WXML.includes(field), 'speed-ladder panel shows ' + field);
+  }
+  // The bundle must expose the r7 helpers and the merged preset list.
+  assert.match(BUNDLE, /singleBaselineEfficiency/u, 'bundle exports singleBaselineEfficiency');
+  assert.match(BUNDLE, /SINGLE_BASELINE_STAGE_B_LADDER/u, 'bundle exports the Stage B ladder');
 });
 
 test('17 · Mini Program baseline mode smoke uses the shared core only', () => {

@@ -18,7 +18,14 @@ import {decodeFrameCellsV1} from './src/optigrid-v1.ts';
 
 const transfer = buildSingleBaselineTransfer();
 
-type SenderState = {broadcasting: boolean; cursor: number; cycleCount: number; holdMs: number; diagnosticMode?: boolean};
+type SenderState = {
+  broadcasting: boolean;
+  cursor: number;
+  cycleCount: number;
+  holdMs: number;
+  diagnosticMode?: boolean;
+  stageBLadder?: number[];
+};
 
 declare global {
   interface Window {
@@ -189,6 +196,10 @@ test('speed ladder: holdMs is honoured from the URL and theoretical rates are de
 
   // The full ladder is advertised on the page (not a single hard-coded value).
   await expect(page.locator('#ladder')).toHaveText('1500 / 1000 / 750 / 500 / 333 / 250 / 200 / 150 / 100 / 75 / 50 / 33 ms');
+  // TF-012 r7: the Stage B operating-window set is advertised too, and 125/80 are
+  // deliberately absent until Stage B results justify them.
+  await expect(page.locator('#stageB')).toHaveText('100 / 90 / 75 / 60 / 50 / 40 ms');
+  expect((await state(page)).stageBLadder).toEqual([100, 90, 75, 60, 50, 40]);
 
   // The URL is the source of truth, and the broadcast really uses that period.
   await page.goto('/single-baseline.html?holdMs=250');
@@ -215,6 +226,20 @@ test('speed ladder: the fast end is not silently clamped to 100 ms', async ({pag
     await expect(page.locator('#holdTime')).toHaveText(holdMs + ' ms');
     await expect(page.locator('#chunkRate')).toHaveText(chunksPerSecond + ' chunk/s');
     expect((await state(page)).holdMs, 'holdMs ' + holdMs + ' must reach the sender unclamped').toBe(holdMs);
+  }
+});
+
+test('speed ladder: every Stage B value is reachable through the URL', async ({page}) => {
+  for (const holdMs of [100, 90, 75, 60, 50, 40]) {
+    await page.goto('/single-baseline.html?holdMs=' + holdMs);
+    await expect(page.locator('#holdTime')).toHaveText(holdMs + ' ms');
+    expect((await state(page)).holdMs, 'Stage B ' + holdMs + ' ms must be reachable').toBe(holdMs);
+  }
+  // Stage B deliberately excludes these for now: they are only introduced if the
+  // Stage B results justify an interpolation.
+  for (const excluded of [125, 80]) {
+    await page.goto('/single-baseline.html?holdMs=' + excluded);
+    await expect(page.locator('#stageB')).not.toContainText(String(excluded));
   }
 });
 

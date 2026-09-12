@@ -196,6 +196,13 @@ Page({
     holdMsLadder: [],
     theoChunkRate: '—',
     theoPayloadRate: '—',
+    // r7 diagnostic efficiency metrics (rank PASSing points, never decide PASS)
+    theoreticalCameraFramesPerCode: '—',
+    decodeSuccessRatio: '—',
+    crcFailureRatio: '—',
+    locateFailureRatio: '—',
+    newUniqueChunkYield: '—',
+    duplicateRatio: '—',
     activeProcessAvgMs: '—',
     activeProcessP50Ms: '—',
     activeProcessP95Ms: '—',
@@ -352,10 +359,10 @@ Page({
       : null;
     if (this.baselineReceiver) this.baselineReceiver.begin(clockMs());
 
-    // TF-012 r6 speed ladder: expose the ladder to the picker and derive the
-    // declared theoretical rates for the default hold time.
-    const ladder = (opticalCore && Array.isArray(opticalCore.SINGLE_BASELINE_HOLD_MS_LADDER))
-      ? opticalCore.SINGLE_BASELINE_HOLD_MS_LADDER.slice()
+    // TF-012 r6/r7 speed ladder: expose Stage A + Stage B presets to the picker
+    // and derive the declared theoretical rates for the default hold time.
+    const ladder = (opticalCore && Array.isArray(opticalCore.SINGLE_BASELINE_HOLD_MS_PRESETS))
+      ? opticalCore.SINGLE_BASELINE_HOLD_MS_PRESETS.slice()
       : [];
     const ladderLabels = ladder.map((value) => value + ' ms');
     this.setData({ holdMsLadder: ladderLabels, clockSource: CLOCK_SOURCE });
@@ -1152,6 +1159,7 @@ Page({
     const total = receiver && receiver.totalChunks ? receiver.totalChunks : BASELINE_TOTAL_CHUNKS;
     const missing = receiver ? receiver.missingIndices() : [];
     const netGoodput = this.baselineNetGoodputMetrics(receiver, this.baselineResult);
+    const efficiency = this.baselineEfficiencyMetrics(receiver);
 
     this.setData({
       callbackFps,
@@ -1172,6 +1180,14 @@ Page({
       netGoodputText: netGoodput
         ? (netGoodput.bytesPerSecond + ' B/s · ' + netGoodput.kibPerSecond + ' KiB/s')
         : 'null (needs 16/16 + SHA MATCH)',
+      theoreticalCameraFramesPerCode: efficiency.theoreticalCameraFramesPerCode != null
+        ? String(efficiency.theoreticalCameraFramesPerCode)
+        : '—',
+      decodeSuccessRatio: this.ratioText(efficiency.decodeSuccessRatio),
+      crcFailureRatio: this.ratioText(efficiency.crcFailureRatio),
+      locateFailureRatio: this.ratioText(efficiency.locateFailureRatio),
+      newUniqueChunkYield: this.ratioText(efficiency.newUniqueChunkYield),
+      duplicateRatio: this.ratioText(efficiency.duplicateRatio),
       frameWidth: this.frameW,
       frameHeight: this.frameH,
       frameBufferBytes: this.frameBytes,
@@ -1408,6 +1424,7 @@ Page({
       && reconstruction.bytes.length === BASELINE_FILE_BYTES
       && missing.length === 0;
     const netGoodput = this.baselineNetGoodputMetrics(receiver, reconstruction);
+    const efficiency = this.baselineEfficiencyMetrics(receiver);
     const declaredHoldMs = this.data.holdMsDeclared;
     const benchmark = (opticalCore && typeof opticalCore.singleBaselineBenchmark === 'function')
       ? opticalCore.singleBaselineBenchmark(declaredHoldMs)
@@ -1486,6 +1503,21 @@ Page({
       exploratoryNetGoodputBytesPerSecond: netGoodput ? netGoodput.bytesPerSecond : null,
       exploratoryNetGoodputKiBPerSecond: netGoodput ? netGoodput.kibPerSecond : null,
       exploratoryNetGoodputFormula: 'reconstructedBytes / (timeToAllChunksMs / 1000) — null unless 16/16 unique + SHA-256 MATCH',
+      // ---- 4. DIAGNOSTIC efficiency metrics (rank PASSing points only) ----
+      // These never decide PASS. newUniqueChunkYield is the key one: per-frame
+      // decoder correctness and whole-file collection efficiency are different
+      // things, and Stage A showed many duplicate decodes before 16/16.
+      efficiency: {
+        theoreticalCameraFramesPerCode: efficiency.theoreticalCameraFramesPerCode,
+        theoreticalCameraFramesPerCodeFormula: 'callbackFps × holdMs / 1000',
+        theoreticalCameraFramesPerCodeLabel: 'Theoretical CameraFrame opportunities per code / 每码理论相机采样机会',
+        decodeSuccessRatio: efficiency.decodeSuccessRatio,
+        crcFailureRatio: efficiency.crcFailureRatio,
+        locateFailureRatio: efficiency.locateFailureRatio,
+        newUniqueChunkYield: efficiency.newUniqueChunkYield,
+        duplicateRatio: efficiency.duplicateRatio,
+        disclaimer: 'Diagnostic metrics for ranking PASSing speed points. They are NOT the PASS condition and MUST NOT be read as decode opportunities.'
+      },
       pass,
       transfer: {
         fileId: receiver && receiver.activeFileId !== null
@@ -1902,6 +1934,43 @@ Page({
       receiver.totalChunks,
       reconstruction.match === true,
     );
+  },
+
+  /**
+   * TF-012 r7 Stage B efficiency metrics. Delegates the arithmetic AND the guards
+   * to the shared core so a zero-denominator case reports null instead of a 0/0.
+   * These are diagnostic: PASS is still 16/16 unique + 10240 bytes + SHA MATCH.
+   */
+  baselineEfficiencyMetrics(receiver) {
+    const empty = {
+      theoreticalCameraFramesPerCode: null,
+      decodeSuccessRatio: null,
+      crcFailureRatio: null,
+      locateFailureRatio: null,
+      newUniqueChunkYield: null,
+      duplicateRatio: null
+    };
+    if (!opticalCore || typeof opticalCore.singleBaselineEfficiency !== 'function') return empty;
+    if (!receiver) return empty;
+    const metrics = receiver.metrics;
+    const elapsedMs = this.baselineStartAt ? Date.now() - this.baselineStartAt : 0;
+    const callbackFps = elapsedMs > 0 ? (this.baselineFramesReceived / (elapsedMs / 1000)) : 0;
+    return opticalCore.singleBaselineEfficiency({
+      callbackFps,
+      holdMs: this.data.holdMsDeclared,
+      decodeAttempts: metrics.decodeAttempts,
+      successfulDecodes: metrics.decodeSuccess,
+      crcFailures: metrics.crcFailures,
+      locateFailures: metrics.locateFailures,
+      duplicates: metrics.duplicateChunks,
+      uniqueReceived: receiver.receivedUniqueCount
+    });
+  },
+
+  /** Render a ratio for the phone panel. null stays visibly absent, never 0. */
+  ratioText(value, digits) {
+    if (value === null || value === undefined) return 'n/a';
+    return (value * 100).toFixed(digits === undefined ? 2 : digits) + '%';
   },
 
   percentileFormat(values, kind) {

@@ -2101,3 +2101,94 @@ export function singleBaselineNetGoodput(
     kibPerSecond: round(bytesPerSecond / 1024, 3),
   };
 }
+
+// ---------------------------------------------------------------------------
+// 9. TF-012 r7 — Stage B operating-window efficiency metrics
+// ---------------------------------------------------------------------------
+//
+// WHY THESE EXIST / 为什么需要这些指标
+//
+// The r6 Stage A ladder came back NON-MONOTONIC (1500 PASS, 750 anomalous FAIL,
+// 333 PASS, 150 PASS, 75 PASS-best, 33 PASS-with-collapse). A single
+// "successfulDecodes / decodeAttempts" view cannot explain that, because per-frame
+// decoder correctness and whole-file collection efficiency are DIFFERENT things:
+// at 75 ms the receiver decoded 356 frames successfully but needed only 16 unique
+// chunks, i.e. most of its work was re-observing chunks it already had.
+//
+// These six numbers are DIAGNOSTIC ONLY. They never decide PASS — PASS remains
+// 16/16 unique + missing == [] + 10240 bytes + SHA-256 MATCH on a real phone.
+// They only rank PASSing points against each other.
+
+/** Stage B coarse refinement ladder (ms), ascending speed. */
+export const SINGLE_BASELINE_STAGE_B_LADDER = [100, 90, 75, 60, 50, 40] as const;
+
+/**
+ * Every hold duration a PO may need to select, Stage A followed by the Stage B
+ * values that are not already in Stage A. The second ladder deliberately omits
+ * 125/80: they are only introduced if Stage B results justify them.
+ */
+export const SINGLE_BASELINE_HOLD_MS_PRESETS: readonly number[] = (function () {
+  const merged: number[] = [];
+  for (const value of SINGLE_BASELINE_HOLD_MS_LADDER) merged.push(value);
+  for (const value of SINGLE_BASELINE_STAGE_B_LADDER) {
+    if (!merged.includes(value)) merged.push(value);
+  }
+  return merged.sort((a, b) => b - a);
+}());
+
+export type SingleBaselineEfficiency = {
+  /**
+   * callbackFps × holdMs / 1000 — THEORETICAL CameraFrame opportunities per code
+   * (每码理论相机采样机会). It is a sampling OPPORTUNITY count, never a count of
+   * useful/decodeable frames: a frame that lands during a display transition still
+   * counts here and may still fail CRC.
+   */
+  theoreticalCameraFramesPerCode: number | null;
+  /** successfulDecodes / decodeAttempts — per-frame decoder correctness. */
+  decodeSuccessRatio: number | null;
+  /** crcFailures / decodeAttempts — locked but CRC-rejected frames. */
+  crcFailureRatio: number | null;
+  /** locateFailures / decodeAttempts — frames with no geometric lock at all. */
+  locateFailureRatio: number | null;
+  /** uniqueReceived / successfulDecodes — how much decoded work became NEW data. */
+  newUniqueChunkYield: number | null;
+  /** duplicateChunks / successfulDecodes — re-observation of already-held chunks. */
+  duplicateRatio: number | null;
+};
+
+export type SingleBaselineEfficiencyInput = {
+  callbackFps: number;
+  holdMs: number;
+  decodeAttempts: number;
+  successfulDecodes: number;
+  crcFailures: number;
+  locateFailures: number;
+  duplicates: number;
+  uniqueReceived: number;
+};
+
+function ratio(numerator: number, denominator: number): number | null {
+  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator <= 0) return null;
+  return round(numerator / denominator, 4);
+}
+
+/**
+ * Diagnostic efficiency metrics for one speed run. Every field is `null` when its
+ * denominator is unusable, so a caller can never print 0/0 as if it were a
+ * measurement (a run with zero decode attempts has no decode success ratio — it has
+ * no data).
+ */
+export function singleBaselineEfficiency(input: SingleBaselineEfficiencyInput): SingleBaselineEfficiency {
+  const {callbackFps, holdMs} = input;
+  const framesPerCode = (Number.isFinite(callbackFps) && Number.isFinite(holdMs) && callbackFps > 0 && holdMs > 0)
+    ? round((callbackFps * holdMs) / 1000, 3)
+    : null;
+  return {
+    theoreticalCameraFramesPerCode: framesPerCode,
+    decodeSuccessRatio: ratio(input.successfulDecodes, input.decodeAttempts),
+    crcFailureRatio: ratio(input.crcFailures, input.decodeAttempts),
+    locateFailureRatio: ratio(input.locateFailures, input.decodeAttempts),
+    newUniqueChunkYield: ratio(input.uniqueReceived, input.successfulDecodes),
+    duplicateRatio: ratio(input.duplicates, input.successfulDecodes),
+  };
+}

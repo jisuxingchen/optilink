@@ -31,6 +31,7 @@ import {
   SINGLE_BASELINE_MATRIX,
   SINGLE_BASELINE_RECONSTRUCTION_METHOD,
   SINGLE_BASELINE_HOLD_MS_LADDER,
+  SINGLE_BASELINE_STAGE_B_LADDER,
   buildSingleBaselineTransfer,
   clampSingleBaselineHoldMs,
   singleBaselineBenchmark,
@@ -68,6 +69,7 @@ const holdTimeCell = $<HTMLElement>('holdTime');
 const chunkRateCell = $<HTMLElement>('chunkRate');
 const payloadRateCell = $<HTMLElement>('payloadRate');
 const ladderCell = $<HTMLElement>('ladder');
+const stageBCell = $<HTMLElement>('stageB');
 const cycleCountCell = $<HTMLElement>('cycleCount');
 const statusTextCell = $<HTMLElement>('statusText');
 const diagnosticRow = $<HTMLElement>('diagnosticRow');
@@ -240,6 +242,7 @@ payloadRateCell.textContent = diagnosticMode
     ? `${benchmark.theoreticalPayloadBytesPerSecond} B/s · ${benchmark.theoreticalPayloadKiBPerSecond} KiB/s`
     : '—';
 ladderCell.textContent = SINGLE_BASELINE_HOLD_MS_LADDER.join(' / ') + ' ms';
+stageBCell.textContent = SINGLE_BASELINE_STAGE_B_LADDER.join(' / ') + ' ms';
 if (diagnosticMode) {
   diagnosticRow.hidden = false;
   heldChunkRow.hidden = false;
@@ -271,6 +274,8 @@ renderCurrent();
     diagnosticMode,
     heldChunk: diagnosticMode ? heldChunk : null,
     benchmark: diagnosticMode ? null : benchmark,
+    stageALadder: SINGLE_BASELINE_HOLD_MS_LADDER.slice(),
+    stageBLadder: SINGLE_BASELINE_STAGE_B_LADDER.slice(),
   },
   state: () => ({
     broadcasting,
@@ -279,6 +284,7 @@ renderCurrent();
     holdMs,
     diagnosticMode,
     benchmark: diagnosticMode ? null : benchmark,
+    stageBLadder: SINGLE_BASELINE_STAGE_B_LADDER.slice(),
   }),
   start: startBroadcast,
   stop: stopAndFreeze,

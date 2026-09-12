@@ -156,6 +156,14 @@
     <view class="hr"></view>
     <view class="row"><text class="k">exploratory Net Goodput / 探索性净吞吐</text><text class="v">{{netGoodputText}}</text></view>
     <view class="note">defined ONLY when 16/16 unique chunks + SHA-256 MATCH · 10 KiB exploratory physical benchmark · NOT G0</view>
+    <view class="hr"></view>
+    <view class="row"><text class="k">CameraFrames/code (theoretical)</text><text class="v">{{theoreticalCameraFramesPerCode}}</text></view>
+    <view class="row"><text class="k">decode success ratio</text><text class="v">{{decodeSuccessRatio}}</text></view>
+    <view class="row"><text class="k">CRC failure ratio</text><text class="v">{{crcFailureRatio}}</text></view>
+    <view class="row"><text class="k">locate failure ratio</text><text class="v">{{locateFailureRatio}}</text></view>
+    <view class="row"><text class="k">new unique chunk yield</text><text class="v">{{newUniqueChunkYield}}</text></view>
+    <view class="row"><text class="k">duplicate ratio</text><text class="v">{{duplicateRatio}}</text></view>
+    <view class="note">diagnostic only — ranks PASSing points, does NOT decide PASS · NOT decode opportunities</view>
   </view>
 
   <view class="panel" wx:if="{{mode === 'baseline' && baselineContentPreview}}">
