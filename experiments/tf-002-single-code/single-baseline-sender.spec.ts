@@ -325,13 +325,22 @@ test('holdMs dropdown: a running broadcast is stopped, never retimed mid-cycle',
   await expect(page.locator('#holdApplyNote')).toContainText('Stopped and applied 100 ms');
   await expect(page.locator('#holdApplyNote')).toContainText('press Start again');
 
+  // The button state must follow: a stopped sender must be restartable. This is
+  // the exact defect CI caught — stopping from the dropdown used to leave Start
+  // disabled, so pressing it again was impossible.
+  await expect(page.locator('#startButton')).toBeEnabled();
+  await expect(page.locator('#stopButton')).toBeDisabled();
+
   // Pressing Start again really uses the new period.
   await page.locator('#startButton').click();
   await expect(page.locator('#statusText')).toHaveText('Broadcasting / 广播中');
   expect((await state(page)).cycleCount).toBe(0);
+  await expect(page.locator('#startButton')).toBeDisabled();
+  await expect(page.locator('#stopButton')).toBeEnabled();
   await page.waitForTimeout(700);
   expect((await state(page)).cursor, '100 ms advances at least 5 chunks in 700 ms').toBeGreaterThanOrEqual(5);
   await page.locator('#stopButton').click();
+  await expect(page.locator('#startButton')).toBeEnabled();
 });
 
 test('holdMs dropdown: the harness applies the same value as the dropdown', async ({page}) => {

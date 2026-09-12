@@ -168,12 +168,21 @@ function renderCurrent(): void {
   updateReadout();
 }
 
+/**
+ * Stop the broadcast AND restore the stopped button state.
+ *
+ * The button state belongs here, not only in the Stop handler: applyHoldMs() stops
+ * a running broadcast before changing the period, and if the Start button were left
+ * disabled the PO could never restart after picking a new hold time.
+ */
 function stopBroadcast(): void {
   broadcasting = false;
   if (timer !== null) {
     window.clearInterval(timer);
     timer = null;
   }
+  startButton.disabled = false;
+  stopButton.disabled = true;
   updateReadout();
 }
 
@@ -310,10 +319,9 @@ function startBroadcast(): void {
   timer = window.setInterval(step, holdMs);
 }
 
+/** Stop button: freeze the current chunk on screen (the button state lives in stopBroadcast). */
 function stopAndFreeze(): void {
   stopBroadcast();
-  startButton.disabled = false;
-  stopButton.disabled = true;
 }
 
 startButton.addEventListener('click', startBroadcast);
