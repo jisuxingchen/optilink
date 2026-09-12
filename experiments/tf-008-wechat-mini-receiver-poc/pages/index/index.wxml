@@ -9,6 +9,35 @@
     <text class="{{bootStatus === 'BOOT OK' ? 'tsok' : 'tsbad'}}">{{bootStatus}}{{bootError ? ' · ' + bootError : ''}}</text>
   </view>
 
+  <!-- ========== SENDER holdMs DECLARATION / 发送端每码停留声明 ==========
+       r9: moved to the FIRST SCREEN, above the viewfinder, because the PO could
+       not find it before. It is annotation + theoretical metrics ONLY: it never
+       touches decode, frame processing, the protocol or reconstruction. -->
+  <view class="holdbar">
+    <view class="hbhead">
+      <text class="hbtitle">Sender holdMs declaration / 发送端每码停留声明</text>
+      <text class="hbvalue">Declared holdMs: {{holdMsDeclared}} ms</text>
+    </view>
+    <view class="hbbtns">
+      <view class="hbchip {{holdMsDeclared === 100 ? 'hbon' : ''}}" data-hms="100" bindtap="onHoldMsChip">100</view>
+      <view class="hbchip {{holdMsDeclared === 90 ? 'hbon' : ''}}" data-hms="90" bindtap="onHoldMsChip">90</view>
+      <view class="hbchip {{holdMsDeclared === 75 ? 'hbon' : ''}}" data-hms="75" bindtap="onHoldMsChip">75</view>
+      <view class="hbchip {{holdMsDeclared === 60 ? 'hbon' : ''}}" data-hms="60" bindtap="onHoldMsChip">60</view>
+      <view class="hbchip {{holdMsDeclared === 50 ? 'hbon' : ''}}" data-hms="50" bindtap="onHoldMsChip">50</view>
+      <view class="hbchip {{holdMsDeclared === 40 ? 'hbon' : ''}}" data-hms="40" bindtap="onHoldMsChip">40</view>
+      <view class="hbchip hboutlier {{holdMsDeclared === 750 ? 'hbon' : ''}}" data-hms="750" bindtap="onHoldMsChip">750</view>
+    </view>
+    <view class="hbfoot">
+      <text class="hbwarn">Must match sender / 必须与电脑发送端一致</text>
+      <picker mode="selector" range="{{holdMsLadder}}" bindchange="onHoldMsPick">
+        <view class="hbpick">more ▾</view>
+      </picker>
+      <input class="numinput" type="number" value="{{holdMsInput}}" bindinput="onHoldMsInput" placeholder="custom" />
+    </view>
+    <view class="hbrates">{{theoChunkRate}} · {{theoPayloadRate}}</view>
+    <view class="hbnote">Stage B 100/90/75/60/50/40 · outlier check 750 · annotation only, never affects decode / 仅用于标注，不影响解码</view>
+  </view>
+
   <camera
     device-position="back"
     flash="off"
@@ -180,18 +209,9 @@
   </view>
 
   <view class="panel" wx:if="{{mode === 'baseline'}}">
-    <view class="section">speed ladder · 速度阶梯 (TF-012 r6)</view>
+    <view class="section">speed ladder metrics · 阶梯指标 (TF-012 r7)</view>
     <view class="row"><text class="k">declared hold / 声明每码停留</text><text class="v">{{holdMsDeclared}} ms</text></view>
-    <view class="row">
-      <text class="k">set to sender ?holdMs=</text>
-      <input class="numinput" type="number" value="{{holdMsInput}}" bindinput="onHoldMsInput" placeholder="1500 .. 33" />
-    </view>
-    <view class="row">
-      <text class="k">ladder preset / 阶梯预设</text>
-      <picker mode="selector" range="{{holdMsLadder}}" bindchange="onHoldMsPick">
-        <view class="pick">pick {{holdMsDeclared}} ms ▾</view>
-      </picker>
-    </view>
+    <view class="note">Set above, in the Sender holdMs declaration bar / 在上方的每码停留声明栏中设置</view>
     <view class="row"><text class="k">theoretical chunk rate / 理论切片速率</text><text class="v">{{theoChunkRate}}</text></view>
     <view class="row"><text class="k">theoretical file-payload rate / 理论文件载荷速率</text><text class="v">{{theoPayloadRate}}</text></view>
     <view class="note">declared sender-side arithmetic · NOT Net Goodput · NOT optical throughput</view>

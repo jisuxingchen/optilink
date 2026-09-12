@@ -29,6 +29,17 @@
     td.v{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:700}
     #hint{position:fixed;right:14px;bottom:12px;z-index:10;font-size:12px;color:#64748b;background:rgba(255,255,255,.9);
       padding:6px 10px;border-radius:8px;border:1px solid #e2e8f0}
+    /* TF-012 r9: prominent hold-time selector + declared-rate readout. */
+    .holdbox{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:#fffbeb;border:2px solid #fde68a;
+      border-radius:10px;padding:10px 12px;margin-bottom:8px}
+    .holdlabel{font-weight:800;color:#92400e;font-size:13px}
+    #holdMsSelect{font-size:15px;font-weight:800;padding:8px 10px;border-radius:8px;border:1px solid #b45309;
+      background:#fff;color:#0f1720;min-width:230px;cursor:pointer}
+    .holdnote{font-size:12px;color:#92400e}
+    .holdnote.warn{font-weight:800;color:#b91c1c}
+    .readout{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+    .readout .ro{font-size:12px;color:#475569;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:8px;padding:6px 9px}
+    .readout .ro b{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#0f1720;font-weight:800}
   </style>
 </head>
 <body>
@@ -48,6 +59,19 @@
       <span id="broadcastStatus" class="stopped">Stopped / 已停止</span>
       <button id="hideButton" class="ghost" title="Hide this panel during the physical test">Hide / 隐藏</button>
     </div>
+
+    <!-- TF-012 r9: the hold time is now a first-class visible control, not a URL-only value. -->
+    <div class="holdbox">
+      <label class="holdlabel" for="holdMsSelect">Hold time / 每码停留</label>
+      <select id="holdMsSelect" aria-label="Hold time per code"></select>
+      <span id="holdApplyNote" class="holdnote">Applied on the next Start / 下一次 Start 生效</span>
+    </div>
+    <div class="readout">
+      <span class="ro">Current holdMs / 当前每码停留 <b id="holdTime">—</b></span>
+      <span class="ro">Theoretical chunks/s / 理论切片速率 <b id="chunkRate">—</b></span>
+      <span class="ro">Theoretical payload rate / 理论载荷速率 <b id="payloadRate">—</b></span>
+    </div>
+
     <table>
       <tr><td class="k">File / 文件</td><td class="v" id="fileName">—</td></tr>
       <tr><td class="k">File size / 文件大小</td><td class="v" id="fileSize">—</td></tr>
@@ -58,9 +82,6 @@
       <tr><td class="k">Chunk data / 每片文件数据</td><td class="v" id="chunkData">—</td></tr>
       <tr><td class="k">Chunk payload / 每片载荷</td><td class="v" id="chunkPayload">—</td></tr>
       <tr><td class="k">Matrix / 矩阵</td><td class="v" id="matrixSize">—</td></tr>
-      <tr><td class="k">Hold time / 每码停留</td><td class="v" id="holdTime">—</td></tr>
-      <tr><td class="k">Theoretical chunk rate / 理论切片速率</td><td class="v" id="chunkRate">—</td></tr>
-      <tr><td class="k">Theoretical file-payload rate / 理论文件载荷速率</td><td class="v" id="payloadRate">—</td></tr>
       <tr><td class="k">Speed ladder / 速度阶梯</td><td class="v" id="ladder">—</td></tr>
       <tr><td class="k">Stage B set / 阶段B取值</td><td class="v" id="stageB">—</td></tr>
       <tr id="diagnosticRow" hidden><td class="k">Diagnostic Mode / 诊断模式</td><td class="v" id="diagnosticMode">—</td></tr>
@@ -71,7 +92,8 @@
   </section>
 
   <div id="hint">One OptiGrid only · 单码显示 · no Manifest / no Preamble / no Fountain / no 3-tile<br />
-    Theoretical rates are declared sender-side arithmetic — NOT Net Goodput, NOT optical throughput.</div>
+    Theoretical rates are declared sender-side arithmetic — NOT Net Goodput, NOT optical throughput.<br />
+    The phone must declare the SAME hold time: PC current holdMs = the URL <code>?holdMs=</code> value shown above.</div>
 
   <script type="module" src="/src/single-baseline-sender-main.ts"></script>
 </body>

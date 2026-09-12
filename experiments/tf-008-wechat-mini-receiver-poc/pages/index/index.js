@@ -49,7 +49,7 @@ try {
 
 // Unmistakable build identifier — must be visible on the phone to prove the
 // device is running the latest shared-receive package (not a stale cache).
-const BUILD_ID = 'tf012-r8-fd11922';
+const BUILD_ID = 'tf012-r9-dev';
 
 /**
  * Monotonic millisecond clock for the speed-ladder benchmark.
@@ -691,6 +691,22 @@ Page({
           + benchmark.theoreticalPayloadKiBPerSecond + ' KiB/s')
         : '—'
     });
+    // r9: the KEY STATUS panel must always show the same declared value, so the
+    // PO can compare the phone against the PC sender without scrolling.
+    this.refreshKeyStatus();
+  },
+
+  /**
+   * r9: one-tap Stage B chips (100/90/75/60/50/40) plus the 750 ms outlier check.
+   * No typing required for the normal ladder — the picker and the custom input
+   * remain for anything else.
+   */
+  onHoldMsChip(e) {
+    const raw = e && e.currentTarget && e.currentTarget.dataset
+      ? e.currentTarget.dataset.hms
+      : '';
+    this.applyHoldMs(raw);
+    this.appendLog('declared sender holdMs = ' + this.data.holdMsDeclared + ' ms (annotation only)');
   },
 
   onHoldMsInput(e) {

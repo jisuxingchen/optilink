@@ -31,6 +31,7 @@ import {
   SINGLE_BASELINE_MATRIX,
   SINGLE_BASELINE_RECONSTRUCTION_METHOD,
   SINGLE_BASELINE_HOLD_MS_LADDER,
+  SINGLE_BASELINE_HOLD_MS_PRESETS,
   SINGLE_BASELINE_STAGE_B_LADDER,
   buildSingleBaselineTransfer,
   clampSingleBaselineHoldMs,
@@ -40,9 +41,15 @@ import {
 const params = new URLSearchParams(location.search);
 // Speed ladder: 1500 … 33 ms. Values outside the ladder are still honoured
 // (Stage B needs 125/100/90/80), only the hard bounds are clamped.
-const holdMs = clampSingleBaselineHoldMs(params.get('holdMs'), 1000);
+// r9: mutable — the visible dropdown owns it after load, and the URL stays the
+// entry point (?holdMs=75) and is kept in sync when the dropdown changes.
+let holdMs = clampSingleBaselineHoldMs(params.get('holdMs'), 1000);
 const quietCells = Math.max(2, Math.min(6, Number.parseInt(params.get('quiet') ?? '3', 10) || 3));
-const benchmark = singleBaselineBenchmark(holdMs);
+let benchmark = singleBaselineBenchmark(holdMs);
+
+/** 750 ms is only ever re-tested to decide whether the Stage A run was an outlier. */
+const OUTLIER_HOLD_MS = 750;
+const STAGE_B_VALUES: readonly number[] = SINGLE_BASELINE_STAGE_B_LADDER;
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const node = document.getElementById(id);
@@ -77,6 +84,8 @@ const heldChunkRow = $<HTMLElement>('heldChunkRow');
 const diagnosticModeCell = $<HTMLElement>('diagnosticMode');
 const heldChunkCell = $<HTMLElement>('heldChunk');
 const panelTitle = $<HTMLElement>('panelTitle');
+const holdMsSelect = $<HTMLSelectElement>('holdMsSelect');
+const holdApplyNote = $<HTMLElement>('holdApplyNote');
 
 const contextMaybe = canvas.getContext('2d', {alpha: false});
 if (!contextMaybe) throw new Error('canvas 2D context unavailable');
@@ -168,6 +177,108 @@ function stopBroadcast(): void {
   updateReadout();
 }
 
+// ---------------------------------------------------------------------------
+// r9 hold-time selector
+// ---------------------------------------------------------------------------
+//
+// The hold time is the ONLY degree of freedom in this benchmark, so it must be
+// visibly selectable rather than a URL-only value that a PO has to type.
+//
+// SAFETY: changing the hold time NEVER retimes a running broadcast. If the sender
+// is broadcasting the change stops it first and tells the PO to press Start again,
+// so a measurement can never span two different hold times and a cycle is never
+// retimed halfway through. Nothing about the encoding, the chunk layout or the
+// broadcast semantics changes — only the interval of the existing timer.
+
+/**
+ * The three numbers a PO must be able to read at a glance, always together and
+ * always labelled as DECLARED arithmetic: the current hold time, the theoretical
+ * chunk rate and the theoretical gross file-payload rate. None of them is a
+ * measurement, none is Net Goodput and none is optical throughput.
+ */
+function renderHoldReadout(): void {
+  holdTimeCell.textContent = diagnosticMode ? 'static (diagnostic)' : `${holdMs} ms`;
+  chunkRateCell.textContent = diagnosticMode
+    ? 'n/a (static hold)'
+    : benchmark
+      ? `${benchmark.theoreticalChunksPerSecond} chunk/s`
+      : '—';
+  payloadRateCell.textContent = diagnosticMode
+    ? 'n/a (static hold)'
+    : benchmark
+      ? `${benchmark.theoreticalPayloadBytesPerSecond} B/s · ${benchmark.theoreticalPayloadKiBPerSecond} KiB/s`
+      : '—';
+}
+
+/** Populate the dropdown: Stage B first, then the 750 ms outlier check, then the rest. */
+function fillHoldMsSelect(): void {  const stageB = new Set<number>(STAGE_B_VALUES);
+  const groups: Array<{label: string; values: number[]}> = [
+    {label: 'Stage B recommended / 阶段B推荐', values: STAGE_B_VALUES.slice()},
+    {label: 'Outlier check / 异常复检', values: [OUTLIER_HOLD_MS]},
+    {
+      label: 'Other ladder values / 其他阶梯值',
+      values: SINGLE_BASELINE_HOLD_MS_PRESETS.filter(
+        (value) => !stageB.has(value) && value !== OUTLIER_HOLD_MS,
+      ),
+    },
+  ];
+  holdMsSelect.textContent = '';
+  for (const group of groups) {
+    if (!group.values.length) continue;
+    const optgroup = document.createElement('optgroup');
+    optgroup.label = group.label;
+    for (const value of group.values) {
+      const option = document.createElement('option');
+      option.value = String(value);
+      option.textContent = `${value} ms`;
+      optgroup.appendChild(option);
+    }
+    holdMsSelect.appendChild(optgroup);
+  }
+}
+
+/** Keep ?holdMs= meaningful after a dropdown change (convenience only). */
+function syncHoldMsUrl(value: number): void {
+  try {
+    const url = new URL(location.href);
+    url.searchParams.set('holdMs', String(value));
+    window.history.replaceState(null, '', url.toString());
+  } catch (err) {
+    // URL sync is a convenience; the applied hold time is what matters.
+  }
+}
+
+function setHoldNote(text: string, warn: boolean): void {
+  holdApplyNote.textContent = text;
+  holdApplyNote.className = warn ? 'holdnote warn' : 'holdnote';
+}
+
+/**
+ * Apply a new hold time. Called from the dropdown, the harness and ?holdMs=.
+ * Returns the value actually applied (clamped).
+ */
+function applyHoldMs(next: number): number {
+  const applied = clampSingleBaselineHoldMs(next, holdMs);
+  const wasBroadcasting = broadcasting;
+  if (wasBroadcasting) {
+    // Never retime a running broadcast mid-cycle.
+    stopBroadcast();
+  }
+  holdMs = applied;
+  benchmark = singleBaselineBenchmark(holdMs);
+  holdMsSelect.value = String(holdMs);
+  syncHoldMsUrl(holdMs);
+  renderHoldReadout();
+  setHoldNote(
+    wasBroadcasting
+      ? `Stopped and applied ${holdMs} ms — press Start again / 已停止并应用，请重新 Start`
+      : 'Applied on the next Start / 下一次 Start 生效',
+    wasBroadcasting,
+  );
+  renderCurrent();
+  return holdMs;
+}
+
 /**
  * One broadcast step: advance the cycle cursor, then show that chunk.
  * Start already shows chunk 0, so the visible sequence is 0,1,…,15,0,1,…
@@ -230,26 +341,22 @@ totalChunksCell.textContent = String(transfer.totalChunks);
 chunkDataCell.textContent = `${transfer.chunkDataBytes} bytes`;
 chunkPayloadCell.textContent = `${transfer.payloadBytes} / ${transfer.optigridCapacityBytes} bytes`;
 matrixCell.textContent = `${matrixSize} × ${matrixSize}`;
-holdTimeCell.textContent = diagnosticMode ? 'static (diagnostic)' : `${holdMs} ms`;
-chunkRateCell.textContent = diagnosticMode
-  ? 'n/a (static hold)'
-  : benchmark
-    ? `${benchmark.theoreticalChunksPerSecond} chunk/s`
-    : '—';
-payloadRateCell.textContent = diagnosticMode
-  ? 'n/a (static hold)'
-  : benchmark
-    ? `${benchmark.theoreticalPayloadBytesPerSecond} B/s · ${benchmark.theoreticalPayloadKiBPerSecond} KiB/s`
-    : '—';
 ladderCell.textContent = SINGLE_BASELINE_HOLD_MS_LADDER.join(' / ') + ' ms';
 stageBCell.textContent = SINGLE_BASELINE_STAGE_B_LADDER.join(' / ') + ' ms';
+renderHoldReadout();
 if (diagnosticMode) {
   diagnosticRow.hidden = false;
   heldChunkRow.hidden = false;
   diagnosticModeCell.textContent = 'Static hold / 静态固定';
   heldChunkCell.textContent = String(heldChunk);
   panelTitle.textContent = 'TF-012 Single-Code Baseline · Diagnostic 诊断模式';
+  setHoldNote('Static diagnostic hold — holdMs is ignored / 静态诊断模式，忽略 holdMs', false);
 }
+fillHoldMsSelect();
+holdMsSelect.value = String(holdMs);
+holdMsSelect.addEventListener('change', () => {
+  applyHoldMs(Number.parseInt(holdMsSelect.value, 10));
+});
 updateReadout();
 
 layout();
@@ -269,13 +376,17 @@ renderCurrent();
     fileId: transfer.fileId,
     fileSha256: transfer.fileSha256Hex,
     reconstructionMethod: SINGLE_BASELINE_RECONSTRUCTION_METHOD,
-    holdMs,
     quietCells,
     diagnosticMode,
     heldChunk: diagnosticMode ? heldChunk : null,
+    holdMs: holdMs,
     benchmark: diagnosticMode ? null : benchmark,
-    stageALadder: SINGLE_BASELINE_HOLD_MS_LADDER.slice(),
+    // r9: the dropdown is the single source of truth for the declared hold time,
+    // and it always offers the Stage B operating window plus the 750 ms outlier
+    // check, independent of which value the URL asked for.
     stageBLadder: SINGLE_BASELINE_STAGE_B_LADDER.slice(),
+    outlierHoldMs: OUTLIER_HOLD_MS,
+    selectableHoldMs: Array.from(holdMsSelect.options).map((option) => Number.parseInt(option.value, 10)),
   },
   state: () => ({
     broadcasting,
@@ -285,7 +396,11 @@ renderCurrent();
     diagnosticMode,
     benchmark: diagnosticMode ? null : benchmark,
     stageBLadder: SINGLE_BASELINE_STAGE_B_LADDER.slice(),
+    selectValue: holdMsSelect.value,
+    applyNote: holdApplyNote.textContent,
+    urlHoldMs: new URLSearchParams(location.search).get('holdMs'),
   }),
+  setHoldMs: (value: number) => applyHoldMs(value),
   start: startBroadcast,
   stop: stopAndFreeze,
   showChunk: (index: number) => {

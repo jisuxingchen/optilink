@@ -24,11 +24,107 @@
 
 .camera {
   width: 100%;
-  /* TF-012 r8: shortened from 520rpx so the viewfinder, the controls and the KEY
-     STATUS panel fit on the first screen without scrolling during a physical run. */
-  height: 360rpx;
+  /* TF-012 r8/r9: shortened from 520rpx so the viewfinder, the holdMs selector,
+     the controls and the KEY STATUS panel fit on the first screen. */
+  height: 320rpx;
   border-radius: 12rpx;
   margin-bottom: 12rpx;
+}
+
+/* TF-012 r9 SENDER holdMs DECLARATION — deliberately loud and on the first
+   screen, because the PO could not find the control when it lived lower down. */
+.holdbar {
+  background: #fffbeb;
+  border: 3rpx solid #f59e0b;
+  border-radius: 12rpx;
+  padding: 12rpx 14rpx;
+  margin-bottom: 12rpx;
+}
+
+.holdbar .hbhead {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.holdbar .hbtitle {
+  font-size: 22rpx;
+  color: #92400e;
+  font-weight: 800;
+}
+
+.holdbar .hbvalue {
+  font-size: 28rpx;
+  color: #0f1720;
+  font-weight: 800;
+}
+
+.holdbar .hbbtns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8rpx;
+  margin: 10rpx 0 8rpx;
+}
+
+.holdbar .hbchip {
+  min-width: 74rpx;
+  text-align: center;
+  font-size: 26rpx;
+  font-weight: 800;
+  color: #78350f;
+  background: #fff;
+  border: 2rpx solid #fcd34d;
+  border-radius: 8rpx;
+  padding: 8rpx 6rpx;
+}
+
+.holdbar .hbchip.hboutlier {
+  border-style: dashed;
+  color: #b45309;
+}
+
+.holdbar .hbchip.hbon {
+  background: #b45309;
+  border-color: #b45309;
+  color: #fffbeb;
+}
+
+.holdbar .hbfoot {
+  display: flex;
+  align-items: center;
+  gap: 10rpx;
+  flex-wrap: wrap;
+}
+
+.holdbar .hbwarn {
+  font-size: 22rpx;
+  font-weight: 800;
+  color: #b91c1c;
+}
+
+.holdbar .hbpick {
+  color: #b45309;
+  font-size: 24rpx;
+  font-weight: 700;
+  padding: 6rpx 12rpx;
+  border: 2rpx solid #fcd34d;
+  border-radius: 8rpx;
+  background: #fff;
+}
+
+.holdbar .hbrates {
+  font-size: 22rpx;
+  color: #78350f;
+  font-weight: 700;
+  margin-top: 6rpx;
+}
+
+.holdbar .hbnote {
+  font-size: 19rpx;
+  color: #a16207;
+  line-height: 1.5;
+  margin-top: 4rpx;
 }
 
 .controls {

@@ -25,6 +25,9 @@ type SenderState = {
   holdMs: number;
   diagnosticMode?: boolean;
   stageBLadder?: number[];
+  selectValue?: string;
+  applyNote?: string;
+  urlHoldMs?: string | null;
 };
 
 declare global {
@@ -251,5 +254,94 @@ test('speed ladder: diagnostic static hold reports no theoretical rate', async (
   // A static hold has no chunk rate, so no rate may be reported.
   const url = new URL(page.url());
   expect(url.searchParams.get('holdMs')).toBe('100');
+});
+
+/** The Stage B operating window plus the 750 ms outlier check. */
+const STAGE_B_AND_OUTLIER = [100, 90, 75, 60, 50, 40, 750];
+
+const selectedOptionValues = async (page: Page): Promise<number[]> =>
+  page.evaluate(() => Array.from(
+    (document.getElementById('holdMsSelect') as HTMLSelectElement).options,
+  ).map((option) => Number.parseInt(option.value, 10)));
+
+test('holdMs dropdown: the URL preselects the value', async ({page}) => {
+  await page.goto('/single-baseline.html?holdMs=75');
+
+  // ?holdMs= is still the entry point and now drives the visible control.
+  await expect(page.locator('#holdMsSelect')).toHaveValue('75');
+  await expect(page.locator('#holdTime')).toHaveText('75 ms');
+  await expect(page.locator('#chunkRate')).toHaveText('13.333 chunk/s');
+  expect((await state(page)).selectValue).toBe('75');
+
+  // A value with no ?holdMs= still works and defaults to 1000 ms.
+  await page.goto('/single-baseline.html');
+  await expect(page.locator('#holdMsSelect')).toHaveValue('1000');
+});
+
+test('holdMs dropdown: every Stage B value and 750 ms is selectable', async ({page}) => {
+  await page.goto('/single-baseline.html');
+  const values = await selectedOptionValues(page);
+  for (const holdMs of STAGE_B_AND_OUTLIER) {
+    expect(values, 'dropdown must offer ' + holdMs + ' ms').toContain(holdMs);
+  }
+  // The dropdown is grouped so Stage B is impossible to miss.
+  const groups = await page.evaluate(() => Array.from(
+    document.querySelectorAll('#holdMsSelect optgroup'),
+  ).map((group) => (group as HTMLOptGroupElement).label));
+  expect(groups[0]).toContain('Stage B');
+  expect(groups.some((label) => label.includes('Outlier'))).toBe(true);
+});
+
+test('holdMs dropdown: changing the value updates the readout and the URL', async ({page}) => {
+  await page.goto('/single-baseline.html?holdMs=75');
+  await expect(page.locator('#chunkRate')).toHaveText('13.333 chunk/s');
+
+  await page.selectOption('#holdMsSelect', '60');
+
+  await expect(page.locator('#holdTime')).toHaveText('60 ms');
+  await expect(page.locator('#chunkRate')).toHaveText('16.667 chunk/s');
+  await expect(page.locator('#payloadRate')).toHaveText('10666.7 B/s · 10.417 KiB/s');
+
+  const after = await state(page);
+  expect(after.holdMs).toBe(60, 'the applied hold time follows the dropdown');
+  expect(after.selectValue).toBe('60');
+  expect(after.urlHoldMs, 'the URL query is kept in sync').toBe('60');
+  expect(after.broadcasting).toBe(false, 'a stopped sender stays stopped');
+});
+
+test('holdMs dropdown: a running broadcast is stopped, never retimed mid-cycle', async ({page}) => {
+  await page.goto('/single-baseline.html?holdMs=250');
+  await page.locator('#startButton').click();
+  await expect(page.locator('#statusText')).toHaveText('Broadcasting / 广播中');
+  await page.waitForTimeout(600);
+
+  await page.selectOption('#holdMsSelect', '100');
+
+  const after = await state(page);
+  // SAFETY: no cycle is ever retimed halfway through — the sender stops instead.
+  expect(after.broadcasting).toBe(false);
+  expect(after.holdMs).toBe(100);
+  await expect(page.locator('#statusText')).toHaveText('Stopped / 已停止');
+  await expect(page.locator('#holdApplyNote')).toContainText('Stopped and applied 100 ms');
+  await expect(page.locator('#holdApplyNote')).toContainText('press Start again');
+
+  // Pressing Start again really uses the new period.
+  await page.locator('#startButton').click();
+  await expect(page.locator('#statusText')).toHaveText('Broadcasting / 广播中');
+  expect((await state(page)).cycleCount).toBe(0);
+  await page.waitForTimeout(700);
+  expect((await state(page)).cursor, '100 ms advances at least 5 chunks in 700 ms').toBeGreaterThanOrEqual(5);
+  await page.locator('#stopButton').click();
+});
+
+test('holdMs dropdown: the harness applies the same value as the dropdown', async ({page}) => {
+  await page.goto('/single-baseline.html?holdMs=1000');
+  await page.evaluate(() => (window as unknown as {
+    __SINGLE_BASELINE_SENDER__: {setHoldMs: (value: number) => void};
+  }).__SINGLE_BASELINE_SENDER__.setHoldMs(40));
+
+  await expect(page.locator('#holdMsSelect')).toHaveValue('40');
+  await expect(page.locator('#holdTime')).toHaveText('40 ms');
+  expect((await state(page)).urlHoldMs).toBe('40');
 });
 
