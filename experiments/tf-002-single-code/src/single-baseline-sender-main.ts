@@ -145,8 +145,9 @@ let cellPixels = 10;
 // `position:fixed` / `absolute` over the canvas any more, so the overlap is 0 by
 // construction in every state and at every viewport.
 
-/** The band the control strip occupies below the carrier, in CSS px. */
-const STATUS_BAR_PX = 30;
+/** The band the control strip occupies below the carrier, in CSS px. The strip is
+ *  bottom-aligned inside it, so the carrier keeps a safety margin from the strip. */
+const STATUS_BAR_PX = 34;
 /** The compact strip's own height; it must fit inside STATUS_BAR_PX. */
 const PILL_HEIGHT_PX = 24;
 

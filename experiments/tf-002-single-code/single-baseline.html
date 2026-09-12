@@ -40,8 +40,10 @@
       display:flex;flex-direction:column;align-items:center;justify-content:center}
     #codeCanvas{display:block;image-rendering:pixelated;background:#ffffff;box-shadow:0 0 0 2px #94a3b8}
     /* The reserved control strip. A normal flow element BELOW the carrier, never an
-       overlay: the carrier is sized to leave this band free. */
-    #statusbar{flex:0 0 30px;height:30px;display:flex;align-items:center;justify-content:center}
+       overlay: the carrier is sized to leave this band free. The strip is bottom-
+       aligned inside the band and every child box is pinned to the strip height, so
+       a different font's line box can never grow upward into the carrier. */
+    #statusbar{flex:0 0 34px;height:34px;display:flex;align-items:flex-end;justify-content:center}
     .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
     button{padding:10px 16px;border-radius:9px;border:1px solid #0f1720;background:#0f1720;color:#fff;font-weight:700;font-size:13px;cursor:pointer}
     button:disabled{opacity:.45;cursor:default}
@@ -78,11 +80,14 @@
     .hidden{display:none}
     #panel.hidden,#hint.hidden,#pill.hidden,.details.hidden{display:none}
     .details{margin-top:8px}
-    #pill{display:flex;align-items:center;gap:6px;height:24px;
+    #pill{display:flex;align-items:center;gap:6px;height:24px;box-sizing:border-box;overflow:hidden;
       background:#0f1720;border:1px solid #334155;border-radius:999px;padding:0 10px}
+    /* Every strip child is bounded by the strip height, so no platform's font line
+       box can spill out of the strip and reach up into the carrier. */
+    #pill>*{height:24px;line-height:24px;box-sizing:border-box;display:flex;align-items:center}
     #pill .pillstatus{font-size:12px;font-weight:800;color:#4ade80}
     #pill .pillhold{font-size:12px;font-weight:800;color:#fbbf24;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-    #pill .pillbtn{font-size:12px;font-weight:700;height:20px;padding:0 10px;border-radius:999px;border:1px solid #334155;
+    #pill .pillbtn{font-size:12px;font-weight:700;height:20px;line-height:20px;padding:0 10px;border-radius:999px;border:1px solid #334155;
       background:#1e293b;color:#e2e8f0;cursor:pointer}
     #pill .pillbtn.primary{background:#b45309;border-color:#b45309;color:#fffbeb}
     .codsize{margin-top:6px;font-size:12px;color:#475569}

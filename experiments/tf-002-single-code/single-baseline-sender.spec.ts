@@ -115,12 +115,12 @@ async function intersectionWith(page: Page, selector: string): Promise<number> {
 }
 
 /**
- * r11: the carrier is sized from the STAGE box — the viewport minus the sidebar —
- * with the reserved control-strip band subtracted, so the strip and the sidebar
- * always live outside it.
+ * r11: the carrier is sized from the STAGE box — the viewport minus the sidebar — with
+ * the reserved control-strip band subtracted, so the strip and the sidebar always live
+ * outside it.
  */
 function expectedCarrierPx(stageWidth: number, stageHeight: number, dpr: number, quietCells: number): number {
-  const available = Math.min(stageWidth, stageHeight - 30) * 0.98;
+  const available = Math.min(stageWidth, stageHeight - 34) * 0.98;
   const scale = Math.min(2, Math.max(1, dpr));
   const totalCells = SINGLE_BASELINE_MATRIX + quietCells * 2;
   return Math.max(2, Math.floor((available * scale) / totalCells)) * totalCells;
@@ -638,6 +638,37 @@ test('r11 layout: the control strip clears the carrier at a small viewport', asy
       .toEqual({total: 0, worst: '', worstArea: 0});
 
     await page.locator('#pillStop').click();
+  }
+});
+
+/**
+ * Platform fonts differ: the CI runner's Linux font gave the strip's status span a
+ * taller line box than the developer's Windows font, which pushed the span's box up
+ * into the carrier by ~49 px². That is a real overlap, so the strip must be immune to
+ * font metrics rather than tuned to one platform's. This test injects a deliberately
+ * huge font and requires the intersection to stay exactly 0.
+ */
+test('r11 layout: a pathological font cannot push the strip onto the carrier', async ({page}) => {
+  for (const viewport of [{width: 1024, height: 768}, {width: 480, height: 480}]) {
+    await page.setViewportSize(viewport);
+    await page.goto('/single-baseline.html?holdMs=75');
+    await page.locator('#startButton').click();
+    await expect(page.locator('#pill')).toBeVisible();
+
+    await page.addStyleTag({
+      content: '#pill>*{font-size:48px !important;line-height:48px !important;'
+        + 'font-family:"Noto Sans CJK SC","DejaVu Sans",monospace !important}',
+    });
+
+    expect(await carrierIntersection(page),
+      `a 48px font must not reach the carrier at ${viewport.width}x${viewport.height}`)
+      .toEqual({total: 0, worst: '', worstArea: 0});
+
+    const pill = await page.locator('#pill').boundingBox();
+    const canvas = await page.locator('#codeCanvas').boundingBox();
+    expect(pill!.y, 'the strip stays below the carrier whatever the font does')
+      .toBeGreaterThanOrEqual(canvas!.y + canvas!.height);
+    expect(pill!.height, 'the strip height is fixed regardless of the font').toBe(24);
   }
 });
 
