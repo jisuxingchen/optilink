@@ -86,6 +86,16 @@ const heldChunkCell = $<HTMLElement>('heldChunk');
 const panelTitle = $<HTMLElement>('panelTitle');
 const holdMsSelect = $<HTMLSelectElement>('holdMsSelect');
 const holdApplyNote = $<HTMLElement>('holdApplyNote');
+const renderSizeCell = $<HTMLElement>('renderSize');
+const fullscreenButton = $<HTMLButtonElement>('fullscreenButton');
+const detailsButton = $<HTMLButtonElement>('detailsButton');
+const detailsBox = $<HTMLElement>('details');
+const hintBox = $<HTMLElement>('hint');
+const pill = $<HTMLElement>('pill');
+const pillStatus = $<HTMLElement>('pillStatus');
+const pillHold = $<HTMLElement>('pillHold');
+const pillStopButton = $<HTMLButtonElement>('pillStop');
+const pillShowButton = $<HTMLButtonElement>('pillShow');
 
 const contextMaybe = canvas.getContext('2d', {alpha: false});
 if (!contextMaybe) throw new Error('canvas 2D context unavailable');
@@ -119,6 +129,13 @@ let broadcasting = false;
 let timer: number | null = null;
 let cellPixels = 10;
 
+// The compact pill is the ONE overlay that stays on screen while broadcasting, so
+// its geometry is part of the optical budget: it is docked to the very bottom edge
+// and capped at this height, and layout() proves it fits in the free band below
+// the carrier before it is ever shown.
+const PILL_HEIGHT_PX = 24;
+const PILL_DOCK_PX = 2;
+
 function layout(): void {
   const stage = Math.min(window.innerWidth, window.innerHeight) * 0.98;
   const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
@@ -128,6 +145,26 @@ function layout(): void {
   canvas.height = pixels;
   canvas.style.width = `${Math.round(pixels / dpr)}px`;
   canvas.style.height = `${Math.round(pixels / dpr)}px`;
+  // layout() floors to whole cells, so the centred carrier leaves a free band of
+  // (viewport - canvas) / 2 above and below it. The pill lives in the bottom band.
+  const freeBand = (window.innerHeight - Math.round(pixels / dpr)) / 2;
+  pillFits = freeBand >= PILL_HEIGHT_PX + PILL_DOCK_PX + 1;
+  updateRenderSize();
+  applyOverlayVisibility();
+}
+
+/**
+ * r10 display-side readout. This reports the SENDER's own render geometry only —
+ * it is not, and must never be presented as, the camera-observed code size.
+ */
+function updateRenderSize(): void {
+  const cssSize = Math.round(canvas.width / Math.min(2, Math.max(1, window.devicePixelRatio || 1)));
+  const innerCells = matrixSize;
+  const innerCss = Math.round((canvas.width / totalCells) * innerCells / Math.min(2, Math.max(1, window.devicePixelRatio || 1)));
+  renderSizeCell.innerHTML = 'Rendered code size / 码显示尺寸 <b>' + canvas.width + '×' + canvas.width
+    + '</b> canvas device px · <b>' + cssSize + '×' + cssSize + '</b> CSS px (incl. quiet zone) · '
+    + 'OptiGrid core <b>' + innerCss + '×' + innerCss + '</b> CSS px · <b>' + cellPixels
+    + '</b> device px/cell — display side only, NOT the camera-observed size';
 }
 
 /** Draw exactly ONE OptiGrid: white quiet zone, 1:1 module pixels, no scaling blur. */
@@ -161,6 +198,8 @@ function updateReadout(): void {
   statusTextCell.textContent = label;
   broadcastStatus.textContent = label;
   broadcastStatus.className = broadcasting ? 'live' : 'stopped';
+  pillStatus.textContent = label;
+  pillHold.textContent = diagnosticMode ? 'diagnostic' : `${holdMs} ms`;
 }
 
 function renderCurrent(): void {
@@ -168,13 +207,69 @@ function renderCurrent(): void {
   updateReadout();
 }
 
-/**
- * Stop the broadcast AND restore the stopped button state.
- *
- * The button state belongs here, not only in the Stop handler: applyHoldMs() stops
- * a running broadcast before changing the period, and if the Start button were left
- * disabled the PO could never restart after picking a new hold time.
- */
+// ---------------------------------------------------------------------------
+// r10 overlay policy — the optical carrier is never covered while measuring
+// ---------------------------------------------------------------------------
+//
+// MEASURED PROBLEM: the control panel is a fixed overlay, so at common window sizes
+// it covered part of the code (r8: 3.9-15.8 % of the canvas area, r9: 5.3-21.2 %
+// because the hold-time controls made it 170 px taller). A covered carrier cannot be
+// decoded reliably, so the controls must get out of the way:
+//
+//   broadcasting  → control panel and hint HIDDEN; only the compact pill remains,
+//                   docked to the bottom edge strictly BELOW the carrier (0 %)
+//   stopped       → panel + hint visible; the long file table stays collapsed
+//   optical full  → panel + hint hidden as well, for an unobstructed shot
+//
+// The carrier's own size is NOT affected by any of this: layout() depends only on
+// the viewport, so hiding the UI can never change the established code size. This is
+// asserted by the r10 layout regression tests.
+
+let overlaysHidden = false;
+let autoHiddenForBroadcast = false;
+let opticalFullscreen = false;
+/** Set by layout(): false when the viewport is too short for the pill to clear the carrier. */
+let pillFits = true;
+
+function setPanelHidden(hidden: boolean): void {
+  panel.classList.toggle('hidden', hidden);
+  hideButton.textContent = hidden ? 'Show / 显示' : 'Hide / 隐藏';
+}
+
+/** Apply the one overlay policy. Called from start/stop and the toggles. */
+function applyOverlayVisibility(): void {
+  if (opticalFullscreen) {
+    setPanelHidden(true);
+    hintBox.classList.add('hidden');
+  } else {
+    // Starting a broadcast is what HIDES the controls (it sets overlaysHidden), so
+    // this is purely the user's current overlay choice. The Show button on the pill
+    // therefore really brings the controls back — even mid-broadcast — which is how
+    // a PO changes the hold time without hunting for a hidden panel.
+    setPanelHidden(overlaysHidden);
+    hintBox.classList.toggle('hidden', overlaysHidden);
+  }
+  // The compact pill lives in the bottom-right margin, which the centred carrier
+  // never reaches — measured at 0% overlap at every tested viewport. It therefore
+  // stays available whenever there is something to control, and it is the ONLY way
+  // back out of optical fullscreen. Hiding it would trap a PO with no visible exit.
+  // If the viewport is too short to clear the carrier, the pill is dropped entirely
+  // and the keyboard shortcuts (F / S) remain the control path.
+  pill.classList.toggle('hidden', !pillFits || !(broadcasting || opticalFullscreen));
+  pillShowButton.textContent = opticalFullscreen ? 'Exit Fullscreen / 退出全屏' : 'Controls / 控制';
+  pillStatus.textContent = broadcasting ? 'Broadcasting / 广播中' : 'Stopped / 已停止';
+  pillHold.textContent = diagnosticMode ? 'diagnostic' : `${holdMs} ms`;
+}
+
+/** Optical Fullscreen / 光学全屏: hide every overlay so only the code is on screen. */
+function toggleOpticalFullscreen(force?: boolean): void {
+  opticalFullscreen = force === undefined ? !opticalFullscreen : force;
+  fullscreenButton.textContent = opticalFullscreen
+    ? 'Exit Fullscreen / 退出全屏'
+    : 'Optical Fullscreen / 光学全屏';
+  applyOverlayVisibility();
+}
+
 function stopBroadcast(): void {
   broadcasting = false;
   if (timer !== null) {
@@ -183,6 +278,11 @@ function stopBroadcast(): void {
   }
   startButton.disabled = false;
   stopButton.disabled = true;
+  if (autoHiddenForBroadcast) {
+    autoHiddenForBroadcast = false;
+    overlaysHidden = false;
+  }
+  applyOverlayVisibility();
   updateReadout();
 }
 
@@ -308,6 +408,11 @@ function startBroadcast(): void {
   broadcasting = true;
   startButton.disabled = true;
   stopButton.disabled = false;
+  // r10: the controls get out of the way for the whole measurement, so no overlay
+  // can ever cover the optical carrier while the phone is decoding.
+  autoHiddenForBroadcast = true;
+  overlaysHidden = true;
+  applyOverlayVisibility();
   if (diagnosticMode) {
     // Static diagnostic mode: ONE known chunk, held indefinitely, no timer.
     cursor = heldChunk as number;
@@ -324,16 +429,47 @@ function stopAndFreeze(): void {
   stopBroadcast();
 }
 
+/** Manual Show/Hide of the control panel; also leaves the automatic policy. */
+function togglePanel(): void {
+  overlaysHidden = !panel.classList.contains('hidden');
+  autoHiddenForBroadcast = false;
+  if (opticalFullscreen) toggleOpticalFullscreen(false);
+  applyOverlayVisibility();
+}
+
 startButton.addEventListener('click', startBroadcast);
 stopButton.addEventListener('click', stopAndFreeze);
-hideButton.addEventListener('click', () => {
-  panel.classList.toggle('hidden');
-  hideButton.textContent = panel.classList.contains('hidden') ? 'Show / 显示' : 'Hide / 隐藏';
+hideButton.addEventListener('click', togglePanel);
+fullscreenButton.addEventListener('click', () => toggleOpticalFullscreen());
+detailsButton.addEventListener('click', () => {
+  detailsBox.classList.toggle('hidden');
+  detailsButton.textContent = detailsBox.classList.contains('hidden') ? 'Details / 详情' : 'Hide details / 收起详情';
+});
+pillStopButton.addEventListener('click', stopAndFreeze);
+pillShowButton.addEventListener('click', () => {
+  // In optical fullscreen this button is the visible way out; the panel button is
+  // hidden by definition in that mode.
+  const wasFullscreen = opticalFullscreen;
+  overlaysHidden = false;
+  autoHiddenForBroadcast = false;
+  if (wasFullscreen) {
+    toggleOpticalFullscreen(false);
+  }
+  applyOverlayVisibility();
 });
 window.addEventListener('keydown', (event) => {
   if (event.key === 'h' || event.key === 'H') {
-    panel.classList.toggle('hidden');
-    hideButton.textContent = panel.classList.contains('hidden') ? 'Show / 显示' : 'Hide / 隐藏';
+    togglePanel();
+  } else if (event.key === 'f' || event.key === 'F') {
+    toggleOpticalFullscreen();
+  } else if (event.key === 's' || event.key === 'S') {
+    // Pair for every toggle: this is the guaranteed control path even when the
+    // pill is dropped because the viewport is too short to clear the carrier.
+    if (broadcasting) {
+      stopAndFreeze();
+    } else {
+      startBroadcast();
+    }
   }
 });
 window.addEventListener('resize', () => {
@@ -365,6 +501,7 @@ holdMsSelect.value = String(holdMs);
 holdMsSelect.addEventListener('change', () => {
   applyHoldMs(Number.parseInt(holdMsSelect.value, 10));
 });
+applyOverlayVisibility();
 updateReadout();
 
 layout();
@@ -407,8 +544,20 @@ renderCurrent();
     selectValue: holdMsSelect.value,
     applyNote: holdApplyNote.textContent,
     urlHoldMs: new URLSearchParams(location.search).get('holdMs'),
+    // r10: overlay policy + display-side geometry, so a test can prove the carrier
+    // is neither resized nor covered when the benchmark UI is present.
+    panelHidden: panel.classList.contains('hidden'),
+    hintHidden: hintBox.classList.contains('hidden'),
+    pillHidden: pill.classList.contains('hidden'),
+    pillFits,
+    opticalFullscreen,
+    canvasDevicePx: canvas.width,
+    cellPixels,
+    renderSizeText: renderSizeCell.textContent,
   }),
   setHoldMs: (value: number) => applyHoldMs(value),
+  togglePanel,
+  toggleOpticalFullscreen,
   start: startBroadcast,
   stop: stopAndFreeze,
   showChunk: (index: number) => {

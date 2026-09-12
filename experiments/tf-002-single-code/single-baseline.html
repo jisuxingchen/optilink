@@ -40,6 +40,26 @@
     .readout{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
     .readout .ro{font-size:12px;color:#475569;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:8px;padding:6px 9px}
     .readout .ro b{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#0f1720;font-weight:800}
+    /* TF-012 r10: the OPTICAL CARRIER must never be covered by benchmark UI.
+       The long file table is collapsed by default, and while broadcasting (or in
+       optical fullscreen) the big panel and the hint are hidden; a compact pill
+       keeps Stop / the live state / the way back reachable. It is pinned to the
+       very bottom-right corner and kept short so that it fits inside the margin
+       the centred code leaves: `layout()` floors to whole cells, so the vertical
+       margin is (viewportH - canvas) / 2 which is >= 27 px at every tested size,
+       i.e. the pill sits strictly BELOW the carrier. Measured overlap: 0%. */
+    #panel.hidden,#hint.hidden,#pill.hidden,.details.hidden{display:none}
+    .details{margin-top:8px}
+    #pill{position:fixed;right:6px;bottom:2px;z-index:20;display:flex;align-items:center;gap:6px;
+      height:24px;box-sizing:border-box;
+      background:rgba(15,23,32,.92);border:1px solid #334155;border-radius:999px;padding:0 10px}
+    #pill .pillstatus{font-size:12px;font-weight:800;color:#4ade80}
+    #pill .pillhold{font-size:12px;font-weight:800;color:#fbbf24;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+    #pill .pillbtn{font-size:12px;font-weight:700;height:20px;padding:0 10px;border-radius:999px;border:1px solid #334155;
+      background:#1e293b;color:#e2e8f0;cursor:pointer}
+    #pill .pillbtn.primary{background:#b45309;border-color:#b45309;color:#fffbeb}
+    .codsize{margin-top:6px;font-size:12px;color:#475569}
+    .codsize b{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#0f1720;font-weight:800}
   </style>
 </head>
 <body>
@@ -57,7 +77,9 @@
       <button id="startButton">Start / 开始</button>
       <button id="stopButton" class="ghost" disabled>Stop / 停止</button>
       <span id="broadcastStatus" class="stopped">Stopped / 已停止</span>
-      <button id="hideButton" class="ghost" title="Hide this panel during the physical test">Hide / 隐藏</button>
+      <button id="fullscreenButton" class="ghost" title="Hide every overlay so only the OptiGrid is on screen (or press F)">Optical Fullscreen / 光学全屏</button>
+      <button id="hideButton" class="ghost" title="Hide the control panel during the physical test">Hide / 隐藏</button>
+      <button id="detailsButton" class="ghost" title="Show or hide the long file/transfer table">Details / 详情</button>
     </div>
 
     <!-- TF-012 r9: the hold time is now a first-class visible control, not a URL-only value. -->
@@ -71,7 +93,10 @@
       <span class="ro">Theoretical chunks/s / 理论切片速率 <b id="chunkRate">—</b></span>
       <span class="ro">Theoretical payload rate / 理论载荷速率 <b id="payloadRate">—</b></span>
     </div>
+    <!-- TF-012 r10: display-side only. It must NOT be read as the camera-observed size. -->
+    <div class="codsize" id="renderSize">Rendered code size / 码显示尺寸 —</div>
 
+    <div id="details" class="details hidden">
     <table>
       <tr><td class="k">File / 文件</td><td class="v" id="fileName">—</td></tr>
       <tr><td class="k">File size / 文件大小</td><td class="v" id="fileSize">—</td></tr>
@@ -89,11 +114,24 @@
       <tr><td class="k">Cycle count / 循环次数</td><td class="v" id="cycleCount">0</td></tr>
       <tr><td class="k">Status / 状态</td><td class="v" id="statusText">Stopped / 已停止</td></tr>
     </table>
+    </div>
   </section>
+
+  <!-- TF-012 r10: the only overlay that stays visible while broadcasting. It is small
+       and lives in the bottom-right margin, which a centred canvas never uses, so it
+       cannot cover the optical carrier. -->
+  <div id="pill" class="pill hidden">
+    <span id="pillStatus" class="pillstatus">Broadcasting</span>
+    <span id="pillHold" class="pillhold">—</span>
+    <button id="pillStop" class="pillbtn primary">Stop / 停止</button>
+    <button id="pillShow" class="pillbtn">Controls / 控制</button>
+  </div>
 
   <div id="hint">One OptiGrid only · 单码显示 · no Manifest / no Preamble / no Fountain / no 3-tile<br />
     Theoretical rates are declared sender-side arithmetic — NOT Net Goodput, NOT optical throughput.<br />
-    The phone must declare the SAME hold time: PC current holdMs = the URL <code>?holdMs=</code> value shown above.</div>
+    The phone must declare the SAME hold time: PC current holdMs = the URL <code>?holdMs=</code> value shown above.<br />
+    Controls hide themselves while broadcasting so nothing covers the code.
+    Keyboard: <code>S</code> start/stop · <code>H</code> show/hide controls · <code>F</code> optical fullscreen.</div>
 
   <script type="module" src="/src/single-baseline-sender-main.ts"></script>
 </body>

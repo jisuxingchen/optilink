@@ -22,6 +22,15 @@ below; 750 ms is an **outlier candidate**, not a speed boundary.
 and reliability, not minimise hold time. The protocol is **untouched**; the only
 variable is the chunk hold time.
 
+**r10 scope:** the PO reported that after the r9 UI changes **no** tested speed
+decoded. The "r9 shrank the code" hypothesis was **measured and DISPROVEN** (the
+carrier geometry is identical r8 vs r9); the real regression was **overlay
+occlusion** — the r9 control panel grew ~170 px and covered up to 21.19 % of the
+canvas. The layout was fixed so the overlays cover **0 %** of the carrier while
+broadcasting, and the invariant is now enforced by test. **No protocol, matrix,
+chunk, encoding, locator or CRC change.** Stage B is **paused** until the static
+chunk-0 point is reproduced.
+
 ## What this is / 这是什么
 
 The **primary physical bring-up path** for OptiLink. A deliberately simple, slow,
@@ -338,6 +347,76 @@ Every field is `null` when its denominator is 0. A run with no decode attempts h
 **no** decode success ratio, and 0 unique chunks from 0 successful decodes is
 `null` (0/0 is undefined), **not** 0 %. These metrics are diagnostic: they rank
 PASSing points and **never decide PASS**.
+
+## r10 visual-layout regression / r10 视觉布局回归
+
+**Report:** after the r9 UI work, **no** tested speed decoded (`cameraFrames = 647`,
+`decodeAttempts = 647`, `successfulDecodes = 0`, `locateFailures = 0`,
+`crcFailures = 647`, `observedCodeWidthPx ≈ 289.62`, `pixelsPerCell ≈ 3.017`,
+`reservedPatternScore ≈ 0.7985`, G7a/b/c PASS, G7d FAIL 647/647).
+**Hypothesis to test:** "r9 shrank the rendered OptiGrid."
+
+**Verdict: DISPROVEN.** Measured in Playwright at the same viewports for build
+`8ef0d5b` (r8) and `4f380f8` (r9):
+
+| Viewport | canvas device px (r8 = r9) | `cellPixels` (r8 = r9) | r8 panel H | r9 panel H | r8 overlap | r9 overlap |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1920×1080 | 1020 | 10 | 430×530 | 430×700 | 0 % | 0 % |
+| 1600×900 | 816 | 8 | 430×530 | 430×700 | 3.92 % | 5.25 % |
+| 1440×900 | 816 | 8 | 430×530 | 430×700 | 9.95 % | 13.32 % |
+| 1366×768 | 714 | 7 | 430×530 | 430×700 | 11.97 % | 15.90 % |
+| 1280×800 | 714 | 7 | 430×530 | 430×700 | 15.82 % | 21.19 % |
+| 2560×1440 | 1326 | 13 | 430×530 | 430×700 | 0 % | 0 % |
+
+The carrier size is derived from the viewport **only** (`layout()` is byte-identical
+r8 vs r9, and hiding the panel never changes `canvas.width`), so r9 **did not**
+shrink the code. What r9 *did* do is grow the control panel by ~170 px and push its
+overlap of the canvas up by 3–5 percentage points.
+
+The camera-side drop (402.49 → 289.62 px, ratio **0.7196 ≈ 7/10 cells**) matches a
+sender rendering at `cellPixels = 7` instead of `10`, i.e. a smaller window /
+non-maximised state — plus the documented `px/cell < 3` physical limit. Both facts
+are reported as measured, and the occlusion regression was fixed regardless.
+
+### Invariant (now enforced by test) / 不变量
+
+**Benchmark UI must never cover or resize the optical carrier.** 基准测试界面
+绝不能遮挡或改变光学载体尺寸。
+
+| State | Overlay policy |
+| --- | --- |
+| stopped | control panel + hint visible; long file table **collapsed** |
+| broadcasting | panel + hint auto-hidden; compact pill only, in a margin the centred canvas never uses → **0 % occlusion** |
+| optical fullscreen (`F` / button) | every overlay hidden → **0 % occlusion** |
+
+`#pillShow` (Show / 显示) brings the controls back **without** stopping the
+broadcast; changing the hold time still stops the cycle rather than retiming it.
+
+### Rendered code size readout / 码显示尺寸
+
+The sender prints `Rendered code size / 码显示尺寸`: canvas device px, CSS px
+(including the quiet zone), the OptiGrid core size, and `device px/cell`. It is
+labelled **"display side only, NOT the camera-observed size"** — the only size that
+decides a physical PASS is the one the camera sees, and it must be read from the
+frozen JSON (`observedCodeWidthPx`, `pixelsPerCell`) on the phone.
+
+### r10 static chunk-0 restore target / r10 静态 chunk 0 恢复目标
+
+Before resuming any speed work, reproduce the known-good static point with a
+**maximised / F11 window** on the sender:
+
+| Field | Required |
+| --- | --- |
+| `observedCodeWidthPx` | **≥ ~380** (healthy runs: 394–402) |
+| `pixelsPerCell` | **≥ ~4.0** |
+| `decodedChunkIndex` | **0** (`?diagnostic=chunk0`) |
+| CRC | PASS **and** SHA MATCH |
+| `locateFailures` | 0 |
+| sender readout | `device px/cell` ≥ 8; if it reads 7 or less, the window is too small — maximise it and re-measure |
+
+If `px/cell` is below ~3 on the phone, the scan is past the physical limit: move the
+phone closer / fill more of the frame. That is a setup correction, **not** a
+protocol change.
 
 ## Acceptance / 验收
 
