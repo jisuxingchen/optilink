@@ -49,7 +49,7 @@ try {
 
 // Unmistakable build identifier — must be visible on the phone to prove the
 // device is running the latest shared-receive package (not a stale cache).
-const BUILD_ID = 'tf012-r8-dev';
+const BUILD_ID = 'tf012-r8-fd11922';
 
 /**
  * Monotonic millisecond clock for the speed-ladder benchmark.
