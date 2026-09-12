@@ -113,7 +113,7 @@ jobs:
           }
       - name: Run TF-005 pixel-isolated carrier bench and tracking frontier
         run: npm run bench:headless
-      - name: Run TF-012 r11 single-code baseline sender acceptance (carrier overlap guard)
+      - name: Run TF-012 r11/r12 single-code baseline sender acceptance (carrier overlap + static/cyclic equivalence)
         run: npm run test:single-baseline-sender
       - name: Validate lab coordinator and tunnel launcher syntax
         run: |

@@ -672,6 +672,169 @@ test('r11 layout: a pathological font cannot push the strip onto the carrier', a
   }
 });
 
+/**
+ * TF-012 r12 — sender-path equivalence.
+ *
+ * Physical evidence: `?diagnostic=chunk0` decoded 970/970 frames on the phone while
+ * the normal CYCLIC sender at holdMs = 1000 produced 0 successful decodes out of 209
+ * camera frames. Before touching the receiver, the two SENDER paths must be proven
+ * equivalent: `drawChunk()` is the same function in both modes, so chunk 0 must come
+ * out pixel-for-pixel identical, and starting the cycle must not move or resize the
+ * carrier.
+ *
+ * These tests lock that down so any future divergence in the sender rendering path
+ * (or in the layout on Start) fails immediately.
+ */
+type CanvasIdentity = {
+  sha256: string;
+  cursor: number;
+  devicePx: number;
+  cssPx: number;
+  cellPixels: number;
+  rect: string;
+};
+
+/** Exact SHA-256 of the carrier's RGBA ImageData, plus the geometry it was drawn at. */
+async function canvasIdentity(page: Page): Promise<CanvasIdentity> {
+  return page.evaluate(async () => {
+    const canvas = document.getElementById('codeCanvas') as HTMLCanvasElement;
+    const context = canvas.getContext('2d') as CanvasRenderingContext2D;
+    const image = context.getImageData(0, 0, canvas.width, canvas.height);
+    const digest = await crypto.subtle.digest('SHA-256', new Uint8Array(image.data.buffer.slice(0)));
+    const sha256 = Array.from(new Uint8Array(digest))
+      .map((value) => value.toString(16).padStart(2, '0')).join('');
+    const rect = canvas.getBoundingClientRect();
+    const state = (window as unknown as {
+      __SINGLE_BASELINE_SENDER__: {state: () => {cursor: number; cellPixels: number}};
+    }).__SINGLE_BASELINE_SENDER__.state();
+    return {
+      sha256,
+      cursor: state.cursor,
+      devicePx: canvas.width,
+      cssPx: Math.round(rect.width),
+      cellPixels: state.cellPixels,
+      rect: [Math.round(rect.x), Math.round(rect.y), Math.round(rect.width), Math.round(rect.height)].join(','),
+    };
+  });
+}
+
+test('r12 equivalence: diagnostic chunk0 and cyclic chunk0 render the identical canvas', async ({page}) => {
+  await page.setViewportSize({width: 1920, height: 1080});
+
+  // A · static diagnostic path.
+  await page.goto('/single-baseline.html?diagnostic=chunk0');
+  await page.waitForFunction(() => (document.getElementById('codeCanvas') as HTMLCanvasElement).width > 0);
+  const staticIdentity = await canvasIdentity(page);
+  const staticCells = await sampleCanvasCells(page);
+  expect(staticIdentity.cursor).toBe(0);
+
+  // B · normal cyclic path, parked on chunk 0 within the 1000 ms hold.
+  await page.goto('/single-baseline.html?holdMs=1000');
+  await page.waitForFunction(() => (document.getElementById('codeCanvas') as HTMLCanvasElement).width > 0);
+  await page.locator('#startButton').click();
+  await showChunk(page, 0);
+  const cyclicIdentity = await canvasIdentity(page);
+  const cyclicCells = await sampleCanvasCells(page);
+  expect(cyclicIdentity.cursor, 'the cyclic capture must still be on chunk 0').toBe(0);
+  expect((await state(page)).broadcasting).toBe(true);
+
+  // Exact pixels: same SHA-256 over the whole RGBA carrier, not a sampled grid.
+  expect(cyclicIdentity.sha256, 'cyclic chunk 0 must be byte-identical to diagnostic chunk 0')
+    .toBe(staticIdentity.sha256);
+
+  // Same geometry and same module pitch.
+  expect(cyclicIdentity.devicePx).toBe(staticIdentity.devicePx);
+  expect(cyclicIdentity.cssPx).toBe(staticIdentity.cssPx);
+  expect(cyclicIdentity.cellPixels).toBe(staticIdentity.cellPixels);
+  expect(cyclicIdentity.rect, 'the carrier must not move when the cycle starts')
+    .toBe(staticIdentity.rect);
+
+  // Same matrix bits, and they are the shared builder's chunk 0.
+  expect(Buffer.from(cyclicCells).toString('base64')).toBe(Buffer.from(staticCells).toString('base64'));
+  expect(Array.from(cyclicCells)).toEqual(Array.from(transfer.frames[0]));
+
+  // Same ENCODED bytes: decode both canvases and compare the reconstructed payload,
+  // its sequence (which carries fileId + chunkIndex) and the CRC-validated frame.
+  const staticDecoded = decodeFrameCellsV1(staticCells, SINGLE_BASELINE_MATRIX);
+  const cyclicDecoded = decodeFrameCellsV1(cyclicCells, SINGLE_BASELINE_MATRIX);
+  expect(staticDecoded, 'the static canvas must be a valid OptiGrid frame').not.toBeNull();
+  expect(cyclicDecoded, 'the cyclic canvas must be a valid OptiGrid frame').not.toBeNull();
+  expect(cyclicDecoded!.sequence).toBe(staticDecoded!.sequence);
+  expect(Buffer.from(cyclicDecoded!.payload).toString('base64'))
+    .toBe(Buffer.from(staticDecoded!.payload).toString('base64'));
+  expect(Buffer.from(cyclicDecoded!.payload).toString('base64'))
+    .toBe(Buffer.from(transfer.payloads[0]).toString('base64'));
+});
+
+test('r12 equivalence: starting the cycle never changes the carrier geometry', async ({page}) => {
+  for (const viewport of FIXED_VIEWPORTS) {
+    const label = `${viewport.width}x${viewport.height}`;
+    await page.setViewportSize(viewport);
+    await page.goto('/single-baseline.html?holdMs=1000');
+    await page.waitForFunction(() => (document.getElementById('codeCanvas') as HTMLCanvasElement).width > 0);
+
+    const idle = await canvasIdentity(page);
+    await page.locator('#startButton').click();
+    await showChunk(page, 0);
+    const running = await canvasIdentity(page);
+
+    expect(running.cursor, `cyclic capture on chunk 0 at ${label}`).toBe(0);
+    expect(running.devicePx, `carrier device px must not change on Start at ${label}`).toBe(idle.devicePx);
+    expect(running.cssPx, `carrier CSS px must not change on Start at ${label}`).toBe(idle.cssPx);
+    expect(running.cellPixels, `module pitch must not change on Start at ${label}`).toBe(idle.cellPixels);
+    expect(running.rect, `carrier box must not move on Start at ${label}`).toBe(idle.rect);
+    // The static path draws chunk 0 at the same size, so switching modes is a
+    // rendering-path change only, never a geometry change.
+    expect(running.sha256, `chunk 0 pixels must survive Start at ${label}`).toBe(idle.sha256);
+
+    await page.locator('#pillStop').click();
+  }
+});
+
+test('r12 equivalence: the carrier stays stable for the whole hold period', async ({page}) => {
+  await page.setViewportSize({width: 1920, height: 1080});
+  await page.goto('/single-baseline.html?holdMs=1000');
+  await page.waitForFunction(() => (document.getElementById('codeCanvas') as HTMLCanvasElement).width > 0);
+  await page.locator('#startButton').click();
+
+  // Sample every animation frame for one hold period. Within a single cursor value
+  // there must be exactly ONE distinct canvas hash: the sender must not repaint
+  // different pixels while a chunk is being held.
+  const result = await page.evaluate(async () => {
+    const canvas = document.getElementById('codeCanvas') as HTMLCanvasElement;
+    const context = canvas.getContext('2d') as CanvasRenderingContext2D;
+    const harness = (window as unknown as {
+      __SINGLE_BASELINE_SENDER__: {state: () => {cursor: number}};
+    }).__SINGLE_BASELINE_SENDER__;
+    const sampled = (): string => {
+      const image = context.getImageData(0, 0, canvas.width, canvas.height);
+      let hash = 0x811c9dc5;
+      for (let index = 0; index < image.data.length; index += 257) {
+        hash ^= image.data[index];
+        hash = Math.imul(hash, 0x01000193) >>> 0;
+      }
+      return hash.toString(16);
+    };
+    const byCursor = new Map<number, Set<string>>();
+    const started = performance.now();
+    while (performance.now() - started < 1100) {
+      const {cursor} = harness.state();
+      if (!byCursor.has(cursor)) byCursor.set(cursor, new Set());
+      (byCursor.get(cursor) as Set<string>).add(sampled());
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+    }
+    return {
+      cursors: Array.from(byCursor.keys()),
+      unstable: Array.from(byCursor.entries())
+        .filter(([, hashes]) => hashes.size !== 1)
+        .map(([cursor, hashes]) => [cursor, hashes.size]),
+    };
+  });
+
+  expect(result.cursors.length, 'the hold window must cover at least one chunk').toBeGreaterThanOrEqual(1);
+  expect(result.unstable, 'the canvas must not change while a chunk is held').toEqual([]);
+});
+
 test('r11 layout: the long file table is collapsed, and the rendered size readout is honest', async ({page}) => {
   await page.setViewportSize({width: 1440, height: 900});
   await page.goto('/single-baseline.html?holdMs=75');

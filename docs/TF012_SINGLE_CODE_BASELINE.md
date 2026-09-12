@@ -41,6 +41,15 @@ element must not intersect the carrier) enforces it. **No protocol, matrix, chun
 encoding, locator or CRC change.** Stage B stays paused until the static chunk-0
 point is reproduced.
 
+**r12 scope:** the physical report that the static path decodes while the cyclic path
+does not (0/209 at 1000 ms, ≈14.25 camera frames per code) was investigated as a
+**sender-path equivalence** question. Measurement shows the diagnostic and cyclic
+senders render **byte-identical** chunk-0 frames (same SHA-256 over the full RGBA
+carrier, same 1020 px geometry, same payload/sequence/CRC, 0 % pixel diff) and that
+starting the cycle never resizes or moves the carrier. **No sender discrepancy exists**
+— the remaining difference is capture-side, and both r11 runs were already below the
+documented `≥ 4 px/cell` limit. See the r12 section. Stage B stays paused.
+
 ## What this is / 这是什么
 
 The **primary physical bring-up path** for OptiLink. A deliberately simple, slow,
@@ -357,6 +366,80 @@ Every field is `null` when its denominator is 0. A run with no decode attempts h
 **no** decode success ratio, and 0 unique chunks from 0 successful decodes is
 `null` (0/0 is undefined), **not** 0 %. These metrics are diagnostic: they rank
 PASSing points and **never decide PASS**.
+
+## r12 sender-path equivalence — evidence, not assumption / r12 发送端等价性
+
+**Question raised by physical evidence.** Static diagnostic chunk 0 decoded
+**970/970** frames on the phone, while the normal **cyclic** sender at
+`holdMs = 1000` produced **0 / 209** successful decodes. At 1000 ms there are
+≈14.25 camera-frame opportunities per code, so **dwell time is not the primary
+explanation** (`holdMs / insufficient dwell time is NOT the primary explanation`).
+Before touching the receiver, locator or protocol, the two **sender** paths were
+compared directly.
+
+**Verdict: the two paths are byte-identical. No sender discrepancy exists.**
+
+| Measurement (1920×1080, DPR 1, zoom 1, not fullscreen) | diagnostic `?diagnostic=chunk0` | cyclic `?holdMs=1000`, cursor 0 |
+| --- | --- | --- |
+| canvas device px | 1020×1020 | 1020×1020 |
+| canvas CSS px | 1020×1020 | 1020×1020 |
+| carrier bounding box | `x 665, y 13, 1020×1020` | `x 665, y 13, 1020×1020` |
+| module pitch (`cellPixels`) | 10 px (1020 / 102) | 10 px |
+| `transform` / `scale` / `zoom` | `none` / `none` / 1 | `none` / `none` / 1 |
+| **SHA-256 of the full RGBA ImageData** | `a12456f2410ff8544db6e875ae40169fe14757afb8194c736a3756f33f2ade89` | **identical** |
+| cropped carrier screenshot | `874C72824930ADA5BAFAB0323FE2D399673356C2AAD1135B28B85D74A484228A` (9441 B) | **byte-identical** |
+| sampled 96×96 matrix | equals `transfer.frames[0]` | equals `transfer.frames[0]` |
+| decoded `sequence` | `1396834304` | `1396834304` |
+| decoded payload (706 B) SHA-256 | `c3904e05bf9209d741833288c458fab6b019c9c86d336c03dbf476b70463dc5c` | identical |
+| CRC | PASS (decoder rejects bad CRC) | PASS |
+
+* **Pixel diff: 0 px (0.000 %), no diff bounding box** — the two cropped PNGs are the
+  same 9441 bytes.
+* `drawChunk()` is one function; both modes call `renderCurrent()` → `drawChunk(0)`.
+  `diagnosticMode` only changes *which* index is drawn and disables the timer — it
+  never changes the encoding, the sequence, the payload or the CRC.
+* **Starting the cycle does not change the geometry.** Measured idle vs running at
+  1920×1080, 1600×900, 1440×900, 1366×768, 1280×800 and 1024×768: device px, CSS px,
+  bounding box, `cellPixels` and stage box are **identical** in every case
+  (`identical=true` for all six). The reserved 34 px control band is accounted for in
+  `layout()` in both states, so the strip appearing when broadcasting cannot resize or
+  move the carrier.
+* **The canvas is stable for the whole hold.** Sampling every animation frame for a
+  full 1000 ms hold produced exactly **one distinct hash per cursor value**
+  (`distinctHashesPerCursor = [[0,1],[1,1]]`, 67 samples); the checkpoint hashes at
+  +0, +16, +33, +100 and +500 ms were all `7fdcac2f2387dbdb` and only changed when the
+  cursor advanced. The sender never repaints different pixels during a hold.
+
+**Therefore:**
+
+> static and cyclic sender pixels are identical in-browser; the remaining difference
+> is physical display/camera behavior.
+
+The physical numbers support that reading: the same 1020 px carrier was observed as
+**287.35 px / 2.993 px-per-cell** in the static run but **221.1 px / 2.303 px-per-cell**
+in the cyclic run, with contrast **168.65 → 56.65** and `reservedPatternScore`
+**0.9515 → 0.6677** (`frameRotationIndex 2`). A low reserved-pattern score together
+with a small observed width is a *capture-side* condition — distance/framing,
+exposure or blur — not a rendering condition. Scaling the carrier by 221.1 / 287.35
+(0.769) accounts for the entire observed difference at the same physical distance.
+
+**Consequence for the PO:** the static chunk-0 procedure must be reproduced with the
+same physical setup (same distance, framing, exposure and maximised window) **before**
+any cyclic Stage B work resumes, and `observedCodeWidthPx` must be ≥ ~380 px
+(`pixelsPerCell` ≥ ~4.0). Both r11 physical runs were **below** that threshold
+(2.99 and 2.30 px/cell), i.e. the capture was already past the documented limit.
+
+**Regression tests** (`single-baseline-sender.spec.ts`):
+
+* `r12 equivalence: diagnostic chunk0 and cyclic chunk0 render the identical canvas` —
+  exact SHA-256 equality of the full RGBA carrier, equal device/CSS size, `cellPixels`
+  and bounding box, equal sampled matrix (and equal to `transfer.frames[0]`), and equal
+  decoded `sequence` + payload bytes (equal to `transfer.payloads[0]`);
+* `r12 equivalence: starting the cycle never changes the carrier geometry` — the six
+  target viewports must report identical geometry and identical chunk-0 pixels before
+  and after Start;
+* `r12 equivalence: the carrier stays stable for the whole hold period` — no cursor
+  value may ever produce more than one canvas hash inside a 1000 ms hold.
 
 ## r11 sender layout — nothing is drawn over the carrier / r11 布局
 
