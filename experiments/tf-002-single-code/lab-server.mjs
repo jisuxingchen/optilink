@@ -5,13 +5,34 @@ import {promisify} from 'node:util';
 import {WebSocketServer, WebSocket} from 'ws';
 import {createServer as createViteServer} from 'vite';
 import {allowTiledHello, allowTiledLabResult, allowTiledRelay} from './tiled-control-policy.mjs';
+import {
+  TF012_AUTO_RECEIVER_ROLE,
+  TF012_AUTO_SENDER_ROLE,
+  allowTf012AutoHello,
+  allowTf012AutoLabResult,
+  allowTf012AutoRelay,
+} from './tf012-auto-policy.mjs';
+import {createTf012PeerRegistry} from './tf012-auto-peers.mjs';
+import {
+  isTf012AutoHelloMessage,
+  validateTf012AutoHelloMessage,
+} from './src/optical-core/tf012-auto-plan.ts';
+
+const TF012_AUTO_MODE = 'tf012auto';
+
+/**
+ * r15: peer presence must not depend on connection order. The registry answers, for any
+ * hello, both "who was already here?" (so the newcomer can be told) and "is the newcomer
+ * news?" (so the incumbent can be told).
+ */
+const tf012PeerRegistry = createTf012PeerRegistry();
 
 const execFileAsync = promisify(execFile);
 const port = Number(process.env.PORT || 5173);
 const host = process.env.HOST || '0.0.0.0';
 const labToken = process.env.OPTILINK_LAB_TOKEN || '';
 const requestedMode = process.env.OPTILINK_LAB_PAGE || 'baseline';
-const labMode = ['baseline', 'fountain', 'optigrid', 'tiled'].includes(requestedMode) ? requestedMode : 'baseline';
+const labMode = ['baseline', 'fountain', 'optigrid', 'tiled', TF012_AUTO_MODE].includes(requestedMode) ? requestedMode : 'baseline';
 const labInstanceId = process.env.OPTILINK_LAB_INSTANCE_ID || '';
 const clients = new Map();
 let latestRun = null;
@@ -44,6 +65,7 @@ function maybeSetAuthCookie(req, res) {
 }
 
 function htmlEntryForPath(pathname) {
+  if (pathname === '/single-baseline.html') return 'single-baseline.html';
   if (pathname === '/fountain.html') return 'fountain.html';
   if (pathname === '/optigrid.html') return 'optigrid.html';
   if (pathname === '/tiled-physical.html') return 'tiled-physical.html';
@@ -116,6 +138,30 @@ function broadcastTiled(payload, except, sourceRole) {
   if (!targetRole) return;
   for (const [ws, meta] of clients.entries()) {
     if (ws !== except && meta.role === targetRole) safeSend(ws, payload);
+  }
+}
+
+/** TF-012 r13: relay between the phone (orchestrator) and the PC sender only. */
+function broadcastTf012Auto(payload, except, sourceRole) {
+  const targetRole = sourceRole === TF012_AUTO_SENDER_ROLE
+    ? TF012_AUTO_RECEIVER_ROLE
+    : sourceRole === TF012_AUTO_RECEIVER_ROLE
+      ? TF012_AUTO_SENDER_ROLE
+      : null;
+  if (!targetRole) return;
+  for (const [ws, meta] of clients.entries()) {
+    if (ws !== except && meta.role === targetRole) safeSend(ws, payload);
+  }
+}
+
+/**
+ * r15: send a notice to every socket whose registered role is `role`.
+ * Presence notices are addressed by ROLE, not by "everyone except the sender", so they
+ * work in both connection orders.
+ */
+function sendToTf012Role(role, payload) {
+  for (const [ws, meta] of clients.entries()) {
+    if (meta.role === role) safeSend(ws, payload);
   }
 }
 async function persistResult(run) {
@@ -234,7 +280,40 @@ wss.on('connection', (ws, req) => {
     let message;
     try { message = JSON.parse(String(raw)); } catch { return; }
     const meta = clients.get(ws) || {role: 'unknown'};
+    // r15 — MESSAGE CLASS 1: handshake / registration.
+    // The canonical spelling is `{type:'hello'}`; the legacy `{type:'command',
+    // action:'HELLO'}` spelling is still recognised so the coordinator does not depend on
+    // which build a client runs. Either way it is validated by the HELLO validator and
+    // NEVER by the control relay validator (which rejected it as "unknown role" before
+    // the role was registered — the r14 physical failure).
+    if (labMode === TF012_AUTO_MODE && isTf012AutoHelloMessage(message)) {
+      const verdict = validateTf012AutoHelloMessage(message);
+      if (!verdict.ok) {
+        safeSend(ws, {type: 'server', event: 'policy-rejected', reason: verdict.reason});
+        return;
+      }
+      meta.role = message.role;
+      clients.set(ws, meta);
+      // Order-independent presence: the newcomer is told about everyone already here, and
+      // everyone already here is told about the newcomer.
+      const {toOthers, toNewcomer} = tf012PeerRegistry.registrationNotices(meta.role);
+      for (const notice of toOthers) sendToTf012Role(notice.to, notice.message);
+      for (const notice of toNewcomer) safeSend(ws, notice.message);
+      safeSend(ws, {type: 'server', event: 'registered', role: meta.role, peers: tf012PeerRegistry.present()});
+      return;
+    }
     if (message.type === 'hello') {
+      if (labMode === TF012_AUTO_MODE) {
+        const verdict = allowTf012AutoHello(message);
+        if (!verdict.ok) {
+          safeSend(ws, {type: 'server', event: 'policy-rejected', reason: verdict.reason});
+          return;
+        }
+        meta.role = message.role;
+        clients.set(ws, meta);
+        broadcastTf012Auto({type: 'peer', event: 'hello', role: meta.role}, ws, meta.role);
+        return;
+      }
       if (labMode === 'tiled') {
         if (!allowTiledHello(message)) {
           safeSend(ws, {type: 'server', event: 'policy-rejected', reason: 'TF-007 tiled hello boundary'});
@@ -251,6 +330,17 @@ wss.on('connection', (ws, req) => {
       return;
     }
     if (message.type === 'telemetry' || message.type === 'command' || message.type === 'state') {
+      if (labMode === TF012_AUTO_MODE) {
+        // r15 — MESSAGE CLASS 3: validated control/telemetry. A client that has not
+        // registered yet cannot relay anything, and the strict allowlist still applies.
+        const verdict = allowTf012AutoRelay(meta.role, message);
+        if (!verdict.ok) {
+          safeSend(ws, {type: 'server', event: 'policy-rejected', reason: verdict.reason});
+          return;
+        }
+        broadcastTf012Auto(message, ws, meta.role);
+        return;
+      }
       if (labMode === 'tiled') {
         if (!allowTiledRelay(meta.role, message)) {
           safeSend(ws, {type: 'server', event: 'policy-rejected', reason: 'TF-007 tiled control-plane boundary'});
@@ -263,6 +353,13 @@ wss.on('connection', (ws, req) => {
       return;
     }
     if (message.type === 'lab-result') {
+      if (labMode === TF012_AUTO_MODE) {
+        const verdict = allowTf012AutoLabResult(meta.role, message);
+        if (!verdict.ok) {
+          safeSend(ws, {type: 'server', event: 'policy-rejected', reason: verdict.reason});
+          return;
+        }
+      }
       if (labMode === 'tiled' && !allowTiledLabResult(meta.role, message)) {
         safeSend(ws, {type: 'server', event: 'policy-rejected', reason: 'TF-007 tiled result boundary'});
         return;
@@ -274,7 +371,16 @@ wss.on('connection', (ws, req) => {
       safeSend(ws, {type: 'server', event: 'result-saved', publish});
     }
   });
-  ws.on('close', () => clients.delete(ws));
+  ws.on('close', () => {
+    const meta = clients.get(ws);
+    clients.delete(ws);
+    // r15: tell the remaining peer that this one is gone, so presence cannot go stale.
+    if (labMode === TF012_AUTO_MODE && meta && meta.role !== 'unknown') {
+      for (const notice of tf012PeerRegistry.goodbyeNotices(meta.role)) {
+        sendToTf012Role(notice.to, notice.message);
+      }
+    }
+  });
 });
 
 server.listen(port, host, () => {
@@ -286,5 +392,6 @@ server.listen(port, host, () => {
   console.log('Fountain:     /fountain.html?role=sender|receiver');
   console.log('OptiGrid:     /optigrid.html?role=sender|receiver');
   console.log('TF-007 tiled: /tiled-physical.html?role=sender|receiver');
+  console.log('TF-012 auto:   /single-baseline.html?lab=wss://<host>/lab&role=' + TF012_AUTO_RECEIVER_ROLE);
   console.log('Latest result endpoint: /api/lab/latest');
 });

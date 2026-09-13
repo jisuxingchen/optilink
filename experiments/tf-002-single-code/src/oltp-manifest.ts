@@ -16,9 +16,76 @@ export type OltpManifestV1 = {
   flags: {compressed: boolean; encrypted: boolean; fountain: boolean};
 };
 
-const encoder = new TextEncoder();
-const decoder = new TextDecoder();
+// Platform-neutral UTF-8 encode/decode. The Mini Program runtime does NOT
+// provide TextEncoder / TextDecoder, and this module is part of the shared
+// optical-core bundle lineage (consumed by the browser sim, Node tests, and the
+// WeChat Mini Program receiver). No browser or Node globals allowed here.
+function utf8Encode(text: string): Uint8Array {
+  const bytes: number[] = [];
+  for (let i = 0; i < text.length; i += 1) {
+    let code = text.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff && i + 1 < text.length) {
+      const next = text.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        code = 0x10000 + ((code - 0xd800) << 10) + (next - 0xdc00);
+        i += 1;
+      }
+    }
+    if (code < 0x80) {
+      bytes.push(code);
+    } else if (code < 0x800) {
+      bytes.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f));
+    } else if (code < 0x10000) {
+      bytes.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+    } else {
+      bytes.push(0xf0 | (code >> 18), 0x80 | ((code >> 12) & 0x3f), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+    }
+  }
+  return new Uint8Array(bytes);
+}
 
+function utf8Decode(bytes: Uint8Array): string {
+  let out = '';
+  let i = 0;
+  while (i < bytes.length) {
+    const b0 = bytes[i];
+    let code: number;
+    let len: number;
+    if (b0 < 0x80) {
+      code = b0;
+      len = 1;
+    } else if ((b0 & 0xe0) === 0xc0) {
+      code = b0 & 0x1f;
+      len = 2;
+    } else if ((b0 & 0xf0) === 0xe0) {
+      code = b0 & 0x0f;
+      len = 3;
+    } else if ((b0 & 0xf8) === 0xf0) {
+      code = b0 & 0x07;
+      len = 4;
+    } else {
+      code = 0xfffd;
+      len = 1;
+    }
+    for (let j = 1; j < len; j += 1) {
+      const b = bytes[i + j];
+      if (b === undefined || (b & 0xc0) !== 0x80) {
+        code = 0xfffd;
+        len = j;
+        break;
+      }
+      code = (code << 6) | (b & 0x3f);
+    }
+    i += len;
+    if (code > 0xffff) {
+      code -= 0x10000;
+      out += String.fromCharCode(0xd800 + (code >> 10), 0xdc00 + (code & 0x3ff));
+    } else {
+      out += String.fromCharCode(code);
+    }
+  }
+  return out;
+}
 function canonicalObject(manifest: OltpManifestV1): OltpManifestV1 {
   return {
     protocol: 'OLTP',
@@ -62,11 +129,11 @@ function assertManifest(value: unknown): asserts value is OltpManifestV1 {
 
 export function encodeManifest(manifest: OltpManifestV1): Uint8Array {
   assertManifest(manifest);
-  return encoder.encode(JSON.stringify(canonicalObject(manifest)));
+  return utf8Encode(JSON.stringify(canonicalObject(manifest)));
 }
 
 export function decodeManifest(bytes: Uint8Array): OltpManifestV1 {
-  const parsed = JSON.parse(decoder.decode(bytes));
+  const parsed = JSON.parse(utf8Decode(bytes));
   assertManifest(parsed);
   return canonicalObject(parsed);
 }

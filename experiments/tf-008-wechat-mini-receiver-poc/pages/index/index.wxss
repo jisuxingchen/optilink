@@ -3,52 +3,8 @@
   box-sizing: border-box;
 }
 
-.banner {
-  background: #166534;
-  color: #dcfce7;
-  font-weight: 700;
-  text-align: center;
-  padding: 18rpx;
-  border-radius: 12rpx;
-  margin-bottom: 10rpx;
-  letter-spacing: 0.06em;
-}
-
-.netbanner {
-  background: #111827;
-  color: #f87171;
-  font-weight: 700;
-  text-align: center;
-  padding: 12rpx;
-  border-radius: 12rpx;
-  margin-bottom: 16rpx;
-  letter-spacing: 0.04em;
-  border: 1rpx solid #7f1d1d;
-}
-
-.receivebanner {
-  background: #14532d;
-  color: #bbf7d0;
-  font-weight: 800;
-  text-align: center;
-  padding: 14rpx;
-  border-radius: 12rpx;
-  margin-bottom: 10rpx;
-  letter-spacing: 0.04em;
-  border: 1rpx solid #16a34a;
-}
-
-.benchbanner {
-  background: #1e3a8a;
-  color: #bfdbfe;
-  font-weight: 800;
-  text-align: center;
-  padding: 14rpx;
-  border-radius: 12rpx;
-  margin-bottom: 10rpx;
-  letter-spacing: 0.04em;
-  border: 1rpx solid #2563eb;
-}
+/* TF-012 r8: the four stacked banners were replaced by the single compact
+   .topstrip row, so the status banner styles below are no longer used. */
 
 .modebtn.modeactive {
   background: #065f46;
@@ -68,16 +24,291 @@
 
 .camera {
   width: 100%;
-  height: 520rpx;
+  /* TF-012 r8/r9: shortened from 520rpx so the viewfinder, the holdMs selector,
+     the controls and the KEY STATUS panel fit on the first screen. */
+  height: 320rpx;
   border-radius: 12rpx;
-  margin-bottom: 16rpx;
+  margin-bottom: 12rpx;
+}
+
+/* TF-012 r9 SENDER holdMs DECLARATION — deliberately loud and on the first
+   screen, because the PO could not find the control when it lived lower down. */
+/* TF-012 r13 AUTO PHYSICAL TEST panel: the one-tap entry point, on the first screen. */
+.autobar {
+  margin: 12rpx 16rpx;
+  padding: 16rpx 18rpx;
+  border: 3rpx solid #2563eb;
+  border-radius: 14rpx;
+  background: #eff6ff;
+}
+.autobar .abhead { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.autobar .abtitle { font-size: 26rpx; font-weight: 800; color: #1e3a8a; }
+.autobar .abok { font-size: 22rpx; font-weight: 800; color: #166534; background: #dcfce7; padding: 4rpx 12rpx; border-radius: 999rpx; }
+.autobar .abbad { font-size: 22rpx; font-weight: 800; color: #991b1b; background: #fee2e2; padding: 4rpx 12rpx; border-radius: 999rpx; }
+.autobar .abctl { display: flex; gap: 10rpx; margin-top: 12rpx; }
+.autobar .abinput { flex: 1; font-size: 22rpx; padding: 10rpx 12rpx; border: 1rpx solid #93c5fd; border-radius: 10rpx; background: #fff; }
+.autobar .abtoken { flex: 0 0 34%; }
+.autobar .abmain { display: flex; gap: 12rpx; margin-top: 12rpx; }
+.autobar .abstart { flex: 1; text-align: center; font-size: 30rpx; font-weight: 800; color: #fff; background: #1d4ed8; padding: 20rpx 0; border-radius: 14rpx; }
+.autobar .abstop { flex: 0 0 26%; text-align: center; font-size: 26rpx; font-weight: 700; color: #1e3a8a; background: #dbeafe; padding: 20rpx 0; border-radius: 14rpx; }
+.autobar .abrow { display: flex; gap: 10rpx; margin-top: 10rpx; align-items: flex-start; }
+.autobar .abk { flex: 0 0 26%; font-size: 22rpx; color: #1e40af; }
+.autobar .abv { flex: 1; font-size: 22rpx; font-weight: 800; color: #0f1720; word-break: break-all; }
+.autobar .abgrid { display: flex; flex-wrap: wrap; margin-top: 10rpx; }
+.autobar .abcell { flex: 0 0 33.33%; padding: 6rpx 0; }
+.autobar .abck { display: block; font-size: 20rpx; color: #1e40af; }
+.autobar .abcv { display: block; font-size: 24rpx; font-weight: 800; color: #0f1720; }
+.autobar .abcopy { margin-top: 12rpx; text-align: center; font-size: 24rpx; font-weight: 700; color: #1e3a8a; background: #dbeafe; padding: 14rpx 0; border-radius: 12rpx; }
+
+.holdbar {
+  background: #fffbeb;
+  border: 3rpx solid #f59e0b;
+  border-radius: 12rpx;
+  padding: 12rpx 14rpx;
+  margin-bottom: 12rpx;
+}
+
+.holdbar .hbhead {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.holdbar .hbtitle {
+  font-size: 22rpx;
+  color: #92400e;
+  font-weight: 800;
+}
+
+.holdbar .hbvalue {
+  font-size: 28rpx;
+  color: #0f1720;
+  font-weight: 800;
+}
+
+.holdbar .hbbtns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8rpx;
+  margin: 10rpx 0 8rpx;
+}
+
+.holdbar .hbchip {
+  min-width: 74rpx;
+  text-align: center;
+  font-size: 26rpx;
+  font-weight: 800;
+  color: #78350f;
+  background: #fff;
+  border: 2rpx solid #fcd34d;
+  border-radius: 8rpx;
+  padding: 8rpx 6rpx;
+}
+
+.holdbar .hbchip.hboutlier {
+  border-style: dashed;
+  color: #b45309;
+}
+
+.holdbar .hbchip.hbon {
+  background: #b45309;
+  border-color: #b45309;
+  color: #fffbeb;
+}
+
+.holdbar .hbfoot {
+  display: flex;
+  align-items: center;
+  gap: 10rpx;
+  flex-wrap: wrap;
+}
+
+.holdbar .hbwarn {
+  font-size: 22rpx;
+  font-weight: 800;
+  color: #b91c1c;
+}
+
+.holdbar .hbpick {
+  color: #b45309;
+  font-size: 24rpx;
+  font-weight: 700;
+  padding: 6rpx 12rpx;
+  border: 2rpx solid #fcd34d;
+  border-radius: 8rpx;
+  background: #fff;
+}
+
+.holdbar .hbrates {
+  font-size: 22rpx;
+  color: #78350f;
+  font-weight: 700;
+  margin-top: 6rpx;
+}
+
+.holdbar .hbnote {
+  font-size: 19rpx;
+  color: #a16207;
+  line-height: 1.5;
+  margin-top: 4rpx;
 }
 
 .controls {
   display: flex;
   flex-wrap: wrap;
-  gap: 12rpx;
-  margin-bottom: 16rpx;
+  gap: 8rpx;
+  margin-bottom: 12rpx;
+}
+
+/* TF-012 r8: one compact top strip instead of four stacked full-width banners,
+   so the first screen belongs to the viewfinder, the buttons and the key fields. */
+.topstrip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10rpx;
+  background: #0f1720;
+  border: 1rpx solid #1f2937;
+  border-radius: 10rpx;
+  padding: 8rpx 12rpx;
+  margin-bottom: 10rpx;
+  font-size: 22rpx;
+  line-height: 1.6;
+}
+
+.topstrip .tsid {
+  color: #93c5fd;
+  font-weight: 700;
+}
+
+.topstrip .tsmode {
+  color: #d1fae5;
+  font-weight: 700;
+}
+
+.topstrip .tsbuild {
+  color: #fbbf24;
+  font-weight: 700;
+}
+
+.topstrip .tsnet {
+  color: #f87171;
+  font-weight: 700;
+}
+
+.topstrip .tsok {
+  color: #4ade80;
+  font-weight: 700;
+}
+
+.topstrip .tsbad {
+  color: #fecaca;
+  background: #7f1d1d;
+  padding: 0 8rpx;
+  border-radius: 6rpx;
+  font-weight: 700;
+}
+
+/* TF-012 r8 KEY STATUS: soft amber highlight so it is unmissable but not harsh,
+   bold values, and green emphasis for a completed / SHA-exact result. */
+.keystatus {
+  background: #fffbeb;
+  border: 2rpx solid #fde68a;
+  border-radius: 12rpx;
+  padding: 12rpx 14rpx;
+  margin-bottom: 12rpx;
+}
+
+.keystatus .kstitle {
+  font-size: 22rpx;
+  color: #92400e;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin-bottom: 8rpx;
+}
+
+.keystatus .ksrow {
+  display: flex;
+  justify-content: space-between;
+  font-size: 25rpx;
+  line-height: 1.75;
+}
+
+.keystatus .ksk {
+  color: #92400e;
+  flex: 0 0 auto;
+  padding-right: 12rpx;
+}
+
+.keystatus .ksv {
+  color: #0f1720;
+  font-weight: 800;
+  text-align: right;
+  word-break: break-all;
+}
+
+.keystatus .ksv.ok {
+  color: #15803d;
+}
+
+.keystatus .ksv.bad {
+  color: #b91c1c;
+}
+
+.keystatus .ksv.pending {
+  color: #64748b;
+}
+
+.keystatus .ksgrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6rpx 14rpx;
+  margin-top: 8rpx;
+  padding-top: 8rpx;
+  border-top: 1rpx solid #fde68a;
+}
+
+.keystatus .kscell {
+  font-size: 21rpx;
+  color: #78350f;
+  font-weight: 700;
+}
+
+/* TF-012 r8 result history */
+.history {
+  background: #0b1220;
+  border: 1rpx solid #334155;
+  border-radius: 12rpx;
+  padding: 14rpx 16rpx;
+  margin-bottom: 12rpx;
+}
+
+.history .hrow {
+  display: flex;
+  justify-content: space-between;
+  font-size: 24rpx;
+  line-height: 1.8;
+}
+
+.history .hk {
+  color: #94a3b8;
+}
+
+.history .hv {
+  color: #fbbf24;
+  font-weight: 700;
+}
+
+.history .hv.ok {
+  color: #4ade80;
+}
+
+.history .hnote {
+  font-size: 20rpx;
+  color: #64748b;
+  line-height: 1.6;
+  margin-top: 6rpx;
 }
 
 .btn {
@@ -93,6 +324,13 @@
 .btn.primary {
   background: #1d4ed8;
   color: #fff;
+}
+
+/* TF-012 r5 G7 diagnostics: thin separator between sub-stage blocks. */
+.hr {
+  height: 1rpx;
+  background: #1f2937;
+  margin: 12rpx 0;
 }
 
 .panel {
@@ -144,4 +382,45 @@
   color: #64748b;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+/* TF-012 r4 single-code baseline: reconstructed UTF-8 content preview. */
+.preview {
+  display: block;
+  font-family: monospace;
+  font-size: 22rpx;
+  color: #d1fae5;
+  background: #0b1220;
+  border-radius: 8rpx;
+  padding: 14rpx;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* TF-012 r6 speed ladder: declared hold-time entry + caption text. */
+.numinput {
+  width: 180rpx;
+  height: 52rpx;
+  background: #0b1220;
+  color: #fbbf24;
+  border: 1rpx solid #334155;
+  border-radius: 8rpx;
+  padding: 0 12rpx;
+  font-size: 26rpx;
+  text-align: right;
+}
+
+.pick {
+  color: #38bdf8;
+  font-size: 26rpx;
+  padding: 4rpx 12rpx;
+  border: 1rpx solid #334155;
+  border-radius: 8rpx;
+}
+
+.note {
+  font-size: 20rpx;
+  color: #64748b;
+  line-height: 1.6;
+  margin: 6rpx 0 2rpx;
 }

@@ -1,8 +1,98 @@
 <view class="page">
-  <view class="banner">OPTICAL CAMERA FRAME — LOCAL ONLY</view>
-  <view class="netbanner">Network payload path: NONE</view>
-  <view class="receivebanner" wx:if="{{mode === 'receive'}}">SHARED RECEIVE PIPELINE ACTIVE · buildId {{buildId}}</view>
-  <view class="benchbanner" wx:if="{{mode === 'benchmark'}}">CAMERA BENCHMARK MODE ACTIVE · buildId {{buildId}}</view>
+  <!-- TF-012 r8: one compact strip instead of four stacked banners. The viewfinder,
+       the buttons and the KEY STATUS panel must share the first screen. -->
+  <view class="topstrip">
+    <text class="tsid">OptiLink</text>
+    <text class="tsmode">{{keyModeLabel}}</text>
+    <text class="tsbuild">buildId {{buildId}}</text>
+    <text class="tsnet">Network payload path: NONE</text>
+    <text class="{{bootStatus === 'BOOT OK' ? 'tsok' : 'tsbad'}}">{{bootStatus}}{{bootError ? ' · ' + bootError : ''}}</text>
+  </view>
+
+  <!-- ========== SENDER holdMs DECLARATION / 发送端每码停留声明 ==========
+       r9: moved to the FIRST SCREEN, above the viewfinder, because the PO could
+       not find it before. It is annotation + theoretical metrics ONLY: it never
+       touches decode, frame processing, the protocol or reconstruction. -->
+  <!-- ========== TF-012 r13 AUTO PHYSICAL TEST / 自动物理测试 ==========
+       ONE tap runs the whole SETUP gate + A1..A5 sequence. The control channel carries
+       CONTROL and TELEMETRY only — the payload path stays optical-only (NONE). -->
+  <view class="autobar">
+    <view class="abhead">
+      <text class="abtitle">AUTO PHYSICAL TEST / 自动物理测试</text>
+      <text class="abv">{{autoRunStatus}}</text>
+    </view>
+    <view class="abhead">
+      <text class="abk">{{autoControlStatus}}</text>
+      <text class="{{autoSenderConnected ? 'abok' : 'abbad'}}">{{autoHandshake}}</text>
+    </view>
+    <view class="abctl">
+      <input class="abinput" value="{{autoControlUrl}}" bindinput="onAutoControlUrl" placeholder="wss://…/lab" />
+      <input class="abinput abtoken" value="{{autoControlToken}}" bindinput="onAutoControlToken" placeholder="token (optional)" />
+    </view>
+    <view class="abmain">
+      <view class="abstart" bindtap="onAutoTest">Start Auto Test / 开始自动测试</view>
+      <view class="abstop" bindtap="onAutoTestStop">Stop / 停止</view>
+    </view>
+    <view class="abrow"><text class="abk">AUTO TEST</text><text class="abv">{{autoStepLabel}}</text></view>
+    <!-- r15 handshake stages: control socket, peer registration, telemetry freshness.
+         A peer HELLO alone must NOT read as "connected". -->
+    <view class="abrow"><text class="abk">peer</text><text class="abv">{{autoSenderPeerPresent}}</text></view>
+    <view class="abrow"><text class="abk">telemetry fresh</text><text class="abv">{{autoTelemetryFresh}}</text></view>
+    <!-- r14 control-plane evidence: what was requested, whether the sender proved it,
+         and how old the telemetry proving it is. -->
+    <view class="abrow"><text class="abk">{{autoCommand}}</text><text class="abv">Sender confirmed: {{autoSenderConfirmed}}</text></view>
+    <view class="abrow"><text class="abk">telemetry age</text><text class="abv">{{autoTelemetryAge}}</text></view>
+    <view class="abrow"><text class="abk">mismatch</text><text class="abv">{{autoSenderMismatch}}</text></view>
+    <view class="abrow"><text class="abk">A4 pause</text><text class="abv">requested {{autoPauseRequested}} · confirmed {{autoPauseConfirmed}} · frozen cursor {{autoFrozenCursor}}</text></view>
+    <view class="abgrid">
+      <view class="abcell"><text class="abck">Step</text><text class="abcv">{{autoStepIndex}} / {{autoStepCount}}</text></view>
+      <view class="abcell"><text class="abck">holdMs</text><text class="abcv">{{autoStepHoldMs}}</text></view>
+      <view class="abcell"><text class="abck">remaining</text><text class="abcv">{{autoRemainingS}} s</text></view>
+      <view class="abcell"><text class="abck">paused</text><text class="abcv">{{autoPaused ? 'YES' : 'no'}}</text></view>
+      <view class="abcell"><text class="abck">decode ok</text><text class="abcv">{{baselineDecodeSuccess}}</text></view>
+      <view class="abcell"><text class="abck">CRC fail</text><text class="abcv">{{baselineCrcFailures}}</text></view>
+      <view class="abcell"><text class="abck">code px</text><text class="abcv">{{baselineCodeWidth}}</text></view>
+      <view class="abcell"><text class="abck">px/cell</text><text class="abcv">{{baselinePixPerCell}}</text></view>
+      <view class="abcell"><text class="abck">reserved</text><text class="abcv">{{baselineReservedScore}}</text></view>
+      <view class="abcell"><text class="abck">frozen</text><text class="abcv">{{autoFrozenSteps}} / {{autoPlanSteps}}</text></view>
+    </view>
+    <view class="abrow"><text class="abk">setup gate</text><text class="abv">{{autoSetupLabel}}</text></view>
+    <view class="abrow"><text class="abk">setup notes</text><text class="abv">{{autoSetupReasons}}</text></view>
+    <view class="abrow"><text class="abk">last frozen</text><text class="abv">{{autoLastFrozenStep}}</text></view>
+    <view class="abrow"><text class="abk">final</text><text class="abv">{{autoFinalStatus}}</text></view>
+    <view class="abrow"><text class="abk">steps frozen</text><text class="abv">{{autoFrozenStepsDone}}</text></view>
+    <view class="abrow"><text class="abk">sender stopped</text><text class="abv">{{autoStoppedConfirmed}}</text></view>
+    <view class="abrow"><text class="abk">harness valid</text><text class="abv">{{autoHarnessValid}}</text></view>
+    <view class="abrow"><text class="abk">validity notes</text><text class="abv">{{autoValidityFailed}}</text></view>
+    <view class="abrow"><text class="abk">result upload</text><text class="abv">{{autoResultUpload}}</text></view>
+    <view class="abrow"><text class="abk">final JSON</text><text class="abv">{{autoFinalJsonReady}}</text></view>
+    <view class="abcopy" bindtap="copyAutoFinalResult">Copy final auto JSON / 复制最终 JSON</view>
+  </view>
+
+  <view class="holdbar">
+    <view class="hbhead">
+      <text class="hbtitle">Sender holdMs declaration / 发送端每码停留声明</text>
+      <text class="hbvalue">Declared holdMs: {{holdMsDeclared}} ms</text>
+    </view>
+    <view class="hbbtns">
+      <view class="hbchip {{holdMsDeclared === 100 ? 'hbon' : ''}}" data-hms="100" bindtap="onHoldMsChip">100</view>
+      <view class="hbchip {{holdMsDeclared === 90 ? 'hbon' : ''}}" data-hms="90" bindtap="onHoldMsChip">90</view>
+      <view class="hbchip {{holdMsDeclared === 75 ? 'hbon' : ''}}" data-hms="75" bindtap="onHoldMsChip">75</view>
+      <view class="hbchip {{holdMsDeclared === 60 ? 'hbon' : ''}}" data-hms="60" bindtap="onHoldMsChip">60</view>
+      <view class="hbchip {{holdMsDeclared === 50 ? 'hbon' : ''}}" data-hms="50" bindtap="onHoldMsChip">50</view>
+      <view class="hbchip {{holdMsDeclared === 40 ? 'hbon' : ''}}" data-hms="40" bindtap="onHoldMsChip">40</view>
+      <view class="hbchip hboutlier {{holdMsDeclared === 750 ? 'hbon' : ''}}" data-hms="750" bindtap="onHoldMsChip">750</view>
+    </view>
+    <view class="hbfoot">
+      <text class="hbwarn">Must match sender / 必须与电脑发送端一致</text>
+      <picker mode="selector" range="{{holdMsLadder}}" bindchange="onHoldMsPick">
+        <view class="hbpick">more ▾</view>
+      </picker>
+      <input class="numinput" type="number" value="{{holdMsInput}}" bindinput="onHoldMsInput" placeholder="custom" />
+    </view>
+    <view class="hbrates">{{theoChunkRate}} · {{theoPayloadRate}}</view>
+    <view class="hbnote">Stage B 100/90/75/60/50/40 · outlier check 750 · annotation only, never affects decode / 仅用于标注，不影响解码</view>
+  </view>
 
   <camera
     device-position="back"
@@ -20,10 +110,58 @@
     <button class="btn" bindtap="stopCamera" disabled="{{!running}}">Stop Camera</button>
     <button class="btn" bindtap="resetMetrics">Reset Metrics</button>
     <button class="btn modebtn {{mode === 'receive' ? 'modeactive' : ''}}" data-mode="receive" bindtap="onSelectMode">Shared Receive Pipeline</button>
+    <button class="btn modebtn {{mode === 'baseline' ? 'modeactive' : ''}}" data-mode="baseline" bindtap="onSelectMode">Single-Code Baseline 单码基线</button>
     <button class="btn modebtn {{mode === 'benchmark' ? 'modeactive' : ''}}" data-mode="benchmark" bindtap="onSelectMode">Camera Benchmark</button>
     <button class="btn" wx:if="{{mode === 'benchmark'}}" bindtap="toggleHeavy">{{heavy ? 'Normalization 1280x720: ON' : 'Normalization 1280x720: OFF'}}</button>
   </view>
 
+  <!-- ================= KEY STATUS / 关键状态 (first screen) ================= -->
+  <view class="keystatus">
+    <view class="kstitle">KEY STATUS · 关键状态</view>
+    <view class="ksrow"><text class="ksk">buildId</text><text class="ksv">{{keyBuildId}}</text></view>
+    <view class="ksrow"><text class="ksk">mode / 模式</text><text class="ksv">{{keyModeLabel}}</text></view>
+    <view class="ksrow" wx:if="{{mode === 'baseline'}}"><text class="ksk">hold / 每码停留</text><text class="ksv">{{keyHoldMs}}</text></view>
+    <view class="ksrow"><text class="ksk">chunks 分片</text><text class="ksv">{{keyChunks}}</text></view>
+    <view class="ksrow"><text class="ksk">missing 缺失</text><text class="ksv">{{keyMissing}}</text></view>
+    <view class="ksrow" wx:if="{{mode === 'baseline'}}"><text class="ksk">first chunk 首片</text><text class="ksv">{{keyFirstChunkMs}}</text></view>
+    <view class="ksrow" wx:if="{{mode === 'baseline'}}"><text class="ksk">all chunks 收齐</text><text class="ksv">{{keyAllChunksMs}}</text></view>
+    <view class="ksrow"><text class="ksk">SHA-256</text><text class="ksv {{keyShaClass}}">{{keySha}}</text></view>
+    <view class="ksrow"><text class="ksk">reconstruction 重构</text><text class="ksv {{keyShaClass}}">{{keyReconstruction}}</text></view>
+    <view class="ksrow" wx:if="{{mode === 'baseline'}}"><text class="ksk">deepest stage 最深阶段</text><text class="ksv">{{keyDeepestStage}}</text></view>
+    <view class="ksrow" wx:if="{{mode === 'baseline'}}"><text class="ksk">stage reason 阶段原因</text><text class="ksv">{{keyStageReason}}</text></view>
+    <view class="ksrow"><text class="ksk">locate fails 定位失败</text><text class="ksv">{{keyLocateFailures}}</text></view>
+    <view class="ksrow"><text class="ksk">CRC fails</text><text class="ksv">{{keyCrcFailures}}</text></view>
+    <view class="ksrow"><text class="ksk">duplicates 重复</text><text class="ksv">{{keyDuplicates}}</text></view>
+    <view class="ksgrid">
+      <text class="kscell">code {{keyCodeWidth}}</text>
+      <text class="kscell">px/cell {{keyPixPerCell}}</text>
+      <text class="kscell">cb FPS {{callbackFps}}</text>
+      <text class="kscell">proc FPS {{processingFps}}</text>
+      <text class="kscell">net {{netGoodputText}}</text>
+    </view>
+  </view>
+
+  <!-- ================= RESULT HISTORY / 历史结果 ================= -->
+  <view class="history">
+    <view class="kstitle">RESULT HISTORY · 历史结果 (max {{historyMax}})</view>
+    <view class="hrow"><text class="hk">historyCount 条数</text><text class="hv">{{historyCount}}</text></view>
+    <view class="hrow"><text class="hk">lastFreezeAt 最近冻结</text><text class="hv">{{lastFreezeAt}}</text></view>
+    <view class="hrow"><text class="hk">latest SHA result</text><text class="hv {{historyShaClass}}">{{historyShaResult}}</text></view>
+    <view class="hrow"><text class="hk">latest chunks</text><text class="hv">{{historyChunks}}</text></view>
+    <view class="hnote">{{historyNote}}</view>
+    <view class="controls">
+      <button class="btn" bindtap="freezeResult">Freeze Test Result</button>
+      <button class="btn primary" bindtap="copyLatestResult" disabled="{{!historyCount}}">Copy Latest Result 复制本次结果</button>
+      <button class="btn" bindtap="copyAllResults" disabled="{{!historyCount}}">Copy All Results 全部复制</button>
+      <button class="btn" bindtap="clearHistory" disabled="{{!historyCount}}">Clear History 清空历史</button>
+    </view>
+  </view>
+
+  <view class="controls">
+    <button class="btn" bindtap="toggleDiagnostics">{{showDiagnostics ? 'Hide diagnostics 收起详细诊断' : 'Show diagnostics 展开详细诊断'}}</button>
+  </view>
+
+  <view wx:if="{{showDiagnostics}}">
   <view class="panel">
     <view class="section">status</view>
     <view class="row"><text class="k">camera permission</text><text class="v">{{permissionStatus}}</text></view>
@@ -63,12 +201,138 @@
     <view class="row"><text class="k">exact tiles</text><text class="v">{{receiveExactTiles}}</text></view>
     <view class="row"><text class="k">manifest</text><text class="v">{{manifestStatus}}</text></view>
     <view class="row"><text class="k">manifest file size</text><text class="v">{{manifestFileSize}}</text></view>
+    <view class="row"><text class="k">beacon detections</text><text class="v">{{beaconDetections}}</text></view>
+    <view class="row"><text class="k">orientation attempts</text><text class="v">{{orientationAttempts}}</text></view>
+    <view class="row"><text class="k">orientation success</text><text class="v">{{orientationSuccess}}</text></view>
+    <view class="row"><text class="k">manifest acquisitions</text><text class="v">{{manifestAcquisitions}}</text></view>
+    <view class="row"><text class="k">preamble attempts</text><text class="v">{{preambleAttempts}}</text></view>
+    <view class="row"><text class="k">preamble success</text><text class="v">{{preambleSuccess}}</text></view>
+    <view class="row"><text class="k">preamble rejected/skipped</text><text class="v">{{preambleRejected}}</text></view>
+    <view class="row"><text class="k">last stage transition</text><text class="v">{{lastStageTransition}} {{lastStageTransitionAt}}</text></view>
     <view class="row"><text class="k">decoded symbols</text><text class="v">{{decodedSymbols}}</text></view>
+    <view class="row"><text class="k">duplicates</text><text class="v">{{duplicates}}</text></view>
+    <view class="row"><text class="k">redundant</text><text class="v">{{redundant}}</text></view>
+    <view class="row"><text class="k">rejected</text><text class="v">{{rejected}}</text></view>
+    <view class="row"><text class="k">replaced (bounded slot)</text><text class="v">{{replaced}}</text></view>
     <view class="row"><text class="k">solved blocks</text><text class="v">{{solvedBlocks}}</text></view>
     <view class="row"><text class="k">reconstruction</text><text class="v">{{reconstructionStatus}}</text></view>
+    <view class="row"><text class="k">reconstruct ms</text><text class="v">{{reconstructionMs}}</text></view>
     <view class="row"><text class="k">SHA-256</text><text class="v">{{shaStatus}}</text></view>
+    <view class="row"><text class="k">SHA ms</text><text class="v">{{shaMs}}</text></view>
+    <view class="row"><text class="k">file write ms</text><text class="v">{{fileWriteMs}}</text></view>
+    <view class="row"><text class="k">network radio type</text><text class="v">{{networkType}}</text></view>
     <view class="row"><text class="k">local file</text><text class="v">{{localFilePath}}</text></view>
     <view class="row" wx:for="{{tileStatus}}" wx:key="*this"><text class="k">per-tile</text><text class="v">{{item}}</text></view>
+  </view>
+
+  <view class="panel" wx:if="{{mode === 'baseline'}}">
+    <view class="section">single-code baseline 单码基线</view>
+    <view class="pipeline-error" wx:if="{{baselinePipelineError}}">{{baselinePipelineError}}</view>
+    <view class="row"><text class="k">self-check</text><text class="v">{{baselineSelfCheck}}</text></view>
+    <view class="row"><text class="k">Mode / 模式</text><text class="v">Single-Code Baseline / 单码基线</text></view>
+    <view class="row"><text class="k">Status / 状态</text><text class="v">{{baselineStatus}}</text></view>
+    <view class="row"><text class="k">File ID / 文件ID</text><text class="v">{{baselineFileId}}</text></view>
+    <view class="row"><text class="k">File / 文件</text><text class="v">{{baselineFileName}}</text></view>
+    <view class="row"><text class="k">File size / 文件大小</text><text class="v">{{baselineFileSize}}</text></view>
+    <view class="row"><text class="k">Received chunks / 已接收分片</text><text class="v">{{baselineReceivedChunks}}</text></view>
+    <view class="row"><text class="k">Missing chunks / 缺失分片</text><text class="v">{{baselineMissingChunks}}</text></view>
+    <view class="row"><text class="k">Duplicates / 重复帧</text><text class="v">{{baselineDuplicates}}</text></view>
+    <view class="row"><text class="k">Last chunk / 最后收到</text><text class="v">{{baselineLastChunk}}</text></view>
+    <view class="row"><text class="k">Elapsed / 已用时</text><text class="v">{{baselineElapsed}}</text></view>
+    <view class="row"><text class="k">Camera FPS / 相机帧率</text><text class="v">{{callbackFps}}</text></view>
+    <view class="row"><text class="k">Processed FPS</text><text class="v">{{processingFps}}</text></view>
+    <view class="row"><text class="k">Camera frame / 相机帧</text><text class="v">{{baselineFrameInfo}}</text></view>
+    <view class="row"><text class="k">Decode attempts / 解码尝试</text><text class="v">{{baselineDecodeAttempts}}</text></view>
+    <view class="row"><text class="k">Decode success / 解码成功</text><text class="v">{{baselineDecodeSuccess}}</text></view>
+    <view class="row"><text class="k">CRC failures / CRC 失败</text><text class="v">{{baselineCrcFailures}}</text></view>
+    <view class="row"><text class="k">Locate failures / 定位失败</text><text class="v">{{baselineLocateFailures}}</text></view>
+    <view class="row"><text class="k">Metadata rejects</text><text class="v">{{baselineMetadataRejects}}</text></view>
+    <view class="row"><text class="k">Foreign file rejects</text><text class="v">{{baselineForeignRejects}}</text></view>
+    <view class="row"><text class="k">Code size / 码尺寸</text><text class="v">{{baselineCodeWidth}}</text></view>
+    <view class="row"><text class="k">Pixels per cell X/Y</text><text class="v">{{baselinePixPerCell}}</text></view>
+    <view class="row"><text class="k">Reserved pattern score</text><text class="v">{{baselineReservedScore}}</text></view>
+    <view class="row"><text class="k">Frame rotation index</text><text class="v">{{baselineRotation}}</text></view>
+    <view class="row"><text class="k">Contrast</text><text class="v">{{baselineContrast}}</text></view>
+    <view class="row"><text class="k">Time to first chunk</text><text class="v">{{baselineFirstChunkMs}}</text></view>
+    <view class="row"><text class="k">Time to all chunks</text><text class="v">{{baselineAllChunksMs}}</text></view>
+    <view class="row"><text class="k">Reconstruction / 重构方式</text><text class="v">{{baselineReconstructMethod}}</text></view>
+    <view class="row"><text class="k">Reconstruction / 重构结果</text><text class="v">{{baselineReconstructionStatus}}</text></view>
+    <view class="row"><text class="k">Reconstruct ms</text><text class="v">{{baselineReconstructMs}}</text></view>
+    <view class="row"><text class="k">SHA-256</text><text class="v">{{baselineShaStatus}}</text></view>
+    <view class="row"><text class="k">SHA ms</text><text class="v">{{baselineShaMs}}</text></view>
+    <view class="row"><text class="k">network radio type</text><text class="v">{{networkType}}</text></view>
+    <view class="row"><text class="k">file save</text><text class="v">not required in this baseline / 基线不落盘</text></view>
+  </view>
+
+  <view class="panel" wx:if="{{mode === 'baseline'}}">
+    <view class="section">speed ladder metrics · 阶梯指标 (TF-012 r7)</view>
+    <view class="row"><text class="k">declared hold / 声明每码停留</text><text class="v">{{holdMsDeclared}} ms</text></view>
+    <view class="note">Set above, in the Sender holdMs declaration bar / 在上方的每码停留声明栏中设置</view>
+    <view class="row"><text class="k">theoretical chunk rate / 理论切片速率</text><text class="v">{{theoChunkRate}}</text></view>
+    <view class="row"><text class="k">theoretical file-payload rate / 理论文件载荷速率</text><text class="v">{{theoPayloadRate}}</text></view>
+    <view class="note">declared sender-side arithmetic · NOT Net Goodput · NOT optical throughput</view>
+    <view class="hr"></view>
+    <view class="row"><text class="k">active process avg / 有效处理均值</text><text class="v">{{activeProcessAvgMs}}</text></view>
+    <view class="row"><text class="k">active process p50</text><text class="v">{{activeProcessP50Ms}}</text></view>
+    <view class="row"><text class="k">active process p95</text><text class="v">{{activeProcessP95Ms}}</text></view>
+    <view class="row"><text class="k">active process max</text><text class="v">{{activeProcessMaxMs}}</text></view>
+    <view class="row"><text class="k">active samples / 有效样本</text><text class="v">{{activeProcessSamples}}</text></view>
+    <view class="row"><text class="k">post-complete frames EXCLUDED / 完成后忽略帧</text><text class="v">{{postCompleteFrames}}</text></view>
+    <view class="row"><text class="k">clock / 时钟</text><text class="v">{{clockSource}}</text></view>
+    <view class="hr"></view>
+    <view class="row"><text class="k">exploratory Net Goodput / 探索性净吞吐</text><text class="v">{{netGoodputText}}</text></view>
+    <view class="note">defined ONLY when 16/16 unique chunks + SHA-256 MATCH · 10 KiB exploratory physical benchmark · NOT G0</view>
+    <view class="hr"></view>
+    <view class="row"><text class="k">CameraFrames/code (theoretical)</text><text class="v">{{theoreticalCameraFramesPerCode}}</text></view>
+    <view class="row"><text class="k">decode success ratio</text><text class="v">{{decodeSuccessRatio}}</text></view>
+    <view class="row"><text class="k">CRC failure ratio</text><text class="v">{{crcFailureRatio}}</text></view>
+    <view class="row"><text class="k">locate failure ratio</text><text class="v">{{locateFailureRatio}}</text></view>
+    <view class="row"><text class="k">new unique chunk yield</text><text class="v">{{newUniqueChunkYield}}</text></view>
+    <view class="row"><text class="k">duplicate ratio</text><text class="v">{{duplicateRatio}}</text></view>
+    <view class="note">diagnostic only — ranks PASSing points, does NOT decide PASS · NOT decode opportunities</view>
+  </view>
+
+  <view class="panel" wx:if="{{mode === 'baseline' && baselineContentPreview}}">
+    <view class="section">TRANSFER COMPLETE / 传输完成 — Content Preview / 内容预览</view>
+    <view class="row"><text class="k">lines</text><text class="v">{{baselinePreviewLines}}</text></view>
+    <text class="preview">{{baselineContentPreview}}</text>
+  </view>
+
+  <view class="panel" wx:if="{{mode === 'baseline'}}">
+    <view class="section">G7 locator diagnostics · G7 定位诊断</view>
+    <view class="row"><text class="k">deepest stage / 最深阶段</text><text class="v">{{g7Stage}}</text></view>
+    <view class="row"><text class="k">stage reason / 阶段原因</text><text class="v">{{g7StageReason}}</text></view>
+    <view class="hr"></view>
+    <view class="row"><text class="k">G7a Candidate Detection / 候选区域检测</text><text class="v">{{g7aPass}}</text></view>
+    <view class="row"><text class="k">G7a frames pass / 通过帧数</text><text class="v">{{g7aCount}}</text></view>
+    <view class="row"><text class="k">frame luma min/max/mean</text><text class="v">{{g7aLuma}}</text></view>
+    <view class="row"><text class="k">contrast / 对比度</text><text class="v">{{g7aContrast}}</text></view>
+    <view class="row"><text class="k">binarisation threshold / 二值化阈值</text><text class="v">{{g7aThreshold}}</text></view>
+    <view class="row"><text class="k">dark pixel ratio / 暗像素比例</text><text class="v">{{g7aDarkRatio}}</text></view>
+    <view class="row"><text class="k">local variation / 局部起伏</text><text class="v">{{g7aLocalVariation}}</text></view>
+    <view class="row"><text class="k">channel means R/G/B/A</text><text class="v">{{g7aChannels}}</text></view>
+    <view class="row"><text class="k">dark components / 连通域数</text><text class="v">{{g7aComponents}}</text></view>
+    <view class="row"><text class="k">candidates / 候选区域数</text><text class="v">{{g7aCandidates}}</text></view>
+    <view class="row"><text class="k">candidate spans / 候选尺寸</text><text class="v">{{g7aCandidateSpans}}</text></view>
+    <view class="row"><text class="k">largest region / 最大暗区</text><text class="v">{{g7aLargestBox}}</text></view>
+    <view class="row"><text class="k">bright re-segmentation</text><text class="v">{{g7aBrightRegion}}</text></view>
+    <view class="row"><text class="k">G7a rejection / 拒绝原因</text><text class="v">{{g7aRejection}}</text></view>
+    <view class="hr"></view>
+    <view class="row"><text class="k">G7b Code Bounding Box / 码边界定位</text><text class="v">{{g7bPass}}</text></view>
+    <view class="row"><text class="k">G7b reason / 判定依据</text><text class="v">{{g7bReason}}</text></view>
+    <view class="hr"></view>
+    <view class="row"><text class="k">G7c Geometry Lock / 几何锁定</text><text class="v">{{g7cPass}}</text></view>
+    <view class="row"><text class="k">seeds / 粗定位种子</text><text class="v">{{g7cSeeds}}</text></view>
+    <view class="row"><text class="k">best seed score / 最佳粗分</text><text class="v">{{g7cBestSeed}}</text></view>
+    <view class="row"><text class="k">refined attempts / 精定位次数</text><text class="v">{{g7cRefined}}</text></view>
+    <view class="row"><text class="k">best refined score (incl. failed) / 最佳精分</text><text class="v">{{g7cBestRefined}}</text></view>
+    <view class="row"><text class="k">geometry / 几何</text><text class="v">{{g7cGeometry}}</text></view>
+    <view class="row"><text class="k">G7c reason / 失败原因</text><text class="v">{{g7cReason}}</text></view>
+    <view class="hr"></view>
+    <view class="row"><text class="k">G7d OptiGrid CRC Decode / CRC 解码</text><text class="v">{{g7dPass}}</text></view>
+    <view class="row"><text class="k">CRC attempts/ok/fail</text><text class="v">{{g7dCrc}}</text></view>
+    <view class="row"><text class="k">decoded sequence / 序列号</text><text class="v">{{g7dSequence}}</text></view>
+    <view class="row"><text class="k">decoded chunkIndex / 切片号</text><text class="v">{{g7dChunkIndex}}</text></view>
   </view>
 
   <view class="panel" wx:if="{{mode === 'benchmark'}}">
@@ -106,15 +370,11 @@
     <view class="err" wx:for="{{errors}}" wx:key="*this">{{item}}</view>
   </view>
 
-  <view class="controls">
-    <button class="btn" bindtap="freezeResult">Freeze Test Result</button>
-    <button class="btn" bindtap="copyResult" disabled="{{!frozenResult}}">Copy Result</button>
-  </view>
-
   <view class="panel" wx:if="{{frozenResult}}">
-    <view class="section">frozen result ({{frozenAt}})</view>
+    <view class="section">latest frozen result ({{frozenAt}}) — copy it from the buttons above</view>
     <text class="frozen" selectable="true">{{frozenResult}}</text>
   </view>
 
   <view class="log">{{log}}</view>
+  </view>
 </view>
