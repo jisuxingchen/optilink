@@ -1733,6 +1733,18 @@ export class SingleCodeBaselineReceiver {
   fileSha256 = '';
   reconstructionMethod = '';
   readonly received = new Map<number, Uint8Array>();
+  /**
+   * Optical decodes per chunk index, counted on EVERY frame that decoded AND whose chunk
+   * metadata parsed — stored, duplicate and foreign-transfer decodes alike.
+   *
+   * WHY THIS EXISTS (TF-012 r18): `receivedUniqueCount` alone cannot tell "the carrier is
+   * stuck on one image" apart from "the receiver keeps decoding one chunk" — a physical
+   * A3 run reported 246 successful decodes and a unique-chunk delta of 1, and neither the
+   * frozen JSON nor the receiver could say which chunk those decodes belonged to. The
+   * histogram is measured LOCALLY from the optical frames; it is never taken from sender
+   * telemetry and never crosses the network.
+   */
+  private readonly decodedByChunk = new Map<number, number>();
   metrics: SingleBaselineMetrics = emptyMetrics();
   lastRejectReason = '';
   reconstruction: SingleBaselineReconstruction | null = null;
@@ -1752,6 +1764,7 @@ export class SingleCodeBaselineReceiver {
     this.fileSha256 = '';
     this.reconstructionMethod = '';
     this.received.clear();
+    this.decodedByChunk.clear();
     this.metrics = emptyMetrics();
     this.lastRejectReason = '';
     this.reconstruction = null;
@@ -1762,6 +1775,33 @@ export class SingleCodeBaselineReceiver {
 
   get receivedUniqueCount(): number {
     return this.received.size;
+  }
+
+  /**
+   * Sorted unique chunk indexes accepted into the local store (r18).
+   *
+   * This is the optical truth about WHAT the receiver holds: the phone's frozen JSON,
+   * the static-step invariant (`every accepted index == 0`) and the A4 before/during
+   * interval evidence all read it. It is deliberately computed from the received map and
+   * never inferred from sender telemetry — the network can say what the sender INTENDED
+   * to show, never what the camera actually decoded.
+   */
+  receivedIndices(): number[] {
+    return [...this.received.keys()].sort((a, b) => a - b);
+  }
+
+  /**
+   * Optical decodes per chunk index (r18): every frame that decoded with parseable chunk
+   * metadata, counted each time it happened, duplicates included. A high count on one
+   * index while the carrier cycles is the signature of "the camera keeps resolving the
+   * same image", which no cumulative counter can show.
+   */
+  decodedChunkCounts(): Record<string, number> {
+    const counts: Record<string, number> = {};
+    for (const index of [...this.decodedByChunk.keys()].sort((a, b) => a - b)) {
+      counts[String(index)] = this.decodedByChunk.get(index) ?? 0;
+    }
+    return counts;
   }
 
   get duplicateCount(): number {
@@ -1904,6 +1944,11 @@ export class SingleCodeBaselineReceiver {
       return 'invalid';
     }
     const meta = parsed.chunk.meta;
+    // r18: counted HERE, before the identity and duplicate decisions, because "which
+    // chunk did the camera actually resolve" is the question — not "which chunk was
+    // newly stored". A foreign-transfer decode still proves the carrier showed that
+    // index, which is exactly what a static-step invariant must police.
+    this.decodedByChunk.set(meta.chunkIndex, (this.decodedByChunk.get(meta.chunkIndex) ?? 0) + 1);
     if (this.activeFileId === null) {
       this.activeFileId = meta.fileId;
       this.totalChunks = meta.totalChunks;

@@ -42,6 +42,9 @@
     <view class="abrow"><text class="abk">Telemetry</text><text class="abv">{{autoPrereqTelemetry}}</text></view>
     <view class="abrow"><text class="abk">Sender</text><text class="abv">{{autoPrereqSender}}</text></view>
     <view class="abrow"><text class="abk">setup window</text><text class="abv">{{autoSetupCountdown}}</text></view>
+    <!-- r18: scheduler visibility. A step whose tick loop stalled is NOT rankable. -->
+    <view class="abrow"><text class="abk">scheduler (this step)</text><text class="abv">{{autoTickStats}}</text></view>
+    <view class="abrow"><text class="abk">abort</text><text class="abv">{{autoAbortSource}}</text></view>
     <!-- r15 handshake stages: control socket, peer registration, telemetry freshness.
          A peer HELLO alone must NOT read as "connected". -->
     <view class="abrow"><text class="abk">peer</text><text class="abv">{{autoSenderPeerPresent}}</text></view>
@@ -79,6 +82,9 @@
     <view class="abrow"><text class="abk">final</text><text class="abv">{{autoFinalStatus}}</text></view>
     <view class="abrow"><text class="abk">steps frozen</text><text class="abv">{{autoFrozenStepsDone}}</text></view>
     <view class="abrow"><text class="abk">sender stopped</text><text class="abv">{{autoStoppedConfirmed}}</text></view>
+    <!-- r18: why the run ended, by whom, and whether the tick loop stayed healthy. -->
+    <view class="abrow"><text class="abk">abort record</text><text class="abv">{{autoAbortSummary}}</text></view>
+    <view class="abrow"><text class="abk">run timing</text><text class="abv">{{autoRunTiming}}</text></view>
     <view class="abrow"><text class="abk">harness valid</text><text class="abv">{{autoHarnessValid}}</text></view>
     <view class="abrow"><text class="abk">validity notes</text><text class="abv">{{autoValidityFailed}}</text></view>
     <view class="abrow"><text class="abk">result upload</text><text class="abv">{{autoResultUpload}}</text></view>

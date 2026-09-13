@@ -48,6 +48,12 @@ export interface Tf012AutoReceiverSample {
   locateFailures: number;
   uniqueReceived: number;
   decodedChunkIndexes: number[];
+  /**
+   * r18: optical decodes per chunk index, measured by the LOCAL receiver (duplicates
+   * included). Never derived from sender telemetry — the network says what the sender
+   * intended to show, this says what the camera actually resolved.
+   */
+  acceptedDecodeCountByChunkIndex: Record<string, number>;
 }
 
 export function emptyReceiverSample(): Tf012AutoReceiverSample {
@@ -57,7 +63,7 @@ export function emptyReceiverSample(): Tf012AutoReceiverSample {
     callbackFps: null, processingFps: null, activeProcessAvgMs: null,
     activeProcessP95Ms: null, cameraFrames: 0, processedFrames: 0, decodeAttempts: 0,
     successfulDecodes: 0, crcFailures: 0, locateFailures: 0,
-    uniqueReceived: 0, decodedChunkIndexes: [],
+    uniqueReceived: 0, decodedChunkIndexes: [], acceptedDecodeCountByChunkIndex: {},
   };
 }
 
@@ -84,6 +90,8 @@ export interface Tf012AutoIntervalMetrics {
   uniqueReceivedDelta: number;
   /** Chunk indexes FIRST observed inside this interval (not the cumulative set). */
   decodedChunkIndexes: number[];
+  /** r18: decodes GAINED in this interval, per chunk index (deltas only, > 0). */
+  acceptedDecodeCountByChunkIndex: Record<string, number>;
   /** Deltas / interval seconds — step-scoped, cannot inherit a UI-window artefact. */
   callbackFps: number | null;
   processingFps: number | null;
@@ -91,6 +99,24 @@ export interface Tf012AutoIntervalMetrics {
 
 function delta(from: number, to: number): number {
   return Math.max(0, to - from);
+}
+
+/**
+ * Per-index decode counts gained between two snapshots (r18).
+ *
+ * Keys are chunk indexes; only indexes with a POSITIVE gain appear, so an empty object
+ * means "this interval decoded nothing", not "the histogram failed to load".
+ */
+export function tf012AutoChunkDecodeDelta(
+  start: Record<string, number>,
+  end: Record<string, number>,
+): Record<string, number> {
+  const gained: Record<string, number> = {};
+  for (const key of Object.keys(end)) {
+    const difference = delta(start[key] ?? 0, end[key]);
+    if (difference > 0) gained[key] = difference;
+  }
+  return gained;
 }
 
 export function tf012AutoIntervalMetrics(
@@ -112,6 +138,9 @@ export function tf012AutoIntervalMetrics(
     uniqueReceivedDelta: delta(start.uniqueReceived, end.uniqueReceived),
     decodedChunkIndexes: end.decodedChunkIndexes.filter(
       (index) => !start.decodedChunkIndexes.includes(index),
+    ),
+    acceptedDecodeCountByChunkIndex: tf012AutoChunkDecodeDelta(
+      start.acceptedDecodeCountByChunkIndex, end.acceptedDecodeCountByChunkIndex,
     ),
     callbackFps: seconds > 0 ? cameraFramesDelta / seconds : null,
     processingFps: seconds > 0 ? processedFramesDelta / seconds : null,
@@ -235,6 +264,155 @@ export const TF012_AUTO_STOP_CONFIRM_TIMEOUT_MS = 4000;
  */
 export const TF012_AUTO_TELEMETRY_LOSS_MS = 5000;
 
+// ---------------------------------------------------------------------------
+// r18 — SCHEDULER TIMING / EVIDENCE INTEGRITY
+// ---------------------------------------------------------------------------
+//
+// A physical r17 run measured A1 +2.6 s, A2 +1.1 s and A3 +30.5 s over plan, with a
+// 19.3 s command→confirmation wait against a configured 5 s deadline. Every deadline in
+// this machine is evaluated ON A TICK, so a stalled tick loop silently stretches every
+// "bounded" wait and quietly turns a 25 s step into 55 s of different evidence. The
+// instrumentation below makes that visible instead of averaging it away.
+
+/**
+ * A tick gap larger than this invalidates a step's timing.
+ *
+ * The phone schedules `tick()` every 250 ms. Normal jitter is bounded by one frame of
+ * camera processing (~20-100 ms measured physically), so two cadences (~500 ms) is still
+ * unremarkable. 1500 ms is SIX cadences: no plausible jitter or single-frame delay
+ * explains it, which is exactly the signature of the 19 s / 30 s stalls observed in r17.
+ */
+export const TF012_AUTO_TIMING_STALL_THRESHOLD_MS = 1500;
+/** How long a PO abort keeps observing telemetry for the STOP confirmation. */
+export const TF012_AUTO_ABORT_STOP_TIMEOUT_MS = 3000;
+
+export interface Tf012AutoTickStats {
+  tickCount: number;
+  tickIntervalAvgMs: number | null;
+  tickIntervalP50Ms: number | null;
+  tickIntervalP95Ms: number | null;
+  tickIntervalMaxMs: number | null;
+  largestTickGapMs: number | null;
+  largestTickGapStartedAtIso: string | null;
+  largestTickGapEndedAtIso: string | null;
+}
+
+/**
+ * Whether a step's WALL-CLOCK evidence is trustworthy.
+ *
+ * `valid: false` never means "the physics failed" — it means the scheduler stalled, so
+ * the planned duration is not the measured duration and the step must not be ranked on a
+ * physical speed ladder as if it were.
+ */
+export interface Tf012AutoTimingIntegrity {
+  valid: boolean;
+  reason: 'OK' | 'ORCHESTRATOR_STALL';
+  thresholdMs: number;
+  largestTickGapMs: number | null;
+  largestTickGapStartedAtIso: string | null;
+  largestTickGapEndedAtIso: string | null;
+}
+
+export function emptyTickStats(): Tf012AutoTickStats {
+  return {
+    tickCount: 0,
+    tickIntervalAvgMs: null, tickIntervalP50Ms: null, tickIntervalP95Ms: null,
+    tickIntervalMaxMs: null,
+    largestTickGapMs: null, largestTickGapStartedAtIso: null, largestTickGapEndedAtIso: null,
+  };
+}
+
+function percentile(sorted: number[], fraction: number): number | null {
+  if (sorted.length === 0) return null;
+  const position = (sorted.length - 1) * fraction;
+  const lower = Math.floor(position);
+  const upper = Math.ceil(position);
+  if (lower === upper) return sorted[lower]!;
+  return sorted[lower]! + (sorted[upper]! - sorted[lower]!) * (position - lower);
+}
+
+/** Accumulates tick intervals for one scope (the run, or one step). */
+export class Tf012AutoTickTracker {
+  private intervals: number[] = [];
+  private lastTickAt: number | null = null;
+  private largestGap: {ms: number; startedAt: number; endedAt: number} | null = null;
+  private readonly cap: number;
+
+  constructor(cap = 4096) {
+    this.cap = cap;
+  }
+
+  reset(): void {
+    this.intervals = [];
+    this.lastTickAt = null;
+    this.largestGap = null;
+  }
+
+  /** Record one tick. The first tick of a scope has no interval to measure. */
+  note(nowMs: number): void {
+    if (this.lastTickAt != null) {
+      const gap = nowMs - this.lastTickAt;
+      if (gap > 0) {
+        if (this.intervals.length < this.cap) this.intervals.push(gap);
+        if (!this.largestGap || gap > this.largestGap.ms) {
+          this.largestGap = {ms: gap, startedAt: this.lastTickAt, endedAt: nowMs};
+        }
+      }
+    }
+    this.lastTickAt = nowMs;
+  }
+
+  stats(): Tf012AutoTickStats {
+    const sorted = [...this.intervals].sort((a, b) => a - b);
+    const sum = this.intervals.reduce((total, entry) => total + entry, 0);
+    return {
+      tickCount: this.intervals.length,
+      tickIntervalAvgMs: this.intervals.length > 0 ? sum / this.intervals.length : null,
+      tickIntervalP50Ms: percentile(sorted, 0.5),
+      tickIntervalP95Ms: percentile(sorted, 0.95),
+      tickIntervalMaxMs: sorted.length > 0 ? sorted[sorted.length - 1]! : null,
+      largestTickGapMs: this.largestGap ? this.largestGap.ms : null,
+      largestTickGapStartedAtIso: this.largestGap ? new Date(this.largestGap.startedAt).toISOString() : null,
+      largestTickGapEndedAtIso: this.largestGap ? new Date(this.largestGap.endedAt).toISOString() : null,
+    };
+  }
+
+  integrity(): Tf012AutoTimingIntegrity {
+    const stats = this.stats();
+    const stalled = stats.largestTickGapMs != null && stats.largestTickGapMs > TF012_AUTO_TIMING_STALL_THRESHOLD_MS;
+    return {
+      valid: !stalled,
+      reason: stalled ? 'ORCHESTRATOR_STALL' : 'OK',
+      thresholdMs: TF012_AUTO_TIMING_STALL_THRESHOLD_MS,
+      largestTickGapMs: stats.largestTickGapMs,
+      largestTickGapStartedAtIso: stats.largestTickGapStartedAtIso,
+      largestTickGapEndedAtIso: stats.largestTickGapEndedAtIso,
+    };
+  }
+}
+
+/** Who ended the run. Analysts must not have to infer this from timestamps. */
+export type Tf012AutoAbortSource = 'PO_STOP' | 'HARNESS' | 'CAMERA' | 'SENDER' | 'CONTROL';
+
+/** The r18 abort record: when, by whom, why, and whether the carrier stopped. */
+export interface Tf012AutoAbortInfo {
+  source: Tf012AutoAbortSource;
+  reason: string;
+  detail: string;
+  abortedAtIso: string;
+  stopSentAtIso: string | null;
+  /** Telemetry reported `broadcasting === false` during the post-abort window. */
+  stopTelemetryConfirmed: boolean;
+  stopTelemetryObservedAtIso: string | null;
+}
+
+/** Status → abort source: the machine names its own failures. */
+function abortSourceForStatus(status: Tf012AutoRunStatus): Tf012AutoAbortSource {
+  if (status === 'CAMERA_NOT_READY') return 'CAMERA';
+  if (status === 'SENDER_STATE_NOT_CONFIRMED') return 'SENDER';
+  return 'HARNESS';
+}
+
 /**
  * Every way a run can end. Only COMPLETE asserts a controlled experiment; anything the
  * harness could not verify lands on a named failure instead of a silent success.
@@ -289,6 +467,25 @@ export interface Tf012AutoStepResult {
   startedAtIso: string;
   finishedAtIso: string;
   actualDurationMs: number;
+  // ---- r18 timing evidence ---------------------------------------------------
+  /** Commands-issued → confirmation observed, with the overshoot past the deadline. */
+  confirmationRequestedAtIso: string;
+  confirmationObservedAtIso: string | null;
+  confirmationDeadlineMs: number;
+  /** 0 when the state was proven inside the deadline, otherwise the excess. */
+  confirmationOvershootMs: number;
+  /** Whole-step bounds (commands → freeze) and how far they exceeded the plan. */
+  stepStartedAtIso: string;
+  stepPlannedDurationMs: number;
+  stepMeasuredDurationMs: number;
+  stepOvershootMs: number;
+  /** A4 only: PAUSE request → PAUSE confirmation, with its own overshoot. */
+  pauseRequestedAtIso: string | null;
+  pauseConfirmedAtIso: string | null;
+  pauseOvershootMs: number | null;
+  /** Tick-loop statistics for THIS step, and whether its timing is trustworthy. */
+  tickStats: Tf012AutoTickStats;
+  timingIntegrity: Tf012AutoTimingIntegrity;
   /** False means the sender never proved the requested state — the step is unusable. */
   senderConfirmed: boolean;
   senderStateRequested: string;
@@ -340,6 +537,12 @@ export interface Tf012AutoRunResult {
   status: Tf012AutoRunStatus;
   /** The r14 gate: why this run may or may not claim COMPLETE. */
   validity: Tf012AutoValidity;
+  /** r18: why the run ended, when, by whom, and whether the carrier stopped. */
+  abort: Tf012AutoAbortInfo | null;
+  /** r18: tick-loop statistics for the whole run. */
+  scheduler: Tf012AutoTickStats;
+  /** r18: whether the run's wall-clock evidence is trustworthy. */
+  timingIntegrity: Tf012AutoTimingIntegrity;
   timeline: Tf012AutoRunTimeline;
   setupGate: Tf012AutoSetupGateResult;
   steps: Tf012AutoStepResult[];
@@ -507,6 +710,12 @@ export interface Tf012AutoProgress {
   /** r17: telemetry has proved the sender is in the requested SETUP state. */
   setupConfirmed: boolean;  /** r17: the setup measurement interval is open (nothing before this is setup evidence). */
   setupWindowOpen: boolean;
+  /** r18: ticks measured so far, the largest gap, and whether timing is still valid. */
+  tickCount: number;
+  largestTickGapMs: number | null;
+  timingIntegrityValid: boolean;
+  /** r18: the abort source once the run has ended (null while it is still running). */
+  abortSource: Tf012AutoAbortSource | null;
   /** The requested sender state for the active step, e.g. "CYCLIC 1000 ms". */
   requested: string;
   /** True once telemetry proved the sender is in the requested state. */
@@ -565,11 +774,22 @@ export class Tf012AutoOrchestrator {
   private readonly buildId: string | null;
   private readonly device: string | null;
 
-  private phase: 'IDLE' | 'WAITING_FOR_SENDER' | 'WAITING_FOR_CAMERA' | 'CONFIRMING_SETUP' | 'SETUP' | 'CONFIRMING' | 'RUNNING' | 'STOPPING' | 'DONE' | 'ABORTED' = 'IDLE';
+  private phase: 'IDLE' | 'WAITING_FOR_SENDER' | 'WAITING_FOR_CAMERA' | 'CONFIRMING_SETUP' | 'SETUP' | 'CONFIRMING' | 'RUNNING' | 'STOPPING' | 'ABORTED_OBSERVING' | 'DONE' | 'ABORTED' = 'IDLE';
   private requestedAt = 0;
   private startedAt = 0;
   private finishedAt = 0;
   private runtime: StepRuntime | null = null;
+  // ---- r18 scheduler instrumentation ------------------------------------------
+  /** Tick-loop statistics for the WHOLE run. */
+  private readonly runTicks = new Tf012AutoTickTracker();
+  /** Tick-loop statistics for the ACTIVE step (reset at every step boundary). */
+  private readonly stepTicks = new Tf012AutoTickTracker();
+  /** The last tick instant the machine saw, used when an abort has no explicit clock. */
+  private lastTickAt: number | null = null;
+  // ---- r18 abort lifecycle ----------------------------------------------------
+  private pendingAbort: Tf012AutoAbortInfo | null = null;
+  private pendingAbortStatus: Tf012AutoRunStatus | null = null;
+  private abortObserveUntil = 0;
   // ---- r17 camera pre-flight -------------------------------------------------
   /** When the run began waiting for camera acquisition. */
   private cameraWaitStartedAt: number | null = null;
@@ -636,29 +856,47 @@ export class Tf012AutoOrchestrator {
     this.requestedAt = nowMs;
     this.phase = 'WAITING_FOR_SENDER';
     this.gate = null;
+    this.runTicks.reset();
+    this.runTicks.note(nowMs);
     this.emitProgress(nowMs);
   }
 
-  abort(reason: string): void {
-    if (this.phase === 'DONE' || this.phase === 'ABORTED') return;
-    this.abortedReason = 'ABORTED';
-    this.abortDetail = reason;
-    this.phase = 'ABORTED';
-    this.ports.send(tf012AutoCommand('STOP', {runId: this.runId}));
-    // An operator abort still produces a final, honest artefact: the steps that were
-    // actually measured are preserved, and the status says ABORTED rather than COMPLETE.
-    this.finish(this.finishedAt || this.monotonicNow(), 'ABORTED');
-  }
-
-  /** The host clock, used only for the abort path's final timestamp. */
-  private monotonicNow(): number {
-    return this.finishedAt || this.requestedAt;
+  /**
+   * Host-driven abort (the PO pressed Stop, or the runner is tearing the session down).
+   *
+   * r17 defect this fixes: the final JSON reported `finishedAtIso` EARLIER than
+   * `startedAtIso`, because the abort path fell back to `requestedAt` when no clock was
+   * available. An abort now carries its real instant, its source and its reason, and the
+   * machine keeps observing telemetry briefly so the artefact can state whether the
+   * carrier actually stopped.
+   */
+  abort(reason: string, options: {source?: Tf012AutoAbortSource; detail?: string; nowMs?: number} = {}): void {
+    if (this.phase === 'DONE' || this.phase === 'ABORTED' || this.phase === 'ABORTED_OBSERVING') return;
+    const at = options.nowMs ?? this.lastTickAt ?? this.requestedAt;
+    this.beginAbort('ABORTED', options.source ?? 'PO_STOP', reason, options.detail ?? reason, at);
   }
 
   /** Fresh sender telemetry age, or null when none was ever received. */
   private telemetryAgeMs(nowMs: number): number | null {
     const at = this.ports.link.telemetryAt();
     return at == null ? null : Math.max(0, nowMs - at);
+  }
+
+  /**
+   * Deep-copy a receiver sample before storing it as interval evidence.
+   *
+   * The port contract is "return a FRESH snapshot", but a host that returns one mutable
+   * object would silently corrupt every delta (the r13 note about shallow freezing). r18
+   * made that risk concrete: the per-chunk histogram is an OBJECT, so a shallow copy
+   * aliases it and the interval delta collapses to {} because start and end point at the
+   * same map. The harness therefore copies what it keeps.
+   */
+  private capture(sample: Tf012AutoReceiverSample): Tf012AutoReceiverSample {
+    return {
+      ...sample,
+      decodedChunkIndexes: [...sample.decodedChunkIndexes],
+      acceptedDecodeCountByChunkIndex: {...sample.acceptedDecodeCountByChunkIndex},
+    };
   }
 
   private telemetryIsFresh(nowMs: number): boolean {
@@ -706,7 +944,16 @@ export class Tf012AutoOrchestrator {
 
   /** Advance the machine. `nowMs` is the host clock in milliseconds. */
   tick(nowMs: number): void {
-    if (this.phase === 'IDLE' || this.phase === 'DONE' || this.phase === 'ABORTED') return;
+    if (this.phase === 'DONE' || this.phase === 'ABORTED') return;
+    this.lastTickAt = nowMs;
+    // r18: every tick is measured, so a stalled loop cannot hide in the averages.
+    this.runTicks.note(nowMs);
+    this.stepTicks.note(nowMs);
+    if (this.phase === 'IDLE') return;
+    if (this.phase === 'ABORTED_OBSERVING') {
+      this.tickAbortObservation(nowMs);
+      return;
+    }
 
     if (this.phase === 'WAITING_FOR_SENDER') {
       this.tickWaitingForSender(nowMs);
@@ -745,12 +992,22 @@ export class Tf012AutoOrchestrator {
           nowMs,
         );
         const setupFrames = window.cameraFrames;
-        // The gate is recorded BEFORE the zero-frame guard can abort, so the frozen JSON
-        // always carries the window the harness actually saw.
-        const gate = evaluateTf012AutoSetupGate(endSample);
+        // r18: the gate is evaluated on a WINDOW-CONSISTENT sample. In r17 it still
+        // carried the phone's 500 ms UI-window FPS (55.56) next to a 180/5.14 s window
+        // (35.0) — a live-window number inside frozen evidence. Decode counts and optics
+        // are end-of-window snapshots; the rates are now derived from the window itself.
+        const windowSeconds = window.durationMs / 1000;
+        const evidence: Tf012AutoReceiverSample = {
+          ...endSample,
+          callbackFps: windowSeconds > 0 ? window.cameraFrames / windowSeconds : null,
+          processingFps: windowSeconds > 0 ? window.processedFrames / windowSeconds : null,
+        };
+        const gate = evaluateTf012AutoSetupGate(evidence);
         if (setupFrames === 0) {
           gate.reasons.unshift(`no camera frames arrived during SETUP (${window.durationMs} ms open)`);
         }
+        // The gate is recorded BEFORE any guard can abort, so the frozen JSON always
+        // carries the window and the sample the harness actually saw.
         this.gate = Object.freeze({...gate, evidenceWindow: window});
         // A setup hold with NO camera frames at all is a harness fault, not an optical
         // one. r15b reported SETUP_NOT_READY (an optics verdict) for exactly this state;
@@ -760,9 +1017,24 @@ export class Tf012AutoOrchestrator {
             `no camera frames arrived during SETUP (${window.durationMs} ms open)`, nowMs);
           return;
         }
+        // r18: the SETUP static invariant is now COMPUTED, not asserted: every index the
+        // camera accepted during the window must be chunk 0.
+        const acceptedIndexes = this.staticScopeIndexes(endSample);
+        const setupOffender = acceptedIndexes.find((index) => index !== 0);
+        if (setupOffender !== undefined) {
+          this.staticInvariants.push({
+            id: 'static_setup_invariant', ok: false,
+            detail: `SETUP accepted chunk ${setupOffender} (accepted: ${acceptedIndexes.join(', ')})`,
+          });
+          this.failRun('STATIC_INVARIANT_VIOLATION',
+            `SETUP is STATIC chunk0 but chunk ${setupOffender} was accepted`, nowMs);
+          return;
+        }
         this.staticInvariants.push({
           id: 'static_setup_invariant', ok: true,
-          detail: 'SETUP observed chunk 0 only',
+          detail: acceptedIndexes.length > 0
+            ? `SETUP accepted chunk0 only (accepted: ${acceptedIndexes.join(', ')})`
+            : 'SETUP accepted no chunk (the setup hold decoded nothing)',
         });
         if (!this.gate.ready) {
           this.failRun('SETUP_NOT_READY', this.gate.reasons.join('; ') || 'setup gate not ready', nowMs);
@@ -850,6 +1122,8 @@ export class Tf012AutoOrchestrator {
   private requestSetup(nowMs: number): void {
     this.phase = 'CONFIRMING_SETUP';
     this.setupRequestedAt = nowMs;
+    this.stepTicks.reset();
+    this.stepTicks.note(nowMs);
     this.runtime = {
       step: this.setupStep,
       issuedAt: nowMs,
@@ -916,7 +1190,7 @@ export class Tf012AutoOrchestrator {
     const {confirmed, mismatch} = this.senderConfirmation(nowMs, expected, runtime.issuedAt);
     if (confirmed) {
       runtime.measuredAt = nowMs;
-      runtime.intervalStart = this.ports.receiverSample();
+      runtime.intervalStart = this.capture(this.ports.receiverSample());
       this.confirmations.push({
         id: `confirm_${runtime.step.id}`,
         ok: true,
@@ -966,7 +1240,7 @@ export class Tf012AutoOrchestrator {
         this.resumeNeeded = true;
         // The frozen interval starts at CONFIRMATION, so "duringPause" is measured from
         // the moment the freeze was proven, not from the moment it was requested.
-        runtime.intervalStart = this.ports.receiverSample();
+        runtime.intervalStart = this.capture(this.ports.receiverSample());
       } else if (nowMs - runtime.pauseIssuedAt >= TF012_AUTO_PAUSE_CONFIRM_TIMEOUT_MS) {
         this.confirmations.push({
           id: 'confirm_A4_pause', ok: false,
@@ -983,7 +1257,7 @@ export class Tf012AutoOrchestrator {
     if (violation) { this.failRun('STATIC_INVARIANT_VIOLATION', violation, nowMs); return; }
 
     if (step.id === 'A4' && runtime.pauseIssuedAt == null && elapsed >= (step.runMs ?? 0)) {
-      const receiver = this.ports.receiverSample();
+      const receiver = this.capture(this.ports.receiverSample());
       const sender = this.ports.senderSample();
       // The "beforePause" interval is closed HERE: measured from confirmation to the
       // PAUSE request, with its own deltas, so nobody has to subtract counters later.
@@ -1046,6 +1320,13 @@ export class Tf012AutoOrchestrator {
   /**
    * Optical cross-check: a static step that decodes anything other than chunk 0 proves
    * the sender is NOT in the requested state, whatever the network telemetry claims.
+   *
+   * r18: this check used to be blind, because the receiver exposed no chunk indexes and
+   * every sample carried `decodedChunkIndexes: []`. It now reads TWO local signals:
+   *   1. the accepted chunk indexes gained since the step began (`receivedIndices()`),
+   *   2. the per-index decode histogram gained since the step began — which counts EVERY
+   *      decode, including repeats of an already-held chunk, so a carrier that keeps
+   *      showing chunk 3 is caught even though nothing new was stored.
    */
   private staticInvariantViolation(): string | null {
     const step = this.runtime?.step ?? null;
@@ -1057,7 +1338,15 @@ export class Tf012AutoOrchestrator {
     const observed = now.decodedChunkIndexes.filter((index) => !start.decodedChunkIndexes.includes(index));
     const offender = observed.find((index) => index !== 0);
     if (offender !== undefined) {
-      return `${step.id} is STATIC chunk0 but chunk ${offender} was decoded`;
+      return `${step.id} is STATIC chunk0 but chunk ${offender} was accepted`;
+    }
+    const histogram = tf012AutoChunkDecodeDelta(
+      start.acceptedDecodeCountByChunkIndex, now.acceptedDecodeCountByChunkIndex,
+    );
+    const decodedOffender = Object.keys(histogram).find((key) => key !== '0');
+    if (decodedOffender !== undefined) {
+      return `${step.id} is STATIC chunk0 but chunk ${decodedOffender} was decoded `
+        + `(${histogram[decodedOffender]} frames)`;
     }
     const uniqueDelta = now.uniqueReceived - start.uniqueReceived;
     if (uniqueDelta > 1) {
@@ -1066,18 +1355,76 @@ export class Tf012AutoOrchestrator {
     return null;
   }
 
-  /** Abort with a named status, always STOPping the sender first. */
+  /** r18: every OPTICALLY accepted index in a static scope must be chunk 0. */
+  private staticScopeIndexes(sample: Tf012AutoReceiverSample): number[] {
+    return [...sample.decodedChunkIndexes].sort((a, b) => a - b);
+  }
+
+  /**
+   * Abort with a named status. The source follows the status, so an analyst never has to
+   * infer "who ended this run" from timestamps.
+   */
   private failRun(status: Tf012AutoRunStatus, detail: string, nowMs: number): void {
+    this.beginAbort(status, abortSourceForStatus(status), status, detail, nowMs);
+  }
+
+  /**
+   * Start an abort: record WHO/WHY/WHEN, send STOP, then keep observing telemetry for a
+   * short window so the artefact can state whether the carrier actually stopped.
+   */
+  private beginAbort(
+    status: Tf012AutoRunStatus,
+    source: Tf012AutoAbortSource,
+    reason: string,
+    detail: string,
+    at: number,
+  ): void {
     this.abortedReason = status;
     this.abortDetail = detail;
-    this.phase = 'ABORTED';
+    this.pendingAbortStatus = status;
+    this.pendingAbort = {
+      source,
+      reason,
+      detail,
+      abortedAtIso: new Date(at).toISOString(),
+      stopSentAtIso: new Date(at).toISOString(),
+      stopTelemetryConfirmed: false,
+      stopTelemetryObservedAtIso: null,
+    };
+    this.stopSentAt = at;
+    this.phase = 'ABORTED_OBSERVING';
+    this.abortObserveUntil = at + TF012_AUTO_ABORT_STOP_TIMEOUT_MS;
     this.ports.send(tf012AutoCommand('STOP', {runId: this.runId}));
-    this.finish(nowMs, status);
+    this.finishedAt = at;
+    this.emitProgress(at);
+  }
+
+  /**
+   * Post-abort window: the carrier has been told to STOP; record whether telemetry
+   * confirms it. Bounded by TF012_AUTO_ABORT_STOP_TIMEOUT_MS so a dead peer cannot hang
+   * the artefact, and never longer than needed when the answer arrives immediately.
+   */
+  private tickAbortObservation(nowMs: number): void {
+    const abort = this.pendingAbort;
+    if (!abort) { this.finalize(this.finishedAt, this.pendingAbortStatus ?? 'ABORTED'); return; }
+    const sentAt = this.stopSentAt ?? nowMs;
+    if (!abort.stopTelemetryConfirmed
+      && this.telemetryIsFresh(nowMs)
+      && this.ports.senderSample().broadcasting === false) {
+      abort.stopTelemetryConfirmed = true;
+      abort.stopTelemetryObservedAtIso = new Date(nowMs).toISOString();
+    }
+    this.emitProgress(nowMs);
+    if (abort.stopTelemetryConfirmed || nowMs >= this.abortObserveUntil) {
+      this.finalize(Math.max(this.finishedAt, sentAt), this.pendingAbortStatus ?? 'ABORTED');
+    }
   }
 
   private beginStep(index: number, nowMs: number): void {
     const step = this.steps[index];
     this.phase = 'CONFIRMING';
+    this.stepTicks.reset();
+    this.stepTicks.note(nowMs);
     this.runtime = {
       step,
       issuedAt: nowMs,
@@ -1091,7 +1438,7 @@ export class Tf012AutoOrchestrator {
     };
     this.beforePauseSnapshot = null;
     this.ports.resetReceiverMetrics();
-    this.runtime.stepStartSample = this.ports.receiverSample();
+    this.runtime.stepStartSample = this.capture(this.ports.receiverSample());
     if (this.resumeNeeded) {
       // Leaving A4's freeze: the carrier must be running again for this step to exist.
       this.resumeNeeded = false;
@@ -1110,8 +1457,10 @@ export class Tf012AutoOrchestrator {
     this.ports.send(tf012AutoCommand('START', {runId: this.runId, stepId: step.id}));
   }
 
-  private freezeStep(sender: Tf012AutoSenderSample, receiver: Tf012AutoReceiverSample, nowMs: number): void {
+  private freezeStep(sender: Tf012AutoSenderSample, receiverInput: Tf012AutoReceiverSample, nowMs: number): void {
     if (!this.runtime) return;
+    // r18: the harness owns its evidence — copy the sample it is about to freeze.
+    const receiver = this.capture(receiverInput);
     const {step, issuedAt, measuredAt, paused} = this.runtime;
     const startedAt = measuredAt ?? issuedAt;
     const actualDurationMs = Math.max(0, nowMs - startedAt);
@@ -1120,6 +1469,12 @@ export class Tf012AutoOrchestrator {
     // The whole step, including the window before the sender state was confirmed.
     const stepInterval = tf012AutoIntervalMetrics(
       this.runtime.stepStartSample ?? receiver, receiver, Math.max(0, nowMs - issuedAt));
+    const confirmationObservedAt = measuredAt;
+    const confirmationOvershootMs = confirmationObservedAt == null
+      ? 0
+      : Math.max(0, (confirmationObservedAt - issuedAt) - TF012_AUTO_COMMAND_CONFIRM_TIMEOUT_MS);
+    const stepMeasuredDurationMs = Math.max(0, nowMs - issuedAt);
+    const tickStats = this.stepTicks.stats();
     const result: Tf012AutoStepResult = {
       stepId: step.id,
       index: step.index,
@@ -1132,6 +1487,23 @@ export class Tf012AutoOrchestrator {
       startedAtIso: new Date(startedAt).toISOString(),
       finishedAtIso: new Date(nowMs).toISOString(),
       actualDurationMs,
+      confirmationRequestedAtIso: new Date(issuedAt).toISOString(),
+      confirmationObservedAtIso: confirmationObservedAt == null ? null : new Date(confirmationObservedAt).toISOString(),
+      confirmationDeadlineMs: TF012_AUTO_COMMAND_CONFIRM_TIMEOUT_MS,
+      confirmationOvershootMs,
+      stepStartedAtIso: new Date(issuedAt).toISOString(),
+      stepPlannedDurationMs: step.durationMs,
+      stepMeasuredDurationMs,
+      stepOvershootMs: Math.max(0, stepMeasuredDurationMs - step.durationMs),
+      pauseRequestedAtIso: this.runtime.pauseIssuedAt == null
+        ? null : new Date(this.runtime.pauseIssuedAt).toISOString(),
+      pauseConfirmedAtIso: this.runtime.pauseConfirmedAt == null
+        ? null : new Date(this.runtime.pauseConfirmedAt).toISOString(),
+      pauseOvershootMs: this.runtime.pauseIssuedAt == null || this.runtime.pauseConfirmedAt == null
+        ? null
+        : Math.max(0, (this.runtime.pauseConfirmedAt - this.runtime.pauseIssuedAt) - TF012_AUTO_PAUSE_CONFIRM_TIMEOUT_MS),
+      tickStats,
+      timingIntegrity: this.stepTicks.integrity(),
       senderConfirmed: measuredAt != null,
       senderStateRequested: tf012AutoSenderStateLabel(tf012AutoExpectedSenderState(step)),
       sender,
@@ -1154,10 +1526,19 @@ export class Tf012AutoOrchestrator {
       };
     }
     if (step.mode === 'static') {
+      // r18: computed from the LOCAL optical indexes the camera accepted during the
+      // step, not asserted. (The r17 run could not have detected a wrong chunk here: the
+      // receiver exposed no indexes, so the check had nothing to read.)
+      const acceptedIndexes = this.staticScopeIndexes(receiver);
+      const offender = acceptedIndexes.find((index) => index !== 0);
       this.staticInvariants.push({
         id: `static_${step.id}_invariant`,
-        ok: true,
-        detail: `${step.id} observed chunk 0 only`,
+        ok: offender === undefined,
+        detail: offender !== undefined
+          ? `${step.id} accepted chunk ${offender} (accepted: ${acceptedIndexes.join(', ')})`
+          : (acceptedIndexes.length > 0
+            ? `${step.id} accepted chunk0 only (accepted: ${acceptedIndexes.join(', ')})`
+            : `${step.id} accepted no chunk`),
       });
     }
     // Append-only: a step result is frozen the moment it is produced and is never
@@ -1214,22 +1595,51 @@ export class Tf012AutoOrchestrator {
   }
 
   private finish(nowMs: number, status: Tf012AutoRunStatus): void {
-    this.finishedAt = nowMs;
+    this.finalize(nowMs, status);
+  }
+
+  /**
+   * Build and publish the final artefact.
+   *
+   * r18 rules encoded here:
+   *   - `finishedAtIso` is the LATEST instant the run saw (`max(abort, last tick)`), so it
+   *     can never precede `startedAtIso` — the r17 abort wrote a finish time in the past;
+   *   - every non-COMPLETE result carries an explicit `abort` record (source, reason,
+   *     detail, real instant, STOP sent, STOP confirmed by telemetry);
+   *   - run-level tick statistics and a timing-integrity verdict are always present.
+   */
+  private finalize(nowMs: number, status: Tf012AutoRunStatus): void {
+    const finishedAt = Math.max(nowMs, this.lastTickAt ?? 0, this.finishedAt, this.startedAt, this.requestedAt);
+    this.finishedAt = finishedAt;
     const validity = this.evaluateValidity();
     // The r14 rule: COMPLETE is only permitted when every validity check passed. A run
     // that cannot prove it was controlled is HARNESS_INVALID, never a silent success.
     const finalStatus: Tf012AutoRunStatus = status === 'COMPLETE' && !validity.valid
       ? 'HARNESS_INVALID'
       : status;
+    const abortInfo: Tf012AutoAbortInfo | null = finalStatus === 'COMPLETE'
+      ? null
+      : (this.pendingAbort ?? {
+        source: abortSourceForStatus(finalStatus),
+        reason: finalStatus,
+        detail: this.abortDetail || 'run did not complete',
+        abortedAtIso: new Date(finishedAt).toISOString(),
+        stopSentAtIso: this.stopSentAt == null ? null : new Date(this.stopSentAt).toISOString(),
+        stopTelemetryConfirmed: this.stopConfirmedAt != null,
+        stopTelemetryObservedAtIso: this.stopConfirmedAt == null ? null : new Date(this.stopConfirmedAt).toISOString(),
+      });
     const result: Tf012AutoRunResult = {
       runId: this.runId,
       buildId: this.buildId,
       planVersion: this.planVersion,
       device: this.device,
       startedAtIso: new Date(this.startedAt || this.requestedAt).toISOString(),
-      finishedAtIso: new Date(nowMs).toISOString(),
+      finishedAtIso: new Date(finishedAt).toISOString(),
       status: finalStatus,
       validity,
+      abort: abortInfo,
+      scheduler: this.runTicks.stats(),
+      timingIntegrity: this.runTicks.integrity(),
       timeline: {
         requestedAtIso: new Date(this.requestedAt).toISOString(),
         senderHelloAtIso: this.senderHelloAt == null ? null : new Date(this.senderHelloAt).toISOString(),
@@ -1255,7 +1665,7 @@ export class Tf012AutoOrchestrator {
         : {reason: `${finalStatus}: ${this.abortDetail || 'run did not complete'}`.slice(0, 180)}),
     }));
     this.ports.onRunResult(result);
-    this.emitProgress(nowMs);
+    this.emitProgress(finishedAt);
   }
 
   private emitProgress(nowMs: number): void {
@@ -1280,12 +1690,17 @@ export class Tf012AutoOrchestrator {
         ? Math.max(0, (step.runMs ?? 0) + (step.pauseMs ?? 0) - elapsed)
         : Math.max(0, step.durationMs - elapsed))
       : 0;
+    const stepTickStats = this.stepTicks.stats();
     this.ports.onProgress({
       phase: this.phase === 'IDLE' ? 'WAITING_FOR_SENDER'
-        : this.phase === 'RUNNING' ? 'STEP' : this.phase,
+        : this.phase === 'RUNNING' ? 'STEP'
+          : this.phase === 'ABORTED_OBSERVING' ? 'ABORTED' : this.phase,
       // The run outcome, never a connection state: a later socket update cannot
-      // overwrite COMPLETE / ABORTED / SETUP_NOT_READY on either UI.
+      // overwrite COMPLETE / ABORTED / SETUP_NOT_READY on either UI. During the abort
+      // observation the pending status is already shown, so the UI never flips back to
+      // "RUNNING" while the machine finishes the STOP handshake.
       status: this.runResult?.status
+        ?? this.pendingAbortStatus
         ?? (this.phase === 'WAITING_FOR_SENDER' ? 'WAITING_FOR_SENDER' : 'RUNNING'),
       stepId: step ? step.id : null,
       label: step ? tf012AutoStepLabel(step)
@@ -1302,6 +1717,10 @@ export class Tf012AutoOrchestrator {
       cameraDetail: this.cameraDetailText(),
       setupConfirmed: this.setupConfirmedAt != null,
       setupWindowOpen: this.phase === 'SETUP',
+      tickCount: stepTickStats.tickCount,
+      largestTickGapMs: stepTickStats.largestTickGapMs,
+      timingIntegrityValid: this.stepTicks.integrity().valid,
+      abortSource: this.pendingAbort ? this.pendingAbort.source : (this.runResult?.abort?.source ?? null),
       requested: expected ? tf012AutoSenderStateLabel(expected) : '—',
       senderConfirmed,
       senderMismatch: expected && !senderConfirmed

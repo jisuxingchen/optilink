@@ -383,6 +383,131 @@ Every field is `null` when its denominator is 0. A run with no decode attempts h
 `null` (0/0 is undefined), **not** 0 %. These metrics are diagnostic: they rank
 PASSing points and **never decide PASS**.
 
+## r18 EVIDENCE INTEGRITY / 证据完整性
+
+**Physical evidence (r17 build).** The SETUP pre-flight worked exactly as designed — camera
+ready at +1.47 s, static chunk 0 proven by telemetry at +0.885 s after the command, a
+5.14 s independent window, gate **READY** (180 frames, 132 decodes, 0 locate failures,
+3.23 px/cell). Three **evidence-quality** defects were exposed by the same run:
+
+| Defect | Physical symptom |
+| --- | --- |
+| optical chunk identity blind | `decodedChunkIndexes: []` in SETUP, A1, A2 and A3 — even with `uniqueReceived = 4`. A3 reported 246 successful decodes and a unique delta of 1, and nothing could say WHICH chunk those decodes were. |
+| abort semantics | `status: ABORTED` with `startedAtIso 14:12:01.236Z` and `finishedAtIso 14:11:59.772Z` — the finish time preceded the start, and the reason existed only in the phone's log. |
+| scheduler stall | A1 +2.6 s, A2 +1.1 s, **A3 +30.5 s** over plan, with a **19.3 s** command→confirmation wait against a configured 5 s deadline. Every deadline is evaluated on a tick, so a stalled loop silently stretches every "bounded" wait. |
+
+**1 — Optical chunk identity (`single-baseline.ts`).**
+
+* `receivedIndices(): number[]` — sorted unique chunk indexes actually ACCEPTED into the
+  local store. This is the optical truth about what the receiver holds.
+* `decodedChunkCounts(): Record<string, number>` — every frame that decoded AND whose chunk
+  metadata parsed, counted **per occurrence** (duplicates and foreign-transfer decodes
+  included). `receivedUniqueCount` alone cannot separate "the carrier is stuck on one
+  image" from "the receiver keeps resolving one image"; this histogram can.
+
+Both come from the LOCAL receiver. Neither is inferred from sender telemetry, and neither
+crosses the network: the network can say what the sender *intended* to show, never what the
+camera actually decoded.
+
+They now feed the frozen JSON (`decodedChunkIndexes`,
+`acceptedDecodeCountByChunkIndex` — per-step **deltas** over the measurement window and over
+the whole step), the static-step invariant, and the A4 before/during intervals.
+
+**2 — The static invariant is armed.** A static step must accept **only chunk 0**. The check
+reads two local signals gained since the step began: the accepted index set and the decode
+histogram (so a carrier that keeps showing chunk 3 is caught even though nothing new is
+stored). It fails fast, with the offender named:
+
+```
+SETUP is STATIC chunk0 but chunk 3 was decoded (14 frames)
+A1    is STATIC chunk0 but chunk 3 was accepted
+```
+
+`static_setup_invariant` / `static_A1_invariant` / `static_A5_invariant` are now
+**computed** and carry the accepted indexes (`accepted: 0`), instead of being asserted.
+
+**3 — Abort semantics.** Every non-COMPLETE result carries an explicit record:
+
+```jsonc
+"abort": {
+  "source": "PO_STOP",              // PO_STOP | HARNESS | CAMERA | SENDER | CONTROL
+  "reason": "STOPPED_BY_PO",
+  "detail": "STOPPED_BY_PO",
+  "abortedAtIso": "…",              // the REAL instant, supplied by the host clock
+  "stopSentAtIso": "…",
+  "stopTelemetryConfirmed": true,
+  "stopTelemetryObservedAtIso": "…"
+}
+```
+
+A PO Stop sends `STOP` and then keeps observing telemetry for up to 3 s
+(`TF012_AUTO_ABORT_STOP_TIMEOUT_MS`) so the artefact can state whether the carrier actually
+stopped. `finishedAtIso` is now `max(abort, last tick, startedAt)` and can never precede
+`startedAtIso`. Machine failures name their own source: `CAMERA_NOT_READY → CAMERA`,
+`SENDER_STATE_NOT_CONFIRMED → SENDER`, everything else → `HARNESS`.
+
+**4 — Scheduler instrumentation.** For the run and for every step:
+
+```
+tickCount · tickIntervalAvgMs · tickIntervalP50Ms · tickIntervalP95Ms · tickIntervalMaxMs
+largestTickGapMs · largestTickGapStartedAtIso · largestTickGapEndedAtIso
+```
+
+and per step additionally:
+
+```
+confirmationRequestedAtIso · confirmationObservedAtIso · confirmationDeadlineMs · confirmationOvershootMs
+stepStartedAtIso · stepPlannedDurationMs · stepMeasuredDurationMs · stepOvershootMs
+pauseRequestedAtIso · pauseConfirmedAtIso · pauseOvershootMs
+```
+
+**5 — The stall rule.** A step whose largest tick gap exceeds
+`TF012_AUTO_TIMING_STALL_THRESHOLD_MS = 1500` is marked:
+
+```jsonc
+"timingIntegrity": { "valid": false, "reason": "ORCHESTRATOR_STALL", "thresholdMs": 1500,
+                     "largestTickGapMs": 19300, "largestTickGapStartedAtIso": "…", "largestTickGapEndedAtIso": "…" }
+```
+
+**Why 1500 ms.** The phone schedules `tick()` every **250 ms**. Normal jitter is bounded by
+one frame of camera processing (20–100 ms measured physically), so two cadences (500 ms) is
+unremarkable; 1500 ms is **six cadences** and no plausible jitter or single-frame delay
+explains it. It is exactly the signature of the r17 stalls (19.3 s and 30.5 s). A
+timing-invalid step is **not rankable** on the physical speed ladder — the run-level verdict
+is reported the same way, and the phone shows `timing STALLED (not rankable)`.
+
+Loosening a deadline is deliberately NOT the fix: the timeout is honest, the stall is what
+must be visible.
+
+**6 — Setup FPS consistency.** The gate is now evaluated on a window-consistent sample:
+`callbackFps`/`processingFps` are derived from the window's own frame counts
+(r17 shipped the phone's 500 ms UI value, 55.56, next to a 180/5.14 s window = 35.0).
+
+**7 — One aliasing hazard fixed while instrumenting.** The per-chunk histogram is an OBJECT,
+so a shallow snapshot copy aliases it and every interval delta collapses to `{}` (the same
+class of defect as the r13 shallow-freeze note). The orchestrator now deep-copies every
+receiver snapshot it keeps, so a host that returns one mutable object cannot corrupt
+evidence.
+
+**Not changed.** OptiGrid, locator, decoder, CRC, matrix size, chunk size, rendering, the
+r15b presence model, the four message classes and their validators, A1–A5 scientific intent,
+and the network rule (`networkPayloadPath` stays `NONE`). The physical result
+(≈310 px code width, ≈3.23 px/cell, reserved ≈0.95–0.97, contrast ≈176–180, 0 locate
+failures) is treated as proof that the OPTICS are fine, which is precisely why the
+per-frame decode-rate differences are an evidence question, not a decoder-tuning one.
+
+**Per-chunk diagnostics for the next run** (the A3 anomaly): `acceptedDecodeCountByChunkIndex`
+answers which chunk indexes were accepted optically, how many decodes each got, whether the
+receiver kept decoding one chunk, and — combined with the sender's frozen cursor — whether
+the carrier moved while the physical decode stayed on an old image.
+
+**Verification.** `tf012-auto-timing.test.ts` (14 cases: sorted unique indexes, the
+histogram with duplicates and foreign decodes, non-empty identities in frozen steps, the
+armed static invariants, real abort instant/source/reason, `finishedAt >= startedAt` for five
+different endings, tick statistics, a synthetic 12 s stall detected in run and step,
+confirmation and step overshoots, interval-derived setup FPS, and no new network path) plus
+the existing r14/r17 suites — 264 Node cases in total.
+
 ## r17 AUTO-TEST PRE-FLIGHT / 自动测试起飞前检查
 
 **Physical evidence (r16 build, after the r15b relay fix).** The control plane finally

@@ -21,6 +21,7 @@ import {
 import {
   createTf012AutoOrchestrator,
   emptyReceiverSample,
+  type Tf012AutoAbortSource,
   type Tf012AutoCameraStatus,
   type Tf012AutoProgress,
   type Tf012AutoReceiverSample,
@@ -91,6 +92,20 @@ export interface FakePeerOptions {
    * cycling, so the run can only confirm "static chunk 0" after SET_MODE actually lands.
    */
   initialMode?: 'static' | 'cyclic';
+  /** r18: call `orchestrator.abort()` on this tick (PO pressing Stop). */
+  abortAtTick?: number;
+  abortReason?: string;
+  abortSource?: Tf012AutoAbortSource;
+  /**
+   * r18: inject a SYNTHETIC scheduler stall of this many ms. The clock jumps but the
+   * machine is not ticked, which is exactly what a blocked event loop looks like from the
+   * orchestrator's side (the r17 physical run stalled for 19 s and 30 s).
+   */
+  stallMs?: number;
+  /** Injected only on ticks whose LAST progress entry satisfies this predicate. */
+  stallOn?: (progress: Tf012AutoProgress) => boolean;
+  /** How many stalls may be injected (default 1). */
+  stallTimes?: number;
 }
 
 /** One metric reset, recorded so tests can prove WHEN it happened. */
@@ -125,8 +140,10 @@ export interface FakePeer {
   /** Command actions in emission order. */
   actions: () => string[];
   /** r17: every metric reset, with the tick it happened on. */
-  resets: FakePeerReset[];
-  /** r17: the tick index of the first command with this action, or -1. */
+  resets: FakePeerReset[];  /** r18: the tick the abort was requested on, or null. */
+  abortTick: () => number | null;
+  /** r18: synthetic stalls injected, in order. */
+  stalls: Array<{tickIndex: number; ms: number}>;  /** r17: the tick index of the first command with this action, or -1. */
   tickOfAction: (action: string) => number;
   /** r17: live camera state the orchestrator reads. */
   cameraStatus: () => Tf012AutoCameraStatus;
@@ -169,6 +186,8 @@ export function createFakePeer(options: FakePeerOptions = {}): FakePeer {
   // The camera is a SEPARATE source from the optical link: it delivers frames on its own
   // schedule, and only frames that reach the baseline pipeline count as acquisition.
   const resets: FakePeerReset[] = [];
+  /** r18: every injected synthetic stall, for assertions. */
+  const stalls: Array<{tickIndex: number; ms: number}> = [];
   let cameraSeq = 0;
   let cameraPipelineSeq = 0;
   let cameraLastFrameAt: number | null = null;
@@ -192,8 +211,18 @@ export function createFakePeer(options: FakePeerOptions = {}): FakePeer {
   const addIndex = (index: number): void => {
     if (!receiver.decodedChunkIndexes.includes(index)) {
       receiver.decodedChunkIndexes.push(index);
+      receiver.decodedChunkIndexes.sort((a, b) => a - b);
       receiver.uniqueReceived = receiver.decodedChunkIndexes.length;
     }
+  };
+
+  /**
+   * r18: one accepted optical decode, mirrored into BOTH local signals the orchestrator
+   * reads — the accepted index set and the per-index histogram (duplicates included).
+   */
+  const noteDecode = (index: number): void => {
+    receiver.acceptedDecodeCountByChunkIndex[String(index)] =
+      (receiver.acceptedDecodeCountByChunkIndex[String(index)] ?? 0) + 1;
   };
 
   /** The r13 artefact: a UI-window FPS that must never reach a frozen result. */
@@ -210,6 +239,7 @@ export function createFakePeer(options: FakePeerOptions = {}): FakePeer {
     if (sender.paused) {
       // A frozen carrier still decodes: that is the whole point of A4.
       receiver.successfulDecodes += 10;
+      noteDecode(sender.cursor ?? 0);
       addIndex(sender.cursor ?? 0);
       return;
     }
@@ -228,9 +258,11 @@ export function createFakePeer(options: FakePeerOptions = {}): FakePeer {
         return;
       }
       receiver.successfulDecodes += 14;
-      if (behaviour === 'chunk0') addIndex(0);
-      else if (behaviour === 'many') { addIndex(0); addIndex(1); addIndex(2); }
-      else addIndex(3);
+      const accepted = behaviour === 'chunk0' ? [0] : behaviour === 'many' ? [0, 1, 2] : [3];
+      for (const index of accepted) {
+        noteDecode(index);
+        addIndex(index);
+      }
       return;
     }
     receiver.successfulDecodes += 13;
@@ -239,6 +271,7 @@ export function createFakePeer(options: FakePeerOptions = {}): FakePeer {
     receiver.pixelsPerCellY = 2.65;
     receiver.reservedPatternScore = 0.999;
     receiver.contrast = 178;
+    noteDecode(cyclicCursor % 16);
     addIndex(cyclicCursor % 16);
     cyclicCursor += 1;
   };
@@ -308,7 +341,14 @@ export function createFakePeer(options: FakePeerOptions = {}): FakePeer {
           sender.cursor = ((sender.cursor ?? 0) + 1) % 16;
         }        return {...sender};
       },
-      receiverSample: () => ({...receiver, decodedChunkIndexes: [...receiver.decodedChunkIndexes]}),
+      receiverSample: () => ({
+        ...receiver,
+        decodedChunkIndexes: [...receiver.decodedChunkIndexes],
+        // r18: the histogram is an OBJECT — a shallow copy would alias it and every
+        // interval delta would silently collapse to {}. The port contract is a fresh
+        // snapshot, so the fake obeys it exactly like the phone does.
+        acceptedDecodeCountByChunkIndex: {...receiver.acceptedDecodeCountByChunkIndex},
+      }),
       resetReceiverMetrics: () => {
         const fresh = emptyReceiverSample();
         Object.assign(receiver, fresh);
@@ -334,10 +374,28 @@ export function createFakePeer(options: FakePeerOptions = {}): FakePeer {
     },
   });
 
+  /** r18: the tick the abort was requested on, for PO_STOP tests. */
+  let abortTick: number | null = null;
+  let stallsLeft = options.stallTimes ?? 1;
+
   const tick = (times = 1): void => {
     for (let index = 0; index < times; index += 1) {
       now += tickMs;
       tickIndex += 1;
+      if (options.stallMs !== undefined && stallsLeft > 0 && options.stallOn) {
+        const last = progress.at(-1);
+        if (last && options.stallOn(last)) {
+          stallsLeft -= 1;
+          now += options.stallMs;
+          stalls.push({tickIndex, ms: options.stallMs});
+        }
+      }
+      if (options.abortAtTick === tickIndex) {
+        abortTick = tickIndex;
+        orchestrator.abort(options.abortReason ?? 'STOPPED_BY_PO', {
+          source: options.abortSource ?? 'PO_STOP', nowMs: now,
+        });
+      }
       if (options.telemetry !== false
         && (options.staleAfterTick === undefined || tickIndex <= options.staleAfterTick)) {
         telemetryAt = options.telemetryAgeMs === undefined ? now : now - options.telemetryAgeMs;
@@ -378,6 +436,8 @@ export function createFakePeer(options: FakePeerOptions = {}): FakePeer {
     },
     actions: () => commands.map((message) => String(message.action)),
     resets,
+    abortTick: () => abortTick,
+    stalls,
     tickOfAction: (action) => {
       const index = commands.findIndex((message) => String(message.action) === action);
       return index < 0 ? -1 : commandTicks[index] ?? -1;

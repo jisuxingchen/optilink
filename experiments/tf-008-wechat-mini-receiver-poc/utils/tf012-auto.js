@@ -347,10 +347,22 @@ function createAutoTestRunner(options) {
       }, 250);
       return true;
     },
-    abort: (reason) => {
-      if (orchestrator) orchestrator.abort(reason || 'ABORTED_BY_PO');
-      if (timer) clearInterval(timer);
-      timer = null;
+    abort: (reason, options) => {
+      // r18: the host supplies the REAL instant and the source; without them the machine
+      // has no clock of its own and r17 wrote a finish time in the past.
+      if (orchestrator) {
+        orchestrator.abort(reason || 'ABORTED_BY_PO', {
+          source: (options && options.source) || 'PO_STOP',
+          nowMs: (options && options.nowMs) || Date.now(),
+          detail: (options && options.detail) || reason || 'ABORTED_BY_PO',
+        });
+      }
+      // The tick loop keeps running until the machine publishes its final result, so the
+      // post-abort window can still observe whether the carrier actually stopped.
+      if (orchestrator && orchestrator.finalResult() && timer) {
+        clearInterval(timer);
+        timer = null;
+      }
     },
     isRunning: () => Boolean(orchestrator) && !orchestrator.finalResult(),
     stepResults: () => (orchestrator ? orchestrator.stepResults() : []),

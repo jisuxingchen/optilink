@@ -378,6 +378,13 @@ Page({
     autoFinalJson: '',
     autoSetupLabel: '—',
     autoSetupReasons: '—',
+    autoSetupWindowSpan: '—',
+    autoSetupWindowCounters: '—',
+    autoSetupWindowOptics: '—',
+    autoTickStats: '—',
+    autoAbortSource: '—',
+    autoAbortSummary: '—',
+    autoRunTiming: '—',
     // r17 PRE-FLIGHT: the five prerequisites (camera, control, peer, telemetry, sender)
     // must all read READY before SETUP measuring starts; the window rows below always
     // label the time span they belong to.
@@ -1196,9 +1203,16 @@ Page({
       crcFailures: metrics ? metrics.crcFailures : 0,
       locateFailures: metrics ? metrics.locateFailures : 0,
       uniqueReceived: receiver ? receiver.receivedUniqueCount : 0,
+      // r18: the OPTICAL chunk identities. r17 shipped `decodedChunkIndexes: []` forever
+      // because the receiver exposed no `receivedIndices()` — the static-step invariant
+      // and the unique-chunk anomaly were therefore blind. Both now come from the local
+      // receiver; nothing here is inferred from sender telemetry.
       decodedChunkIndexes: receiver && typeof receiver.receivedIndices === 'function'
         ? receiver.receivedIndices().slice(0, 64)
-        : []
+        : [],
+      acceptedDecodeCountByChunkIndex: receiver && typeof receiver.decodedChunkCounts === 'function'
+        ? receiver.decodedChunkCounts()
+        : {}
     };
   },
 
@@ -1283,8 +1297,7 @@ Page({
           holdMsDeclared: typeof holdMs === 'number' ? holdMs : this.data.holdMsDeclared
         });
       },
-      onProgress: (progress) => this.setData(this.autoProgressPatch(progress)),
-      onStepResult: (result) => this.onAutoStepResult(result),
+      onProgress: (progress) => this.setData(this.autoProgressPatch(progress)),      onStepResult: (result) => this.onAutoStepResult(result),
       onRunResult: (result) => this.onAutoRunResult(result),
       onUploadStatus: (status) => this.onAutoUploadStatus(status),
       onPeerChange: (peer) => this.setData({autoSenderPeerPresent: peer.senderPeerPresent
@@ -1304,8 +1317,10 @@ Page({
   },
 
   onAutoTestStop() {
-    if (this.autoRunner) this.autoRunner.abort('STOPPED_BY_PO');
-    this.setData({autoRunning: false, autoRunStatus: 'ABORTED / 已中止'});
+    // r18: the abort carries its real instant and its source, so the frozen JSON says
+    // "the PO stopped this" instead of leaving an analyst to infer it from timestamps.
+    if (this.autoRunner) this.autoRunner.abort('STOPPED_BY_PO', {source: 'PO_STOP', nowMs: Date.now()});
+    this.setData({autoRunning: false, autoRunStatus: 'ABORTED / 已中止 (PO STOP)'});
   },
 
   onAutoControlUrl(event) {
@@ -1374,6 +1389,12 @@ Page({
       autoPrereqTelemetry: prereqTelemetry,
       autoPrereqSender: prereqSender,
       autoCameraDetail: progress.cameraDetail,
+      // r18 timing visibility: the tick count, the largest gap and whether the step's
+      // wall-clock evidence is still trustworthy.
+      autoTickStats: 'ticks ' + progress.tickCount
+        + ' · max gap ' + (progress.largestTickGapMs == null ? '—' : progress.largestTickGapMs + ' ms')
+        + ' · timing ' + (progress.timingIntegrityValid ? 'OK' : 'STALLED (not rankable)'),
+      autoAbortSource: progress.abortSource ? 'Abort source: ' + progress.abortSource : '—',
       autoSetupConfirmed: progress.setupConfirmed ? 'YES / 已确认' : 'NO / 未确认',
       autoSetupCountdown: setupCountdown,
       autoSenderPeerPresent: progress.senderHello ? 'PEER FOUND / 已发现发送端' : 'NO PEER / 未发现发送端',
@@ -1448,6 +1469,19 @@ Page({
           + ' px/cell=' + setupWindow.pixelsPerCell
           + ' reserved=' + setupWindow.reservedPatternScore
           + ' contrast=' + setupWindow.contrast
+        : '—',
+      // r18: the abort record is explicit — source, reason and the real instant.
+      autoAbortSummary: result.abort
+        ? result.abort.source + ' · ' + result.abort.reason + ' · ' + result.abort.abortedAtIso
+          + ' · STOP sent ' + (result.abort.stopSentAtIso ? 'yes' : 'no')
+          + ' · STOP confirmed ' + (result.abort.stopTelemetryConfirmed ? 'yes' : 'no')
+        : 'none (run did not abort)',
+      // r18: run-level scheduler integrity.
+      autoRunTiming: result.scheduler
+        ? 'ticks ' + result.scheduler.tickCount
+          + ' · max gap ' + (result.scheduler.largestTickGapMs == null ? '—' : result.scheduler.largestTickGapMs + ' ms')
+          + ' · p95 ' + (result.scheduler.tickIntervalP95Ms == null ? '—' : Math.round(result.scheduler.tickIntervalP95Ms) + ' ms')
+          + ' · timing ' + (result.timingIntegrity && result.timingIntegrity.valid ? 'OK' : 'STALLED')
         : '—'
     });
     this.refreshAutoFinalJson();
