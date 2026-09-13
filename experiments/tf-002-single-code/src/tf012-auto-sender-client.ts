@@ -70,6 +70,10 @@ export interface Tf012AutoClientStatus {
   peerSeenAt: number | null;
   /** Messages received FROM the phone (control), for the panel's RX readout. */
   peerMessages: number;
+  /** Identity of the coordinator this client is attached to (reported by the relay). */
+  relayBuild: string | null;
+  /** Live registered peer-socket counts at the coordinator (diagnostic). */
+  peerCounts: {senderSockets: number; receiverSockets: number} | null;
   /** The state the phone last REQUESTED, as a phrase such as "CYCLIC 1000 ms". */
   requestedLabel: string;
   /** The sender's live state, same vocabulary. */
@@ -95,6 +99,7 @@ export function createTf012AutoSenderClient(options: Tf012AutoSenderClientOption
   const status: Tf012AutoClientStatus = {
     connected: false, url: options.url, runId: null, stepId: null, phase: 'IDLE',
     peerConnected: false, peerSeenAt: null, peerMessages: 0,
+    relayBuild: null, peerCounts: null,
     requestedLabel: '—', actualLabel: '—', requestedConfirmed: false, requestedMismatch: null,
     lastRejected: null, telemetrySent: 0, commandsApplied: 0,
   };
@@ -282,7 +287,18 @@ export function createTf012AutoSenderClient(options: Tf012AutoSenderClientOption
         }
         // Anything else that is not a control envelope is ignored, never "validated as
         // control" and never able to mutate state.
-        const envelope = parsed as {type?: unknown};
+        const envelope = parsed as {type?: unknown; event?: unknown; relay?: unknown; counts?: unknown};
+        // Coordinator diagnostics arrive on the SAME socket (no extra network path):
+        // identity on connect, live registry counts on every presence change.
+        if (envelope?.type === 'server') {
+          if (typeof envelope.relay === 'string') status.relayBuild = envelope.relay;
+          const counts = envelope.counts as {senderSockets?: unknown; receiverSockets?: unknown} | undefined;
+          if (counts && typeof counts.senderSockets === 'number' && typeof counts.receiverSockets === 'number') {
+            status.peerCounts = {senderSockets: counts.senderSockets, receiverSockets: counts.receiverSockets};
+          }
+          options.onStatus?.({...status});
+          return;
+        }
         if (envelope?.type !== 'command') return;
         apply(parsed);
       } catch {

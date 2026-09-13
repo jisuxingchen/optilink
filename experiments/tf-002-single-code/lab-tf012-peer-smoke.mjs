@@ -180,11 +180,116 @@ try {
 
   sender2.close();
   receiver2.close();
+  await sleep(200);
 
-  console.log('TF-012 r15 peer smoke PASS: canonical hello registers, legacy hello registers, '
-    + 'peer presence reaches BOTH ends in both connection orders, control relays only after '
-    + 'registration, unregistered clients are still refused, payload-shaped hellos are rejected, '
-    + 'and a departure notifies the survivor');
+  // -------------------------------------------------------------------------
+  // PHASE C — OVERLAPPING SOCKETS (browser reload / recompile).
+  //
+  // r15 tracked presence as a single role boolean, so when a stale socket closed after a
+  // newer one had registered, the ROLE was withdrawn while the newer socket was still
+  // alive: both ends then showed a live control channel with NO PEER. Presence is now
+  // keyed by socket, so only the LAST socket for a role may send a bye.
+  // -------------------------------------------------------------------------
+  const recvC = await openSocket();
+  const recvCSeen = [];
+  recvC.on('message', (raw) => { try { recvCSeen.push(JSON.parse(String(raw))); } catch {} });
+  recvC.send(JSON.stringify({type: 'hello', role: RECEIVER, buildId: 'smoke-C', runId: null, planVersion: null}));
+  await waitMessage(recvC, (m) => m?.type === 'server' && m?.event === 'registered', 'recvC registration');
+
+  const senderA = await openSocket();
+  senderA.send(JSON.stringify({type: 'hello', role: SENDER, buildId: 'smoke-A', runId: null, planVersion: null}));
+  await waitMessage(recvC, isPeer(SENDER), 'recvC <- peer hello sender A');
+  await waitMessage(senderA, (m) => m?.type === 'server' && m?.event === 'registered', 'senderA registration');
+
+  // A replacement socket registers while A is still open (the reload overlap).
+  const senderB = await openSocket();
+  const bSeesPhone = waitMessage(senderB, isPeer(RECEIVER), 'senderB <- peer hello receiver');
+  senderB.send(JSON.stringify({type: 'hello', role: SENDER, buildId: 'smoke-B', runId: null, planVersion: null}));
+  await bSeesPhone;   // case 8: the newcomer always learns the opposite presence
+
+  const byeCountBefore = recvCSeen.filter((m) => m?.type === 'peer' && m?.event === 'bye').length;
+  const staleClosed = new Promise((resolve) => senderA.once('close', resolve));
+  senderA.close();
+  await staleClosed;
+  await sleep(300);
+
+  const byesAfterStale = recvCSeen.filter((m) => m?.type === 'peer' && m?.event === 'bye' && m?.role === SENDER);
+  if (byesAfterStale.length !== byeCountBefore) {
+    throw new Error('closing a stale sender socket must NOT send a peer bye while another sender socket is alive');
+  }
+
+  // The surviving socket must still be able to relay: routing targets LIVE sockets.
+  const stillRelays = waitMessage(recvC, (m) => m?.type === 'command' && m?.action === 'TELEMETRY' && m?.stepId === 'C1',
+    'senderB -> recvC TELEMETRY after the stale socket closed');
+  senderB.send(JSON.stringify({
+    type: 'command', action: 'TELEMETRY', runId: 'smoke', stepId: 'C1', mode: 'cyclic',
+    holdMs: 1000, cursor: 5, paused: false, broadcasting: true,
+    canvasDevicePx: 1020, canvasHash: 'c0ffee00', pausedAt: null, resumedAt: null,
+  }));
+  await stillRelays;
+
+  // The LAST sender socket closing is the only thing that may emit a bye — exactly one.
+  const lastBye = waitMessage(recvC, (m) => m?.type === 'peer' && m?.event === 'bye' && m?.role === SENDER,
+    'recvC <- single bye after the last sender socket');
+  senderB.close();
+  await lastBye;
+  await sleep(300);
+  const byeTotal = recvCSeen.filter((m) => m?.type === 'peer' && m?.event === 'bye' && m?.role === SENDER).length;
+  if (byeTotal !== 1) throw new Error(`expected exactly one sender bye, got ${byeTotal}`);
+  recvC.close();
+
+  // -------------------------------------------------------------------------
+  // PHASE D — the same overlap for the receiver role (Mini Program recompile).
+  // -------------------------------------------------------------------------
+  const senderD = await openSocket();
+  const senderDSeen = [];
+  senderD.on('message', (raw) => { try { senderDSeen.push(JSON.parse(String(raw))); } catch {} });
+  senderD.send(JSON.stringify({type: 'hello', role: SENDER, buildId: 'smoke-D', runId: null, planVersion: null}));
+  await waitMessage(senderD, (m) => m?.type === 'server' && m?.event === 'registered', 'senderD registration');
+
+  const receiverA = await openSocket();
+  receiverA.send(JSON.stringify({type: 'hello', role: RECEIVER, buildId: 'smoke-DA', runId: null, planVersion: null}));
+  await waitMessage(senderD, isPeer(RECEIVER), 'senderD <- peer hello receiver A');
+
+  const receiverB = await openSocket();
+  const b2SeesSender = waitMessage(receiverB, isPeer(SENDER), 'receiverB <- peer hello sender');
+  receiverB.send(JSON.stringify({type: 'hello', role: RECEIVER, buildId: 'smoke-DB', runId: null, planVersion: null}));
+  await b2SeesSender;
+
+  const receiverAClosed = new Promise((resolve) => receiverA.once('close', resolve));
+  receiverA.close();
+  await receiverAClosed;
+  await sleep(300);
+  const receiverByesAfterStale = senderDSeen.filter((m) => m?.type === 'peer' && m?.event === 'bye' && m?.role === RECEIVER);
+  if (receiverByesAfterStale.length !== 0) {
+    throw new Error('closing a stale receiver socket must NOT send a receiver bye while another receiver socket is alive');
+  }
+
+  const lastReceiverBye = waitMessage(senderD, (m) => m?.type === 'peer' && m?.event === 'bye' && m?.role === RECEIVER,
+    'senderD <- single receiver bye');
+  receiverB.close();
+  await lastReceiverBye;
+
+  // -------------------------------------------------------------------------
+  // PHASE E — the coordinator's diagnostics are readable (self-diagnosing runs).
+  // -------------------------------------------------------------------------
+  const healthAfter = await (await fetch(`http://127.0.0.1:${port}/api/lab/health`)).json();
+  if (typeof healthAfter.relay !== 'string' || !healthAfter.relay.includes('r15b')) {
+    throw new Error(`health must identify the relay build, got ${JSON.stringify(healthAfter.relay)}`);
+  }
+  if (!healthAfter.peerRegistry || typeof healthAfter.peerRegistry.senderSockets !== 'number') {
+    throw new Error('health must expose the peer-registry socket counts');
+  }
+  if (healthAfter.peerRegistry.senderSockets !== 1 || healthAfter.peerRegistry.receiverSockets !== 0) {
+    throw new Error(`unexpected live counts: ${JSON.stringify(healthAfter.peerRegistry)}`);
+  }
+
+  senderD.close();
+
+  console.log('TF-012 r15 peer smoke PASS: canonical + legacy hello register, peer presence reaches BOTH ends in both '
+    + 'connection orders, overlapping sockets survive a stale close (no bye until the LAST socket of a role), the '
+    + 'newcomer always receives the opposite-role snapshot, routing targets live sockets only, unregistered clients '
+    + 'are refused, payload-shaped hellos are refused, and /api/lab/health reports the relay build + socket counts');
 } finally {
   child.kill('SIGTERM');
 }

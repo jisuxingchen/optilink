@@ -455,6 +455,48 @@ the **real** `lab-server.mjs` and proves registration, both-order discovery, rel
 control/telemetry, the `unknown role` refusal, the payload-hello refusal and the `bye`
 notice.
 
+### r15b — presence is keyed by SOCKET, not by role
+
+The first r15 registry tracked presence as a single role boolean. That is unsafe whenever a
+socket is replaced before its close event fires — browser reload, duplicated tab, Mini
+Program recompile/reopen, flaky mobile link. The stale sequence:
+
+```
+1. sender socket A registers
+2. sender socket B registers (stale A still open)
+3. the registry sees the role already present -> B is not "news"
+4. A finally closes
+5. close removed the ROLE
+6. B is alive and registered, but the registry says sender is absent
+7. phone and PC both show a live control channel with NO PEER
+```
+
+Presence is now derived from live sockets:
+
+```
+rolePresent(role) = count(live registered sockets for role) > 0
+```
+
+* HELLO registers **this socket**; a hello for a role that already has a live socket still
+  answers the newcomer with the opposite role's current presence.
+* A `peer hello` notice is broadcast only on a `0 -> 1` transition.
+* CLOSE unregisters **this socket**; a `peer bye` is emitted only on a `1 -> 0` transition,
+  so closing one of several sockets never withdraws presence.
+* A socket that changes role stops counting for the old one.
+
+**Diagnostics** (console + panel + health), so the next run is self-diagnosing:
+
+* relay startup banner prints `Relay build: tf-012-r15b socket-keyed-presence` and the
+  registry counts;
+* every registration logs
+  `TF012 peer registry: register s3 role=tf012-auto-sender clientBuild=tf012-r16-0fd881d (role became present) -> senderSockets=1 receiverSockets=1`
+  — the client's declared build id is logged, so a stale phone/page build is visible;
+* every close logs socket id, role, whether the role became absent (bye) or not;
+* `/api/lab/health` reports `relay` plus `peerRegistry: {senderSockets, receiverSockets}`;
+* the PC sidebar shows `Relay <build> · senderSockets=N receiverSockets=N`, delivered over
+  the **existing** lab socket — the baseline pages still add no network path (`fetch`/XHR
+  remain forbidden and asserted).
+
 ## r14 CONTROL-PLANE CORRECTNESS / 控制面正确性
 
 **Why r14 exists.** The first one-tap physical run produced a `COMPLETE` JSON for an

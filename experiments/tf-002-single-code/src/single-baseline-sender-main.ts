@@ -621,6 +621,7 @@ const autoModeCell = document.getElementById('autoMode');
 const autoCursorCell = document.getElementById('autoCursor');
 const autoPausedCell = document.getElementById('autoPaused');
 const autoPeerCell = document.getElementById('autoPeer');
+const autoRelayCell = document.getElementById('autoRelay');
 const autoRequestedCell = document.getElementById('autoRequested');
 const autoActualCell = document.getElementById('autoActual');
 const autoConfirmedCell = document.getElementById('autoConfirmed');
@@ -736,6 +737,17 @@ function renderAutoPanel(): void {
     autoTelemetryCell.textContent = client
       ? `TX ${AUTO_TELEMETRY_INTERVAL_MS} ms · sent ${client.telemetrySent} · RX ${client.peerMessages} cmd`
       : 'not running / 未运行';
+  }
+  if (autoRelayCell) {
+    // Which coordinator am I actually on, and how many registered peer sockets does it
+    // hold? Reported by the coordinator over the EXISTING lab socket — the baseline pages
+    // must not add any new network path (fetch/XHR), which the acceptance tests enforce.
+    autoRelayCell.textContent = !client
+      ? 'no control channel'
+      : `${client.relayBuild ?? 'unknown relay'}`
+        + (client.peerCounts
+          ? ` · senderSockets=${client.peerCounts.senderSockets} receiverSockets=${client.peerCounts.receiverSockets}`
+          : ' · no registry report yet');
   }
 }
 
