@@ -31,6 +31,7 @@
     </view>
     <view class="abmain">
       <view class="abstart" bindtap="onAutoTest">Start Auto Test / 开始自动测试</view>
+      <view class="abprobe" bindtap="onAutoProbe">Static Probe 10s / 静态诊断微测</view>
       <view class="abstop" bindtap="onAutoTestStop">Stop / 停止</view>
     </view>
     <view class="abrow"><text class="abk">AUTO TEST</text><text class="abv">{{autoStepLabel}}</text></view>
@@ -85,6 +86,12 @@
     <!-- r18: why the run ended, by whom, and whether the tick loop stayed healthy. -->
     <view class="abrow"><text class="abk">abort record</text><text class="abv">{{autoAbortSummary}}</text></view>
     <view class="abrow"><text class="abk">run timing</text><text class="abv">{{autoRunTiming}}</text></view>
+    <!-- r19 EVIDENCE: camera timing, decoder-stage failure fingerprints, sampling geometry.
+         All three are measured on THIS phone from the local camera frames — never from the
+         sender over the network. -->
+    <view class="abrow"><text class="abk">camera timing (last step)</text><text class="abv">{{autoStepCameraTiming}}</text></view>
+    <view class="abrow"><text class="abk">CRC failures (last step)</text><text class="abv">{{autoStepCrcFailure}}</text></view>
+    <view class="abrow"><text class="abk">sampling geometry (last step)</text><text class="abv">{{autoStepGeometry}}</text></view>
     <view class="abrow"><text class="abk">harness valid</text><text class="abv">{{autoHarnessValid}}</text></view>
     <view class="abrow"><text class="abk">validity notes</text><text class="abv">{{autoValidityFailed}}</text></view>
     <view class="abrow"><text class="abk">result upload</text><text class="abv">{{autoResultUpload}}</text></view>

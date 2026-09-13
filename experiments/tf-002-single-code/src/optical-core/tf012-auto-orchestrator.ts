@@ -27,6 +27,134 @@ import {
   type Tf012AutoStep,
 } from './tf012-auto-plan.ts';
 
+/** r19: local analysis of the frames the decoder rejected. */
+export interface Tf012AutoCrcDiagnostics {
+  failedFrames: number;
+  analysedFrames: number;
+  distinctFingerprints: number;
+  topFingerprint: string | null;
+  topFingerprintCount: number;
+  fingerprintHistogram: Record<string, number>;
+  stableBitCount: number | null;
+  analysedBitCount: number | null;
+  meanBitFlipVsPrevious: number | null;
+  headerInvalidFrames: number;
+  crcMismatchFrames: number;
+}
+
+export function emptyCrcDiagnostics(): Tf012AutoCrcDiagnostics {
+  return {
+    failedFrames: 0, analysedFrames: 0, distinctFingerprints: 0,
+    topFingerprint: null, topFingerprintCount: 0, fingerprintHistogram: {},
+    stableBitCount: null, analysedBitCount: null, meanBitFlipVsPrevious: null,
+    headerInvalidFrames: 0, crcMismatchFrames: 0,
+  };
+}
+
+/** r19: the sampling geometry one frame was decoded with. */
+export interface Tf012AutoGeometrySample {
+  boundingBox: {x: number; y: number; width: number; height: number};
+  pixelsPerCell: number;
+  phaseX: number;
+  phaseY: number;
+  rotation: number;
+  refinementScore: number;
+  reservedPatternScore: number;
+  contrast: number;
+  threshold: number;
+  candidates: number;
+  seeds: number;
+  refined: number;
+  bestSeedScore: number;
+  secondSeedScore: number;
+  selectedCandidate: number;
+  stage: string;
+  stageReason: string;
+}
+
+export interface Tf012AutoGeometryDiagnostics {
+  failure: Tf012AutoGeometrySample | null;
+  success: Tf012AutoGeometrySample | null;
+}
+
+/**
+ * r19: camera callback + processing timing, measured by the HOST.
+ *
+ * Cumulative since the host's last metric reset (which the orchestrator triggers at every
+ * step boundary), so the frozen snapshot is exact for that step and the deltas are real
+ * interval quantities. This is the runtime evidence for "is frame processing starving the
+ * orchestrator?" — exposure is NEVER inferred from it.
+ */
+export interface Tf012AutoCameraTiming {
+  callbackCount: number;
+  callbackIntervalAvgMs: number | null;
+  callbackIntervalP50Ms: number | null;
+  callbackIntervalP95Ms: number | null;
+  callbackIntervalMaxMs: number | null;
+  processCount: number;
+  processSumMs: number;
+  processDurationAvgMs: number | null;
+  processDurationP50Ms: number | null;
+  processDurationP95Ms: number | null;
+  processDurationMaxMs: number | null;
+}
+
+export function emptyCameraTiming(): Tf012AutoCameraTiming {
+  return {
+    callbackCount: 0,
+    callbackIntervalAvgMs: null, callbackIntervalP50Ms: null, callbackIntervalP95Ms: null,
+    callbackIntervalMaxMs: null,
+    processCount: 0, processSumMs: 0,
+    processDurationAvgMs: null, processDurationP50Ms: null, processDurationP95Ms: null,
+    processDurationMaxMs: null,
+  };
+}
+
+/** The camera-timing evidence for one interval: exact deltas + end-of-window percentiles. */
+export interface Tf012AutoCameraTimingDelta {
+  durationMs: number;
+  callbackCount: number;
+  callbackIntervalAvgMs: number | null;
+  callbackIntervalP50Ms: number | null;
+  callbackIntervalP95Ms: number | null;
+  callbackIntervalMaxMs: number | null;
+  processCount: number;
+  processSumMs: number;
+  processDurationAvgMs: number | null;
+  processDurationP50Ms: number | null;
+  processDurationP95Ms: number | null;
+  processDurationMaxMs: number | null;
+  /** Fraction of the interval the JS thread spent inside frame processing (0..1). */
+  processingDutyRatio: number | null;
+}
+
+export function tf012AutoCameraTimingDelta(
+  start: Tf012AutoCameraTiming,
+  end: Tf012AutoCameraTiming,
+  durationMs: number,
+): Tf012AutoCameraTimingDelta {
+  const callbackCount = Math.max(0, end.callbackCount - start.callbackCount);
+  const processCount = Math.max(0, end.processCount - start.processCount);
+  const processSumMs = Math.max(0, end.processSumMs - start.processSumMs);
+  return {
+    durationMs,
+    callbackCount,
+    callbackIntervalAvgMs: callbackCount > 0 ? durationMs / callbackCount : null,
+    // Percentiles are end-of-window values from the host's bounded sample ring: exact for
+    // the trailing window, labelled as such rather than pretending to be interval quantiles.
+    callbackIntervalP50Ms: end.callbackIntervalP50Ms,
+    callbackIntervalP95Ms: end.callbackIntervalP95Ms,
+    callbackIntervalMaxMs: end.callbackIntervalMaxMs,
+    processCount,
+    processSumMs,
+    processDurationAvgMs: processCount > 0 ? processSumMs / processCount : null,
+    processDurationP50Ms: end.processDurationP50Ms,
+    processDurationP95Ms: end.processDurationP95Ms,
+    processDurationMaxMs: end.processDurationMaxMs,
+    processingDutyRatio: durationMs > 0 ? processSumMs / durationMs : null,
+  };
+}
+
 /** Live optical-receiver evidence for one instant. Every field is locally measured. */
 export interface Tf012AutoReceiverSample {
   observedCodeWidthPx: number | null;
@@ -54,6 +182,12 @@ export interface Tf012AutoReceiverSample {
    * intended to show, this says what the camera actually resolved.
    */
   acceptedDecodeCountByChunkIndex: Record<string, number>;
+  /** r19: local analysis of the rejected frames (fingerprints, stable bits, CRC stage). */
+  crcDiagnostics: Tf012AutoCrcDiagnostics;
+  /** r19: the sampling geometry the CRC stage actually used. */
+  geometry: Tf012AutoGeometryDiagnostics;
+  /** r19: camera callback/processing timing since the host's last metric reset. */
+  cameraTiming: Tf012AutoCameraTiming;
 }
 
 export function emptyReceiverSample(): Tf012AutoReceiverSample {
@@ -64,6 +198,8 @@ export function emptyReceiverSample(): Tf012AutoReceiverSample {
     activeProcessP95Ms: null, cameraFrames: 0, processedFrames: 0, decodeAttempts: 0,
     successfulDecodes: 0, crcFailures: 0, locateFailures: 0,
     uniqueReceived: 0, decodedChunkIndexes: [], acceptedDecodeCountByChunkIndex: {},
+    crcDiagnostics: emptyCrcDiagnostics(), geometry: {failure: null, success: null},
+    cameraTiming: emptyCameraTiming(),
   };
 }
 
@@ -414,6 +550,30 @@ function abortSourceForStatus(status: Tf012AutoRunStatus): Tf012AutoAbortSource 
 }
 
 /**
+ * r19 — per-PHASE timing, so a SETUP stall cannot be confused with a STOPPING stall.
+ *
+ * The r18 run reported one run-wide `largestTickGapMs` dominated by the STOP/abort tail,
+ * while SETUP had overshot its 5 s plan by 4.55 s on its own. Every phase now carries its
+ * own tick statistics and its own plan-versus-actual comparison.
+ */
+export interface Tf012AutoPhaseTiming {
+  phase: string;
+  tickCount: number;
+  tickIntervalAvgMs: number | null;
+  tickIntervalP50Ms: number | null;
+  tickIntervalP95Ms: number | null;
+  tickIntervalMaxMs: number | null;
+  largestTickGapMs: number | null;
+  largestTickGapStartedAtIso: string | null;
+  largestTickGapEndedAtIso: string | null;
+  /** Plan for this phase when the plan defines one (SETUP, A1..A5), else null. */
+  plannedDurationMs: number | null;
+  actualDurationMs: number;
+  overshootMs: number | null;
+  timingValid: boolean;
+}
+
+/**
  * Every way a run can end. Only COMPLETE asserts a controlled experiment; anything the
  * harness could not verify lands on a named failure instead of a silent success.
  */
@@ -486,6 +646,12 @@ export interface Tf012AutoStepResult {
   /** Tick-loop statistics for THIS step, and whether its timing is trustworthy. */
   tickStats: Tf012AutoTickStats;
   timingIntegrity: Tf012AutoTimingIntegrity;
+  /** r19: camera callback/processing timing for the measurement window. */
+  cameraTiming: Tf012AutoCameraTimingDelta;
+  /** r19: optical decode-failure analysis over the measurement window (local only). */
+  crcDiagnostics: Tf012AutoCrcDiagnostics;
+  /** r19: the sampling geometry the CRC stage used (best rejected / last accepted). */
+  geometry: Tf012AutoGeometryDiagnostics;
   /** False means the sender never proved the requested state — the step is unusable. */
   senderConfirmed: boolean;
   senderStateRequested: string;
@@ -543,6 +709,10 @@ export interface Tf012AutoRunResult {
   scheduler: Tf012AutoTickStats;
   /** r18: whether the run's wall-clock evidence is trustworthy. */
   timingIntegrity: Tf012AutoTimingIntegrity;
+  /** r19: tick statistics and plan-vs-actual per PHASE (SETUP vs STOPPING separated). */
+  phaseTiming: Tf012AutoPhaseTiming[];
+  /** r19: true when this artefact came from the short STATIC diagnostic probe. */
+  probe: boolean;
   timeline: Tf012AutoRunTimeline;
   setupGate: Tf012AutoSetupGateResult;
   steps: Tf012AutoStepResult[];
@@ -738,6 +908,8 @@ export interface Tf012AutoOrchestratorOptions {
   /** Override the plan (tests). Defaults to the shipped A1..A5 plan. */
   steps?: readonly Tf012AutoStep[];
   setupStep?: Tf012AutoStep;
+  /** r19: this artefact is the short STATIC diagnostic probe, not the A1..A5 sweep. */
+  probe?: boolean;
 }
 
 interface StepRuntime {
@@ -773,6 +945,7 @@ export class Tf012AutoOrchestrator {
   private readonly ports: Tf012AutoPorts;
   private readonly buildId: string | null;
   private readonly device: string | null;
+  private readonly probe: boolean;
 
   private phase: 'IDLE' | 'WAITING_FOR_SENDER' | 'WAITING_FOR_CAMERA' | 'CONFIRMING_SETUP' | 'SETUP' | 'CONFIRMING' | 'RUNNING' | 'STOPPING' | 'ABORTED_OBSERVING' | 'DONE' | 'ABORTED' = 'IDLE';
   private requestedAt = 0;
@@ -784,6 +957,14 @@ export class Tf012AutoOrchestrator {
   private readonly runTicks = new Tf012AutoTickTracker();
   /** Tick-loop statistics for the ACTIVE step (reset at every step boundary). */
   private readonly stepTicks = new Tf012AutoTickTracker();
+  /** r19: one tracker per PHASE, opened/closed as the machine moves through them. */
+  private readonly phaseTrackers = new Map<string, {
+    tracker: Tf012AutoTickTracker;
+    startedAt: number;
+    endedAt: number | null;
+    plannedDurationMs: number | null;
+  }>();
+  private currentPhaseKey: string | null = null;
   /** The last tick instant the machine saw, used when an abort has no explicit clock. */
   private lastTickAt: number | null = null;
   // ---- r18 abort lifecycle ----------------------------------------------------
@@ -839,6 +1020,7 @@ export class Tf012AutoOrchestrator {
     this.ports = options.ports;
     this.buildId = options.buildId ?? null;
     this.device = options.device ?? null;
+    this.probe = options.probe === true;
   }
 
   /** Step results frozen so far — appended, never rewritten. */
@@ -883,6 +1065,79 @@ export class Tf012AutoOrchestrator {
   }
 
   /**
+   * The phase key the clock is currently in. Steps report as their own id (A1..A5), the
+   * setup gate as SETUP, the abort tail as ABORT_OBSERVATION — so a STOP-induced stall can
+   * never be attributed to the measurement it followed.
+   */
+  private phaseKey(): string {
+    switch (this.phase) {
+      case 'CONFIRMING':
+      case 'RUNNING':
+        return this.runtime?.step.id ?? 'STEP';
+      case 'ABORTED_OBSERVING':
+        return 'ABORT_OBSERVATION';
+      default:
+        return this.phase;
+    }
+  }
+
+  private plannedDurationForPhase(key: string): number | null {
+    if (key === 'SETUP') return this.setupStep.durationMs;
+    const step = this.steps.find((candidate) => candidate.id === key);
+    return step ? step.durationMs : null;
+  }
+
+  /** Open/close phase scopes and record every tick against the ACTIVE phase. */
+  private notePhase(nowMs: number): void {
+    const key = this.phaseKey();
+    if (key !== this.currentPhaseKey) {
+      if (this.currentPhaseKey) {
+        const closed = this.phaseTrackers.get(this.currentPhaseKey);
+        if (closed) closed.endedAt = nowMs;
+      }
+      const existing = this.phaseTrackers.get(key);
+      if (existing) {
+        existing.endedAt = null;
+      } else {
+        this.phaseTrackers.set(key, {
+          tracker: new Tf012AutoTickTracker(), startedAt: nowMs, endedAt: null,
+          plannedDurationMs: this.plannedDurationForPhase(key),
+        });
+      }
+      this.currentPhaseKey = key;
+    }
+    this.phaseTrackers.get(key)?.tracker.note(nowMs);
+  }
+
+  /** r19: every phase with its own tick statistics and its own overshoot. */
+  private phaseTiming(): Tf012AutoPhaseTiming[] {
+    const entries: Tf012AutoPhaseTiming[] = [];
+    for (const [key, entry] of this.phaseTrackers) {
+      const stats = entry.tracker.stats();
+      const endedAt = entry.endedAt ?? entry.startedAt;
+      const actualDurationMs = Math.max(0, endedAt - entry.startedAt);
+      entries.push({
+        phase: key,
+        tickCount: stats.tickCount,
+        tickIntervalAvgMs: stats.tickIntervalAvgMs,
+        tickIntervalP50Ms: stats.tickIntervalP50Ms,
+        tickIntervalP95Ms: stats.tickIntervalP95Ms,
+        tickIntervalMaxMs: stats.tickIntervalMaxMs,
+        largestTickGapMs: stats.largestTickGapMs,
+        largestTickGapStartedAtIso: stats.largestTickGapStartedAtIso,
+        largestTickGapEndedAtIso: stats.largestTickGapEndedAtIso,
+        plannedDurationMs: entry.plannedDurationMs,
+        actualDurationMs,
+        overshootMs: entry.plannedDurationMs == null
+          ? null
+          : Math.max(0, actualDurationMs - entry.plannedDurationMs),
+        timingValid: entry.tracker.integrity().valid,
+      });
+    }
+    return entries;
+  }
+
+  /**
    * Deep-copy a receiver sample before storing it as interval evidence.
    *
    * The port contract is "return a FRESH snapshot", but a host that returns one mutable
@@ -896,6 +1151,20 @@ export class Tf012AutoOrchestrator {
       ...sample,
       decodedChunkIndexes: [...sample.decodedChunkIndexes],
       acceptedDecodeCountByChunkIndex: {...sample.acceptedDecodeCountByChunkIndex},
+      // r19: the new evidence blocks are objects too — copy them for the same reason.
+      crcDiagnostics: {
+        ...sample.crcDiagnostics,
+        fingerprintHistogram: {...sample.crcDiagnostics.fingerprintHistogram},
+      },
+      cameraTiming: {...sample.cameraTiming},
+      geometry: {
+        failure: sample.geometry.failure
+          ? {...sample.geometry.failure, boundingBox: {...sample.geometry.failure.boundingBox}}
+          : null,
+        success: sample.geometry.success
+          ? {...sample.geometry.success, boundingBox: {...sample.geometry.success.boundingBox}}
+          : null,
+      },
     };
   }
 
@@ -949,6 +1218,8 @@ export class Tf012AutoOrchestrator {
     // r18: every tick is measured, so a stalled loop cannot hide in the averages.
     this.runTicks.note(nowMs);
     this.stepTicks.note(nowMs);
+    // r19: and it is measured against the PHASE it belongs to.
+    this.notePhase(nowMs);
     if (this.phase === 'IDLE') return;
     if (this.phase === 'ABORTED_OBSERVING') {
       this.tickAbortObservation(nowMs);
@@ -1504,6 +1775,13 @@ export class Tf012AutoOrchestrator {
         : Math.max(0, (this.runtime.pauseConfirmedAt - this.runtime.pauseIssuedAt) - TF012_AUTO_PAUSE_CONFIRM_TIMEOUT_MS),
       tickStats,
       timingIntegrity: this.stepTicks.integrity(),
+      cameraTiming: tf012AutoCameraTimingDelta(
+        intervalStart.cameraTiming, receiver.cameraTiming, actualDurationMs),
+      crcDiagnostics: {...receiver.crcDiagnostics, fingerprintHistogram: {...receiver.crcDiagnostics.fingerprintHistogram}},
+      geometry: {
+        failure: receiver.geometry.failure ? {...receiver.geometry.failure, boundingBox: {...receiver.geometry.failure.boundingBox}} : null,
+        success: receiver.geometry.success ? {...receiver.geometry.success, boundingBox: {...receiver.geometry.success.boundingBox}} : null,
+      },
       senderConfirmed: measuredAt != null,
       senderStateRequested: tf012AutoSenderStateLabel(tf012AutoExpectedSenderState(step)),
       sender,
@@ -1569,14 +1847,23 @@ export class Tf012AutoOrchestrator {
       id: 'sender_telemetry', ok: telemetrySeen,
       detail: telemetrySeen ? 'sender telemetry received' : 'no sender telemetry was ever received',
     });
+    // The checks follow the PLAN, not a hardcoded A1..A5 list, so the r19 static probe is
+    // judged by the same rules as the sweep (one step, one confirmation, one invariant)
+    // instead of being failed for steps it never planned to run.
     for (const step of this.steps) {
       if (step.id === 'A4') continue;
       const check = this.confirmations.find((entry) => entry.id === `confirm_${step.id}`);
       checks.push(check ?? {id: `confirm_${step.id}`, ok: false, detail: 'step never confirmed'});
     }
-    const pauseCheck = this.confirmations.find((entry) => entry.id === 'confirm_A4_pause');
-    checks.push(pauseCheck ?? {id: 'confirm_A4_pause', ok: false, detail: 'A4 pause never confirmed'});
-    for (const id of ['static_setup_invariant', 'static_A1_invariant', 'static_A5_invariant']) {
+    if (this.steps.some((step) => step.id === 'A4')) {
+      const pauseCheck = this.confirmations.find((entry) => entry.id === 'confirm_A4_pause');
+      checks.push(pauseCheck ?? {id: 'confirm_A4_pause', ok: false, detail: 'A4 pause never confirmed'});
+    }
+    const staticChecks = [
+      'static_setup_invariant',
+      ...this.steps.filter((step) => step.mode === 'static').map((step) => `static_${step.id}_invariant`),
+    ];
+    for (const id of staticChecks) {
       const check = this.staticInvariants.find((entry) => entry.id === id);
       checks.push(check ?? {id, ok: false, detail: 'static step never completed'});
     }
@@ -1611,6 +1898,11 @@ export class Tf012AutoOrchestrator {
   private finalize(nowMs: number, status: Tf012AutoRunStatus): void {
     const finishedAt = Math.max(nowMs, this.lastTickAt ?? 0, this.finishedAt, this.startedAt, this.requestedAt);
     this.finishedAt = finishedAt;
+    // r19: close the open phase scope so its duration is the time actually spent in it.
+    if (this.currentPhaseKey) {
+      const open = this.phaseTrackers.get(this.currentPhaseKey);
+      if (open && open.endedAt == null) open.endedAt = finishedAt;
+    }
     const validity = this.evaluateValidity();
     // The r14 rule: COMPLETE is only permitted when every validity check passed. A run
     // that cannot prove it was controlled is HARNESS_INVALID, never a silent success.
@@ -1640,6 +1932,8 @@ export class Tf012AutoOrchestrator {
       abort: abortInfo,
       scheduler: this.runTicks.stats(),
       timingIntegrity: this.runTicks.integrity(),
+      phaseTiming: this.phaseTiming(),
+      probe: this.probe,
       timeline: {
         requestedAtIso: new Date(this.requestedAt).toISOString(),
         senderHelloAtIso: this.senderHelloAt == null ? null : new Date(this.senderHelloAt).toISOString(),

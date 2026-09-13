@@ -385,6 +385,9 @@ Page({
     autoAbortSource: '—',
     autoAbortSummary: '—',
     autoRunTiming: '—',
+    autoStepCameraTiming: '—',
+    autoStepCrcFailure: '—',
+    autoStepGeometry: '—',
     // r17 PRE-FLIGHT: the five prerequisites (camera, control, peer, telemetry, sender)
     // must all read READY before SETUP measuring starts; the window rows below always
     // label the time span they belong to.
@@ -619,6 +622,11 @@ Page({
     this.baselinePostCompleteFrames = 0;
     this.baselineFinalized = false;
     this.baselineResult = null;
+    // r19: the camera-timing contract is "reset when the harness resets the metrics", so
+    // every step boundary starts a fresh window for the callback/processing statistics.
+    this.autoCameraTiming = (opticalCore && typeof opticalCore.Tf012AutoCameraTimingTracker === 'function')
+      ? new opticalCore.Tf012AutoCameraTimingTracker()
+      : null;
     this.receiveFramesReceived = 0;
     this.receiveFramesProcessed = 0;
     this.receiveFramesSkipped = 0;
@@ -875,7 +883,9 @@ Page({
     if (this.data.mode === 'receive') {
       this.processReceiveFrame(buffer, width, height);
     } else if (this.data.mode === 'baseline') {
-      this.processBaselineFrame(buffer, width, height);
+      // r19: the frame's ARRIVAL instant travels with it, so the timing helper can measure
+      // the callback cadence as well as the processing duration.
+      this.processBaselineFrame(buffer, width, height, now);
     } else {
       this.processBenchmarkFrame(buffer, width, height);
     }
@@ -965,7 +975,7 @@ Page({
   //   CameraFrame → locate ONE OptiGrid → decode → parse chunk metadata →
   //   validate transfer/file identity → store unique chunk → ignore duplicate.
   // Bounded latest-frame pipeline, identical in shape to receive mode.
-  processBaselineFrame(buffer, width, height) {
+  processBaselineFrame(buffer, width, height, arrivedAt) {
     this.baselineFramesReceived++;
     if (!this.baselineReceiver) {
       this.recordError('baseline_receiver_unavailable');
@@ -978,12 +988,12 @@ Page({
     // OPTICAL fault in r15b.
     this.autoBaselineFrameSeq = (this.autoBaselineFrameSeq || 0) + 1;
     if (this.baselineBusy) {
-      this.baselinePending = { buffer, width, height };
+      this.baselinePending = { buffer, width, height, arrivedAt };
       this.baselineFramesReplaced++;
       return;
     }
     this.baselineBusy = true;
-    this.runBaselineFrame({ buffer, width, height });
+    this.runBaselineFrame({ buffer, width, height, arrivedAt });
   },
 
   // r6 TIMING ACCOUNTING (corrected): the sample ring measures ACTIVE processing
@@ -1018,6 +1028,10 @@ Page({
     } catch (err) {
       this.recordError('baseline_failed:' + (err && err.message));
     } finally {
+      // r19: one timing sample per PROCESSED frame (arrival + how long it took).
+      if (this.autoCameraTiming && entry && typeof entry.arrivedAt === 'number') {
+        this.autoCameraTiming.note(entry.arrivedAt, clockMs() - t0);
+      }
       const next = this.baselinePending;
       if (next) {
         this.baselinePending = null;
@@ -1212,7 +1226,16 @@ Page({
         : [],
       acceptedDecodeCountByChunkIndex: receiver && typeof receiver.decodedChunkCounts === 'function'
         ? receiver.decodedChunkCounts()
-        : {}
+        : {},
+      // r19: why the CRC stage rejects frames (local raw-bit fingerprints), the sampling
+      // geometry the decoder used, and the camera callback timing. All local.
+      crcDiagnostics: receiver && typeof receiver.crcFailureDiagnostics === 'function'
+        ? receiver.crcFailureDiagnostics()
+        : null,
+      geometry: receiver && typeof receiver.geometryDiagnostics === 'function'
+        ? receiver.geometryDiagnostics()
+        : null,
+      cameraTiming: this.autoCameraTiming ? this.autoCameraTiming.snapshot() : null
     };
   },
 
@@ -1314,6 +1337,56 @@ Page({
     runner.connect();
     runner.start();
     this.appendLog('AUTO TEST started / 自动测试已开始');
+  },
+
+  /**
+   * r19 STATIC DIAGNOSTIC PROBE / 静态诊断微测: one tap, one 10 s static chunk-0 hold.
+   *
+   * Same pre-flight and same evidence pipeline as the full sweep — it simply asks a smaller
+   * question (timing, sampling geometry, CRC failure fingerprints) before another A1..A5 run.
+   * One tap only: the page prepares the receiver and the camera exactly like `onAutoTest`.
+   */
+  onAutoProbe() {
+    if (this.autoRunner && this.autoRunner.isRunning()) {
+      wx.showToast({title: 'Auto test already running / 自动测试进行中', icon: 'none'});
+      return;
+    }
+    const url = this.data.autoControlUrl;
+    if (!createAutoTestRunner || !url) {
+      this.setData({autoRunStatus: 'Run: CONTROL URL MISSING / 缺少控制地址'});
+      wx.showToast({title: 'Set the control channel URL first / 请先填写控制地址', icon: 'none'});
+      return;
+    }
+    if (this.data.mode !== 'baseline') this.setMode('baseline');
+    if (!this.data.running) this.startCamera();
+    const runner = createAutoTestRunner({
+      url,
+      token: this.data.autoControlToken || '',
+      buildId: this.data.buildId,
+      device: this.data.deviceLabel || null,
+      receiverSample: () => this.autoStepReceiverSample(),
+      resetReceiverMetrics: () => this.autoResetMetrics(),
+      cameraStatus: () => this.autoCameraStatus(),
+      setDeclaredHoldMs: (holdMs) => {
+        this.setData({holdMsDeclarationLocked: typeof holdMs === 'number'});
+      },
+      onProgress: (progress) => this.setData(this.autoProgressPatch(progress)),
+      onStepResult: (result) => this.onAutoStepResult(result),
+      onRunResult: (result) => this.onAutoRunResult(result),
+      onUploadStatus: (status) => this.onAutoUploadStatus(status),
+      onPeerChange: (peer) => this.setData({autoSenderPeerPresent: peer.senderPeerPresent
+        ? 'PEER FOUND / 已发现发送端'
+        : 'NO PEER / 未发现发送端'}),
+      onLog: (text) => this.appendLog('probe: ' + text),
+      onStatus: (status) => this.setData({autoConnected: status.connected,
+        autoControlStatus: status.connected ? 'Control: ONLINE / 控制通道在线'
+          : 'Control: OFFLINE / 控制通道未连接'})
+    });
+    this.autoRunner = runner;
+    this.autoResults = [];
+    runner.connect();
+    runner.startProbe();
+    this.appendLog('STATIC PROBE started (10 s static chunk0) / 静态诊断微测已开始');
   },
 
   onAutoTestStop() {
@@ -1470,6 +1543,10 @@ Page({
           + ' reserved=' + setupWindow.reservedPatternScore
           + ' contrast=' + setupWindow.contrast
         : '—',
+      // r19: step-level camera timing, CRC-failure fingerprints and sampling geometry.
+      autoStepCameraTiming: this.autoStepCameraTimingText(result),
+      autoStepCrcFailure: this.autoStepCrcFailureText(result),
+      autoStepGeometry: this.autoStepGeometryText(result),
       // r18: the abort record is explicit — source, reason and the real instant.
       autoAbortSummary: result.abort
         ? result.abort.source + ' · ' + result.abort.reason + ' · ' + result.abort.abortedAtIso
@@ -1532,6 +1609,50 @@ Page({
    * The final JSON always exists LOCALLY. The lab upload is reported separately so a
    * failed upload can never look like a lost run.
    */
+  /**
+   * r19: the three diagnostic readouts for the LAST frozen step. They are pure formatters
+   * over local evidence — no measurement is derived here, and nothing comes from the network.
+   */
+  autoStepCameraTimingText(result) {
+    const step = result && Array.isArray(result.steps) ? result.steps[result.steps.length - 1] : null;
+    const timing = step && step.cameraTiming ? step.cameraTiming : null;
+    if (!timing) return '—';
+    const round = (value) => (value == null ? '—' : Math.round(value));
+    return 'callbacks ' + timing.callbackCount
+      + ' · interval avg/p50/p95/max ' + round(timing.callbackIntervalAvgMs) + '/' + round(timing.callbackIntervalP50Ms)
+      + '/' + round(timing.callbackIntervalP95Ms) + '/' + round(timing.callbackIntervalMaxMs) + ' ms'
+      + ' · process avg/p95/max ' + round(timing.processDurationAvgMs) + '/' + round(timing.processDurationP95Ms)
+      + '/' + round(timing.processDurationMaxMs) + ' ms'
+      + ' · duty ' + (timing.processingDutyRatio == null ? '—' : (timing.processingDutyRatio * 100).toFixed(0) + '%');
+  },
+
+  autoStepCrcFailureText(result) {
+    const step = result && Array.isArray(result.steps) ? result.steps[result.steps.length - 1] : null;
+    const crc = step && step.crcDiagnostics ? step.crcDiagnostics : null;
+    if (!crc || !crc.failedFrames) return 'no rejected frames';
+    return 'failed ' + crc.failedFrames + ' · analysed ' + crc.analysedFrames
+      + ' · distinct fingerprints ' + crc.distinctFingerprints
+      + ' · top ' + String(crc.topFingerprint) + ' ×' + crc.topFingerprintCount
+      + ' · stable bits ' + (crc.stableBitCount == null ? '—' : crc.stableBitCount + '/' + crc.analysedBitCount)
+      + ' · bit flips/frame ' + (crc.meanBitFlipVsPrevious == null ? '—' : crc.meanBitFlipVsPrevious.toFixed(1));
+  },
+
+  autoStepGeometryText(result) {
+    const step = result && Array.isArray(result.steps) ? result.steps[result.steps.length - 1] : null;
+    const geometry = step && step.geometry ? step.geometry : null;
+    const sample = geometry ? (geometry.success || geometry.failure) : null;
+    if (!sample) return '—';
+    return (geometry.success ? 'accepted' : 'rejected')
+      + ' box ' + Math.round(sample.boundingBox.x) + ',' + Math.round(sample.boundingBox.y)
+      + ' ' + Math.round(sample.boundingBox.width) + '×' + Math.round(sample.boundingBox.height)
+      + ' · px/cell ' + sample.pixelsPerCell.toFixed(3)
+      + ' · phase ' + sample.phaseX.toFixed(2) + '/' + sample.phaseY.toFixed(2)
+      + ' · rot ' + sample.rotation
+      + ' · score ' + sample.refinementScore.toFixed(4)
+      + ' (2nd seed ' + sample.secondSeedScore.toFixed(3) + ')'
+      + ' · candidate ' + sample.selectedCandidate + '/' + sample.candidates;
+  },
+
   refreshAutoFinalJson() {
     if (!this.autoFinalResult) return;
     const text = JSON.stringify(

@@ -18,3 +18,5 @@ export * from './single-baseline.ts';
 // ends read the SAME step definition (and therefore the same hold time).
 export * from './tf012-auto-plan.ts';
 export * from './tf012-auto-orchestrator.ts';
+// TF-012 r19 evidence toolkit: camera callback/processing timing measured on the host.
+export * from './tf012-auto-camera-timing.ts';

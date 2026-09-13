@@ -383,6 +383,103 @@ Every field is `null` when its denominator is 0. A run with no decode attempts h
 `null` (0/0 is undefined), **not** 0 %. These metrics are diagnostic: they rank
 PASSing points and **never decide PASS**.
 
+## r19 DIAGNOSTIC EVIDENCE / 诊断证据
+
+**Physical evidence (r18 build).** `SETUP_NOT_READY`, and this time it was not a sequencing
+fault:
+
+```
+SETUP planned ≈ 5000 ms, actual 9554 ms
+cameraFrames 111 · decodeAttempts 111 · successfulDecodes 0 · crcFailures 111 · locateFailures 0
+observedCodeWidthPx 309.73 · pixelsPerCell 3.226 · reservedPatternScore 0.966
+contrast 171.83 · frameRotationIndex 2
+acceptedDecodeCountByChunkIndex {} · decodedChunkIndexes []
+scheduler: tickCount 6 · avg gap 7247 ms · p50 2720 ms · max 26993 ms · ORCHESTRATOR_STALL
+```
+
+The locator locked **111/111** and the geometry read healthy while **every** frame failed
+CRC. Two independent problems, and neither could be answered from the r18 artefact:
+
+1. **Timing.** The 26.993 s gap belonged to the STOP/abort tail, but SETUP had overshot its
+   5 s plan by 4.55 s by itself — one run-wide number cannot separate the two, and nothing
+   recorded whether frame processing was starving the orchestrator's timer loop.
+2. **Decode.** Nothing recorded which sampling geometry the CRC stage used, nor whether the
+   repeated failures produced the SAME raw bits (a stable sampling-phase bias) or different
+   bits every frame (noise/motion/exposure).
+
+**1 — Per-phase scheduler timing (TASK A).** Every phase now has its own tick scope, opened
+and closed as the machine moves: `WAITING_FOR_SENDER`, `WAITING_FOR_CAMERA`,
+`CONFIRMING_SETUP`, `SETUP`, `A1`…`A5`, `STOPPING`, `ABORT_OBSERVATION`. Each carries
+`tickCount`, `tickIntervalAvgMs`, `tickIntervalP50Ms`, `tickIntervalP95Ms`,
+`tickIntervalMaxMs`, `largestTickGapMs` (+ its start/end instants), `plannedDurationMs` when
+the plan defines one, `actualDurationMs`, `overshootMs` and `timingValid`. A SETUP stall can
+no longer be confused with a STOPPING stall — the abort tail is its own scope.
+
+**2 — Camera callback timing (TASK B).** `Tf012AutoCameraTimingTracker` (shared, host-fed)
+records one sample per camera frame: arrival instant + processing duration. Frozen per step
+are `callbackCount`, interval avg/p50/p95/max and `processCount`, `processSumMs`,
+process duration avg/p50/p95/max — plus the derived **`processingDutyRatio`** (fraction of
+the interval the JS thread spent inside frame processing). Count/sum/max are exact cumulative
+deltas (the host resets at every step boundary, the same contract as the optical counters);
+p50/p95 come from a bounded trailing sample ring and are labelled as such.
+
+*Why not "orchestrator ticks during camera processing"?* JavaScript is single-threaded, so a
+timer callback cannot run inside a synchronous frame callback — that counter would be
+structurally zero and prove nothing. The defensible observables are the duty ratio, the
+callback interval percentiles and the orchestrator's own largest tick gap: if a stall is of
+the same order as one frame's processing time, frame processing explains it; if the gap is
+far larger than any single frame, something else does. **No exposure is inferred from FPS** —
+the runtime numbers travel as numbers.
+
+**3 — G7c → G7d sampling geometry (TASK C).** The receiver records the sampling geometry the
+CRC stage actually used, for the best-scoring **rejected** frame and for the last **accepted**
+one: bounding box (x/y/width/height from the lock quad), `pixelsPerCell`, `phaseX`, `phaseY`,
+`rotation`, `refinementScore`, `reservedPatternScore`, `contrast`, `threshold`, `candidates`,
+`seeds`, `refined`, `bestSeedScore`, **`secondSeedScore`** (so a geometry race is visible) and
+**`selectedCandidate`** (which candidate won). The geometry algorithm itself is untouched.
+
+**4 — Failed-frame fingerprints (TASK D, no oracle).** `inspectFrameCellsV1()` reports the
+stage that rejected a sampled frame (magic / version / matrix / payload-length / CRC), the
+CRC field comparison (expected vs computed) and the raw sampled bits. **`decodeFrameCellsV1`
+delegates to it**, so the accept/reject decision has exactly ONE implementation and the
+diagnostics cannot drift from it (the raw-bit copy is opt-in, so the accepted path costs
+nothing extra).
+
+Per step the receiver then reports `crcDiagnostics`: `failedFrames`, `analysedFrames`,
+`distinctFingerprints`, `topFingerprint` + count, an 8-entry `fingerprintHistogram`,
+`stableBitCount` (bits identical across EVERY analysed failed frame),
+`meanBitFlipVsPrevious`, `headerInvalidFrames` and `crcMismatchFrames`. Interpretation:
+
+| Observation | Reading |
+| --- | --- |
+| same fingerprint repeats, `stableBitCount` high, flips ≈ 0 | **stable sampling/phase bias** |
+| many distinct fingerprints, flips ≫ 0 | sampling varies (noise, motion, exposure) |
+| `headerInvalidFrames` > 0 | the frame never reached a valid header: geometry is off, not bits |
+
+Nothing leaves the receiver except a fingerprint hash and counters: the raw bits are never
+frozen into the artefact and never cross the network. The per-frame failure kept is the one
+that got **furthest** (a CRC-stage failure beats a mis-sampled magic failure).
+
+**5 — STATIC diagnostic probe (TASK E).** `TF012_AUTO_PROBE_STEPS` = ONE static chunk-0 hold
+for 10 s, no cyclic switching, no A1–A5, driven by the **same** machine (same sender
+handshake, camera pre-flight, static-chunk0 confirmation and STOP lifecycle) so its numbers
+are comparable. One tap: the page prepares the receiver and camera exactly like the sweep.
+The artefact is marked `probe: true` and carries every evidence block above; the validity
+gate follows the **plan** it was given (the r19 probe is judged by the same rules as the
+sweep instead of being failed for steps it never planned to run).
+
+**Not changed.** OptiGrid, locator algorithm, CRC, matrix size, chunk size and rendering. The
+measured geometry (≈310 px, ≈3.23 px/cell, reserved 0.97, contrast 172) is the evidence that
+rules out the decoder as the first suspect — which is why this revision collects runtime
+evidence instead of tuning anything.
+
+**Verification.** `tf012-auto-diagnostics.test.ts` (9 cases: every phase reported with its own
+statistics and plan comparison, a stall attributed to SETUP and NOT to STOPPING, camera timing
+tracker unit tests + per-step freeze + duty ratio, a rejected frame's geometry and fingerprint,
+identical failures collapsing to one fingerprint with high stable-bit count vs varying failures
+producing many, the probe's one-step 10 s plan through the orchestrator with the full evidence
+set, and the no-oracle/no-payload proof) — 273 Node cases in total.
+
 ## r18 EVIDENCE INTEGRITY / 证据完整性
 
 **Physical evidence (r17 build).** The SETUP pre-flight worked exactly as designed — camera

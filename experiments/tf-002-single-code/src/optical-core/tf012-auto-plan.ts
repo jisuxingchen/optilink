@@ -117,12 +117,38 @@ export const TF012_AUTO_STEPS: readonly Tf012AutoStep[] = [
 
 export const TF012_AUTO_STEP_COUNT = TF012_AUTO_STEPS.length;
 
+/**
+ * TF-012 r19 — STATIC DIAGNOSTIC PROBE.
+ *
+ * ONE static chunk-0 hold for 10 s: no cyclic switching, no A1..A5. It exists because the
+ * r18 physical run failed SETUP with 111/111 CRC failures while the geometry read healthy,
+ * and the next question (JS starvation? stable sampling-phase bias? frame quality?) has to
+ * be answered by runtime evidence rather than by another full sweep.
+ *
+ * The probe runs through the SAME machine as the sweep — sender handshake, camera
+ * pre-flight, static-chunk0 confirmation, then a measured window — so its numbers are
+ * comparable, and it stops the carrier afterwards exactly like a normal run.
+ */
+export const TF012_AUTO_PROBE_STEP: Tf012AutoStep = {
+  id: 'A1',
+  index: 1,
+  title: 'STATIC chunk0 PROBE',
+  mode: 'static',
+  holdMs: null,
+  durationMs: 10000,
+  chunkIndex: 0,
+  note: 'Diagnostic probe: 10 s of static chunk 0 with full timing and sampling evidence.',
+};
+
+export const TF012_AUTO_PROBE_STEPS: readonly Tf012AutoStep[] = Object.freeze([TF012_AUTO_PROBE_STEP]);
+
 // The shipped plan is immutable at RUNTIME as well as in the type system: a step
 // definition must never be edited mid-run, because both the sender and the phone
 // read their hold time from it.
 Object.freeze(TF012_AUTO_SETUP_STEP);
 for (const step of TF012_AUTO_STEPS) Object.freeze(step);
 Object.freeze(TF012_AUTO_STEPS);
+Object.freeze(TF012_AUTO_PROBE_STEP);
 
 export function tf012AutoStep(id: Tf012AutoStepId): Tf012AutoStep {
   if (id === 'SETUP') return TF012_AUTO_SETUP_STEP;

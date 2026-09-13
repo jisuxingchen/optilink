@@ -184,7 +184,8 @@ test('a declared value outside the ladder is clamped, not accepted blindly', () 
 test('the declaration is never referenced by the decode / frame / reconstruction path', () => {
   const readers = ['holdMsDeclared', 'holdMsInput', 'applyHoldMs', 'onHoldMsChip', 'theoChunkRate'];
   const regions: Array<[string, string, string]> = [
-    ['processBaselineFrame', '  processBaselineFrame(buffer, width, height) {', '  runBaselineFrame(entry) {'],
+    // r19 added the frame ARRIVAL instant (for camera timing); the file path is unchanged.
+    ['processBaselineFrame', '  processBaselineFrame(buffer, width, height, arrivedAt) {', '  runBaselineFrame(entry) {'],
     ['runBaselineFrame', '  runBaselineFrame(entry) {', '  // Completion is ALL UNIQUE'],
     ['finalizeBaseline', '  finalizeBaseline() {', '  // Reconstruction complete'],
   ];

@@ -18,7 +18,15 @@
  * receiver all share this single implementation. No TextEncoder/TextDecoder,
  * no DOM, no wx.*, no Node globals.
  */
-import {decodeFrameCellsV1, encodeFrameCellsV1, payloadCapacityForMatrixV1, reservedCellValueV1, type OptiGridV1DecodedFrame} from '../optigrid-v1.ts';
+import {
+  decodeFrameCellsV1,
+  encodeFrameCellsV1,
+  fingerprintBytesV1,
+  inspectFrameCellsV1,
+  payloadCapacityForMatrixV1,
+  reservedCellValueV1,
+  type OptiGridV1DecodedFrame,
+} from '../optigrid-v1.ts';
 import {homographyFromUnitSquare, mapHomography, type Homography, type Point, type Quad} from '../optigrid-geometry.ts';
 import {sha256, sha256Hex} from './sha256.ts';
 import type {PixelFrame} from './pixel-frame.ts';
@@ -1107,7 +1115,14 @@ export function locateDarkRegionBounds(frame: PixelFrame): DarkBounds | null {
 const COARSE_ANGLES = [-0.07, -0.05, -0.03, -0.012, 0, 0.012, 0.03, 0.05, 0.07];
 const COARSE_SCALES = [1, 0.98, 0.96, 0.94];
 
-export type SingleBaselineLocateOptions = {previous?: SingleCodeLock | null};
+export type SingleBaselineLocateOptions = {
+  previous?: SingleCodeLock | null;
+  /**
+   * r19: capture sampling evidence for frames the decoder REJECTS (raw bits + the stage
+   * that rejected them). Off by default: the accepted path allocates nothing extra.
+   */
+  failureSink?: boolean;
+};
 
 export type SingleBaselineGeometricSeed = {params: QuadParams; score: number};
 
@@ -1169,6 +1184,10 @@ export type SingleBaselineCaptureDiagnostics = {
   g7bReason: string;
   g7cPass: boolean;
   g7cReason: string;
+  /** r19: second-best seed score, so a geometry race can be seen (not just its winner). */
+  seedSecondScore: number;
+  /** r19: 0-based index of the candidate whose refined lock scored best. */
+  refinementBestCandidate: number;
   crcAttempts: number;
   crcSuccess: number;
   crcFailure: number;
@@ -1189,7 +1208,133 @@ export type SingleBaselineCapture = {
   /** Attempts that passed the refinement stage. */
   refined: number;
   diagnostics: SingleBaselineCaptureDiagnostics;
+  /**
+   * r19: the last sampling inspection of a frame that FAILED to decode, when one was
+   * requested. Carries the decoder's own stage verdict (magic/version/matrix/payload
+   * length/CRC), the CRC field comparison and the raw sampled bits — computed locally
+   * from the camera frame, never from anything the sender reported.
+   */
+  failure: SingleBaselineFailureSample | null;
 };
+
+/** One failed frame's sampling evidence (r19). */
+export interface SingleBaselineFailureSample {
+  /** Which decoder stage rejected it: '' only if it decoded (never here). */
+  failedAt: 'size' | 'magic' | 'version' | 'matrix' | 'payload-length' | 'crc';
+  /** Short fingerprint of the RAW sampled bits (stable across identical sampling). */
+  fingerprint: string;
+  rawBytes: Uint8Array;
+  bitCount: number;
+  headerOk: boolean;
+  crcExpected: number | null;
+  crcComputed: number | null;
+  sequence: number;
+}
+
+/** The sampling geometry one frame was decoded with (r19). */
+export interface SingleBaselineGeometrySample {
+  boundingBox: {x: number; y: number; width: number; height: number};
+  pixelsPerCell: number;
+  phaseX: number;
+  phaseY: number;
+  rotation: number;
+  refinementScore: number;
+  reservedPatternScore: number;
+  contrast: number;
+  threshold: number;
+  candidates: number;
+  seeds: number;
+  refined: number;
+  bestSeedScore: number;
+  secondSeedScore: number;
+  selectedCandidate: number;
+  stage: string;
+  stageReason: string;
+}
+
+/** Sampling geometry of the best REJECTED frame and of the last ACCEPTED one (r19). */
+export interface SingleBaselineGeometryDiagnostics {
+  failure: SingleBaselineGeometrySample | null;
+  success: SingleBaselineGeometrySample | null;
+}
+
+/**
+ * CRC-failure analysis over the raw sampled bits (r19). Everything is computed from the
+ * LOCAL camera frames: no sender payload, no oracle, no network path.
+ */
+export interface SingleBaselineCrcFailureDiagnostics {
+  /** Frames the decoder rejected (any stage). */
+  failedFrames: number;
+  /** Frames whose raw bits were kept for the stability analysis. */
+  analysedFrames: number;
+  /** How many DIFFERENT raw samplings appeared among the analysed frames. */
+  distinctFingerprints: number;
+  /** The most frequent raw sampling, and how often it appeared. */
+  topFingerprint: string | null;
+  topFingerprintCount: number;
+  /** Up to 8 fingerprint → count entries, most frequent first. */
+  fingerprintHistogram: Record<string, number>;
+  /** Data bits identical across EVERY analysed failed frame (null when < 2 frames). */
+  stableBitCount: number | null;
+  analysedBitCount: number | null;
+  /** Mean Hamming distance between consecutive failed frames. */
+  meanBitFlipVsPrevious: number | null;
+  /** Frames rejected before the CRC stage (magic/version/matrix). */
+  headerInvalidFrames: number;
+  /** Frames whose CRC field did not match the CRC computed over the sampled bytes. */
+  crcMismatchFrames: number;
+}
+
+/** Bits set in one byte. */
+function popcount8(value: number): number {
+  let count = 0;
+  let byte = value & 0xff;
+  while (byte) {
+    count += byte & 1;
+    byte >>= 1;
+  }
+  return count;
+}
+
+/** Axis-aligned bounds of a lock quad, in camera pixels. */
+function quadBounds(quad: Quad): {x: number; y: number; width: number; height: number} {
+  const xs = [quad.tl.x, quad.tr.x, quad.br.x, quad.bl.x];
+  const ys = [quad.tl.y, quad.tr.y,quad.br.y, quad.bl.y];
+  const minX = Math.min(...xs);
+  const minY = Math.min(...ys);
+  return {x: minX, y: minY, width: Math.max(...xs) - minX, height: Math.max(...ys) - minY};
+}
+
+/** Build the sampling-geometry record for one frame (r19). */
+export function singleBaselineGeometrySample(
+  lock: SingleCodeLock,
+  diagnostics: SingleBaselineCaptureDiagnostics,
+  attempts: number,
+  refined: number,
+): SingleBaselineGeometrySample {
+  return {
+    boundingBox: quadBounds(lock.quad),
+    pixelsPerCell: lock.pixPerCellX,
+    phaseX: lock.phaseX,
+    phaseY: lock.phaseY,
+    rotation: lock.rotation,
+    refinementScore: diagnostics.refinementBestScore,
+    reservedPatternScore: lock.score,
+    contrast: lock.contrast,
+    threshold: lock.threshold,
+    candidates: attempts,
+    seeds: diagnostics.seedCount,
+    refined,
+    bestSeedScore: diagnostics.seedBestScore,
+    secondSeedScore: diagnostics.seedSecondScore,
+    selectedCandidate: diagnostics.refinementBestCandidate,
+    stage: diagnostics.stage,
+    stageReason: diagnostics.stageReason,
+  };
+}
+
+/** How many failed frames keep their raw bits for the stability analysis. */
+export const SINGLE_BASELINE_FAILURE_RING = 8;
 
 /**
  * Refinement attempts are capped so one frame stays bounded no matter how many
@@ -1218,6 +1363,8 @@ function emptyCaptureDiagnostics(): SingleBaselineCaptureDiagnostics {
     g7bReason: '',
     g7cPass: false,
     g7cReason: '',
+    seedSecondScore: 0,
+    refinementBestCandidate: -1,
     crcAttempts: 0,
     crcSuccess: 0,
     crcFailure: 0,
@@ -1248,13 +1395,17 @@ export function captureSingleBaselineCode(
 ): SingleBaselineCapture {
   const previous = options?.previous ?? null;
   const diagnostics = emptyCaptureDiagnostics();
+  // r19: when the caller asks for failure evidence, the LAST rejected sampling attempt is
+  // inspected (raw bits + decoder stage). Off by default so the hot path stays cheap.
+  const failureSink: {current: SingleBaselineFailureSample | null} = {current: null};
+  const sink = options?.failureSink === true ? failureSink : null;
 
   // Fast path: a static display keeps the same geometry, so try the previous
   // lock directly before spending anything on refinement. The OptiGrid CRC
   // verifies the result, so this can never accept a stale geometry.
   if (previous) {
     diagnostics.crcAttempts += 1;
-    const direct = decodeSingleBaselineLock(frame, matrixSize, previous);
+    const direct = decodeSingleBaselineLock(frame, matrixSize, previous, sink);
     if (direct) {
       diagnostics.g7bPass = true;
       diagnostics.g7cPass = true;
@@ -1264,7 +1415,7 @@ export function captureSingleBaselineCode(
       diagnostics.decodedChunkIndex = direct.sequence & 0xffff;
       diagnostics.stage = 'G7d';
       diagnostics.stageReason = 'tracked-lock';
-      return {decoded: direct, lock: previous, candidates: 1, refined: 0, diagnostics};
+      return {decoded: direct, lock: previous, candidates: 1, refined: 0, diagnostics, failure: null};
     }
     diagnostics.crcFailure = 1;
   }
@@ -1275,7 +1426,7 @@ export function captureSingleBaselineCode(
   if (!region.diagnostics.g7aPass) {
     diagnostics.stage = 'G7a';
     diagnostics.stageReason = region.diagnostics.rejection || 'no-candidate-region';
-    return {decoded: null, lock: null, candidates: 0, refined: 0, diagnostics};
+    return {decoded: null, lock: null, candidates: 0, refined: 0, diagnostics, failure: null};
   }
 
   // ---- G7b: code-plausible bounding box (reported opinion, never a silent stop) ----
@@ -1304,12 +1455,13 @@ export function captureSingleBaselineCode(
   diagnostics.seedCount = seeds.length;
   if (seeds.length) {
     diagnostics.seedBestScore = seeds[0].score;
+    diagnostics.seedSecondScore = seeds.length > 1 ? seeds[1].score : 0;
     diagnostics.seedBestRotation = seeds[0].params.rotation;
     diagnostics.seedBestSidePx = seeds[0].params.side;
     diagnostics.seedBestAngleDeg = seeds[0].params.angle * 180 / Math.PI;
   }
 
-  const attempts: Array<{params: QuadParams; stages: ReadonlyArray<RefineStage>}> = [];
+  const attempts: Array<{params: QuadParams; stages: ReadonlyArray<RefineStage>; candidate: number}> = [];
   if (previous) {
     attempts.push({
       params: {
@@ -1322,10 +1474,11 @@ export function captureSingleBaselineCode(
         phaseY: previous.phaseY,
       },
       stages: TRACK_STAGES,
+      candidate: -1,
     });
   }
   for (const seed of seeds.slice(0, SINGLE_BASELINE_MAX_REFINEMENT_ATTEMPTS)) {
-    attempts.push({params: seed.params, stages: REFINE_STAGES});
+    attempts.push({params: seed.params, stages: REFINE_STAGES, candidate: seed.candidate});
   }
 
   // ---- G7c + G7d: refine, then let the OptiGrid CRC decide ----
@@ -1347,9 +1500,11 @@ export function captureSingleBaselineCode(
       diagnostics.refinementBestPhaseY = lock.phaseY;
       diagnostics.refinementBestThreshold = lock.threshold;
       diagnostics.refinementBestContrast = lock.contrast;
+      // r19: WHICH candidate won, so a geometry race is visible in the evidence.
+      diagnostics.refinementBestCandidate = attempt.candidate;
     }
     diagnostics.crcAttempts += 1;
-    const frameDecoded = decodeSingleBaselineLock(frame, matrixSize, lock);
+    const frameDecoded = decodeSingleBaselineLock(frame, matrixSize, lock, sink);
     if (frameDecoded) {
       decoded = frameDecoded;
       bestLock = lock;
@@ -1368,7 +1523,7 @@ export function captureSingleBaselineCode(
       + ' bestSeedScore=' + diagnostics.seedBestScore.toFixed(4);
     diagnostics.stage = 'G7c';
     diagnostics.stageReason = diagnostics.g7cReason;
-    return {decoded: null, lock: null, candidates: attempts.length, refined, diagnostics};
+    return {decoded: null, lock: null, candidates: attempts.length, refined, diagnostics, failure: failureSink.current};
   }
   diagnostics.g7dPass = decoded !== null;
   diagnostics.stage = decoded ? 'G7d' : 'G7c';
@@ -1378,7 +1533,7 @@ export function captureSingleBaselineCode(
       + ' bestRotation=' + diagnostics.refinementBestRotation
       + ' pixPerCell=' + diagnostics.refinementBestPixPerCell.toFixed(2)
       + ' contrast=' + diagnostics.refinementBestContrast.toFixed(1);
-  return {decoded, lock: bestLock, candidates: attempts.length, refined, diagnostics};
+  return {decoded, lock: bestLock, candidates: attempts.length, refined, diagnostics, failure: failureSink.current};
 }
 
 function lockFromParams(params: QuadParams, score: ReservedScore, matrixSize: number): SingleCodeLock {
@@ -1431,12 +1586,52 @@ function sampleInnerCells(frame: PixelFrame, matrixSize: number, quad: Quad, pha
  * Decode one OptiGrid from a camera frame using a located lock. CRC-verified:
  * a geometric lock that is off by even one cell cannot produce a chunk.
  */
-export function decodeSingleBaselineLock(frame: PixelFrame, matrixSize: number, lock: SingleCodeLock): OptiGridV1DecodedFrame | null {
+export function decodeSingleBaselineLock(
+  frame: PixelFrame,
+  matrixSize: number,
+  lock: SingleCodeLock,
+  failureSink?: {current: SingleBaselineFailureSample | null} | null,
+): OptiGridV1DecodedFrame | null {
   for (const [dx, dy] of PHASE_RETRIES) {
     const cells = sampleInnerCells(frame, matrixSize, lock.quad, lock.phaseX + dx, lock.phaseY + dy, lock.threshold);
     if (!cells) return null;
-    const decoded = decodeFrameCellsV1(cells, matrixSize);
+    // r19: inspect only when a failure sample is wanted; the accepted path costs nothing
+    // extra because `decodeFrameCellsV1` is the same inspection without the raw copy.
+    const inspection = failureSink
+      ? inspectFrameCellsV1(cells, matrixSize, {withRawBytes: true})
+      : null;
+    const decoded = inspection ? inspection.decoded : decodeFrameCellsV1(cells, matrixSize);
     if (decoded) return decoded;
+    if (failureSink && inspection) {
+      // Keep the FURTHEST-progressing failure: a mis-sampled attempt that never even matched
+      // the magic is less informative than one that reached the CRC stage, and the last
+      // attempt is not necessarily the best one.
+      const rank = (stage: SingleBaselineFailureSample['failedAt']): number => {
+        switch (stage) {
+          case 'crc': return 5;
+          case 'payload-length': return 4;
+          case 'matrix': return 3;
+          case 'version': return 2;
+          case 'magic': return 1;
+          default: return 0;
+        }
+      };
+      const candidate: SingleBaselineFailureSample = {
+        failedAt: inspection.failedAt === '' ? 'crc' : inspection.failedAt,
+        fingerprint: fingerprintBytesV1(inspection.rawBytes),
+        rawBytes: inspection.rawBytes,
+        bitCount: inspection.bitCount,
+        headerOk: inspection.failedAt !== 'magic' && inspection.failedAt !== 'version'
+          && inspection.failedAt !== 'matrix',
+        crcExpected: inspection.crc.expected,
+        crcComputed: inspection.crc.computed,
+        sequence: inspection.header.sequence,
+      };
+      const current = failureSink.current;
+      if (!current || rank(candidate.failedAt) > rank(current.failedAt)) {
+        failureSink.current = candidate;
+      }
+    }
   }
   return null;
 }
@@ -1745,6 +1940,17 @@ export class SingleCodeBaselineReceiver {
    * telemetry and never crosses the network.
    */
   private readonly decodedByChunk = new Map<number, number>();
+  // ---- r19 failure diagnostics -------------------------------------------------
+  /** Fingerprint → occurrences, for frames the decoder rejected (bounded). */
+  private readonly failureFingerprints = new Map<string, number>();
+  /** The most recent rejected frames' raw bits, for cross-frame stability analysis. */
+  private readonly failureRing: SingleBaselineFailureSample[] = [];
+  private failureCount = 0;
+  private failureHeaderInvalid = 0;
+  private failureCrcMismatch = 0;
+  /** Sampling geometry of the best-scoring rejected frame, and of the last accepted one. */
+  private worstFailureGeometry: SingleBaselineGeometrySample | null = null;
+  private lastSuccessGeometry: SingleBaselineGeometrySample | null = null;
   metrics: SingleBaselineMetrics = emptyMetrics();
   lastRejectReason = '';
   reconstruction: SingleBaselineReconstruction | null = null;
@@ -1765,6 +1971,13 @@ export class SingleCodeBaselineReceiver {
     this.reconstructionMethod = '';
     this.received.clear();
     this.decodedByChunk.clear();
+    this.failureFingerprints.clear();
+    this.failureRing.length = 0;
+    this.failureCount = 0;
+    this.failureHeaderInvalid = 0;
+    this.failureCrcMismatch = 0;
+    this.worstFailureGeometry = null;
+    this.lastSuccessGeometry = null;
     this.metrics = emptyMetrics();
     this.lastRejectReason = '';
     this.reconstruction = null;
@@ -1802,6 +2015,78 @@ export class SingleCodeBaselineReceiver {
       counts[String(index)] = this.decodedByChunk.get(index) ?? 0;
     }
     return counts;
+  }
+
+  /**
+   * Why the CRC stage rejects frames, measured LOCALLY on the sampled bits (r19).
+   *
+   * The decisive signal is the fingerprint histogram: if the same wrong sampling repeats
+   * many times, the failure is a stable sampling/phase bias; if every failed frame has a
+   * different fingerprint, the sampling is varying (noise, motion, exposure). `stableBitCount`
+   * reports how many data bits are IDENTICAL across every analysed failed frame, which is the
+   * same statement at bit level. Nothing here comes from the sender: no payload, no oracle.
+   */
+  crcFailureDiagnostics(): SingleBaselineCrcFailureDiagnostics {
+    const ring = this.failureRing;
+    const distinct = new Set(ring.map((entry) => entry.fingerprint));
+    let topHash: string | null = null;
+    let topCount = 0;
+    for (const [hash, count] of this.failureFingerprints) {
+      if (count > topCount) { topCount = count; topHash = hash; }
+    }
+    let stableBitCount: number | null = null;
+    let meanFlip: number | null = null;
+    if (ring.length > 1) {
+      const bytes = ring[0]!.rawBytes.length;
+      let stable = 0;
+      for (let index = 0; index < bytes; index += 1) {
+        let value = ring[0]!.rawBytes[index]!;
+        for (const entry of ring) {
+          value &= entry.rawBytes[index] ?? 0;
+        }
+        let inverted = ~ring[0]!.rawBytes[index]! & 0xff;
+        for (const entry of ring) {
+          inverted &= ~(entry.rawBytes[index] ?? 0) & 0xff;
+        }
+        stable += popcount8(value) + popcount8(inverted);
+      }
+      stableBitCount = stable;
+      let flips = 0;
+      let pairs = 0;
+      for (let index = 1; index < ring.length; index += 1) {
+        const previous = ring[index - 1]!.rawBytes;
+        const current = ring[index]!.rawBytes;
+        for (let byte = 0; byte < Math.min(previous.length, current.length); byte += 1) {
+          flips += popcount8((previous[byte]! ^ current[byte]!) & 0xff);
+        }
+        pairs += 1;
+      }
+      meanFlip = pairs > 0 ? flips / pairs : null;
+    }
+    return {
+      failedFrames: this.failureCount,
+      analysedFrames: ring.length,
+      distinctFingerprints: distinct.size,
+      topFingerprint: topHash,
+      topFingerprintCount: topCount,
+      fingerprintHistogram: Object.fromEntries(
+        [...this.failureFingerprints.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8),
+      ),
+      stableBitCount,
+      analysedBitCount: ring.length > 0 ? ring[0]!.bitCount : null,
+      meanBitFlipVsPrevious: meanFlip,
+      headerInvalidFrames: this.failureHeaderInvalid,
+      crcMismatchFrames: this.failureCrcMismatch,
+    };
+  }
+
+  /**
+   * The sampling geometry the CRC stage actually used (r19): the best-scoring REJECTED
+   * frame and the last ACCEPTED one. This is what tells an analyst whether a decode failure
+   * is a phase/rotation problem or a frame-quality problem — without touching the locator.
+   */
+  geometryDiagnostics(): SingleBaselineGeometryDiagnostics {
+    return {failure: this.worstFailureGeometry, success: this.lastSuccessGeometry};
   }
 
   get duplicateCount(): number {
@@ -1901,7 +2186,7 @@ export class SingleCodeBaselineReceiver {
     this.metrics.cameraHeight = frame.height;
     this.metrics.decodeAttempts += 1;
 
-    const capture = captureSingleBaselineCode(frame, matrixSize, {previous: this.lock});
+    const capture = captureSingleBaselineCode(frame, matrixSize, {previous: this.lock, failureSink: true});
     this.applyCaptureDiagnostics(capture.diagnostics);
     const lock = capture.lock;
     if (!lock) {
@@ -1923,11 +2208,44 @@ export class SingleCodeBaselineReceiver {
     const decoded = capture.decoded;
     if (!decoded) {
       this.metrics.crcFailures += 1;
+      this.noteDecodeFailure(capture);
       return {located: true, decoded: false, result: 'crc-failed', chunkIndex: -1};
     }
     this.metrics.decodeSuccess += 1;
+    this.lastSuccessGeometry = singleBaselineGeometrySample(
+      lock, capture.diagnostics, capture.candidates, capture.refined);
     const result = this.ingestDecoded(decoded, now);
     return {located: true, decoded: true, result, chunkIndex: this.metrics.lastChunkIndex};
+  }
+
+  /**
+   * r19: keep the sampling evidence of a frame the decoder rejected, so a later analysis can
+   * tell a STABLE sampling bias (same wrong pattern, or many identical bits, over and over)
+   * from varying sampling (every frame different). Purely local: raw bits come from the
+   * camera frame, never from the sender.
+   */
+  private noteDecodeFailure(capture: SingleBaselineCapture): void {
+    this.failureCount += 1;
+    const failure = capture.failure;
+    if (failure) {
+      this.failureFingerprints.set(
+        failure.fingerprint, (this.failureFingerprints.get(failure.fingerprint) ?? 0) + 1);
+      if (!failure.headerOk) this.failureHeaderInvalid += 1;
+      if (failure.failedAt === 'crc') this.failureCrcMismatch += 1;
+      this.failureRing.push(failure);
+      while (this.failureRing.length > SINGLE_BASELINE_FAILURE_RING) this.failureRing.shift();
+    }
+    const lock = capture.lock;
+    if (lock) {
+      const sample = singleBaselineGeometrySample(
+        lock, capture.diagnostics, capture.candidates, capture.refined);
+      // Keep the BEST-scoring rejected geometry: it is the closest the sampler came, and
+      // therefore the most informative frame about where the failure lives.
+      if (!this.worstFailureGeometry
+        || sample.refinementScore > this.worstFailureGeometry.refinementScore) {
+        this.worstFailureGeometry = sample;
+      }
+    }
   }
 
   /** G9: validate + deduplicate an already decoded OptiGrid frame. */

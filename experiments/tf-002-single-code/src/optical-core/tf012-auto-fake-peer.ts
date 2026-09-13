@@ -17,6 +17,7 @@
 import {
   validateTf012AutoControlMessage,
   type Tf012AutoEnvelope,
+  type Tf012AutoStep,
 } from './tf012-auto-plan.ts';
 import {
   createTf012AutoOrchestrator,
@@ -29,6 +30,7 @@ import {
   type Tf012AutoSenderSample,
   type Tf012AutoStepResult,
 } from './tf012-auto-orchestrator.ts';
+import {Tf012AutoCameraTimingTracker} from './tf012-auto-camera-timing.ts';
 
 export interface FakePeerOptions {
   startAt?: number;
@@ -106,6 +108,21 @@ export interface FakePeerOptions {
   stallOn?: (progress: Tf012AutoProgress) => boolean;
   /** How many stalls may be injected (default 1). */
   stallTimes?: number;
+  // ---- r19 evidence -----------------------------------------------------------
+  /** Synthetic per-frame processing duration fed to the camera timing model. */
+  frameProcessingMs?: number;
+  /** Fingerprint hash used for every rejected frame (a repeat = stable sampling). */
+  failureFingerprint?: string;
+  /** Bits reported as identical across all analysed failed frames. */
+  failureStableBits?: number;
+  /** Mean Hamming distance between consecutive failed frames. */
+  failureMeanBitFlip?: number;
+  /** Refinement score of the best rejected frame. */
+  failureRefinementScore?: number;
+  /** r19: run a different plan (the static probe) instead of the shipped A1..A5 sweep. */
+  steps?: readonly Tf012AutoStep[];
+  /** r19: mark the artefact as the short diagnostic probe. */
+  probe?: boolean;
 }
 
 /** One metric reset, recorded so tests can prove WHEN it happened. */
@@ -143,7 +160,9 @@ export interface FakePeer {
   resets: FakePeerReset[];  /** r18: the tick the abort was requested on, or null. */
   abortTick: () => number | null;
   /** r18: synthetic stalls injected, in order. */
-  stalls: Array<{tickIndex: number; ms: number}>;  /** r17: the tick index of the first command with this action, or -1. */
+  stalls: Array<{tickIndex: number; ms: number}>;
+  /** r19: the last raw failure sample the fake produced. */
+  failureFingerprint: () => {hash: string; raw: Uint8Array} | null;  /** r17: the tick index of the first command with this action, or -1. */
   tickOfAction: (action: string) => number;
   /** r17: live camera state the orchestrator reads. */
   cameraStatus: () => Tf012AutoCameraStatus;
@@ -181,6 +200,59 @@ export function createFakePeer(options: FakePeerOptions = {}): FakePeer {
     canvasDevicePx: 1020, canvasHash: 'aaaa', pausedAt: null, resumedAt: null,
   };
   const receiver = emptyReceiverSample();
+
+  // ---- r19 camera + failure evidence ------------------------------------------
+  /** Camera callback/processing timing, reset with the receiver metrics (the contract). */
+  const cameraTiming = new Tf012AutoCameraTimingTracker();
+  /** Frames the fake decoder rejected, with the fingerprint it rejected them under. */
+  let failureFingerprint: {hash: string; raw: Uint8Array} | null = null;
+
+  const noteFailure = (): void => {
+    receiver.crcDiagnostics.failedFrames += 1;
+    const hash = options.failureFingerprint ?? 'deadbeef';
+    receiver.crcDiagnostics.fingerprintHistogram[hash] =
+      (receiver.crcDiagnostics.fingerprintHistogram[hash] ?? 0) + 1;
+    receiver.crcDiagnostics.distinctFingerprints =
+      Object.keys(receiver.crcDiagnostics.fingerprintHistogram).length;
+    receiver.crcDiagnostics.topFingerprint = hash;
+    receiver.crcDiagnostics.topFingerprintCount = receiver.crcDiagnostics.fingerprintHistogram[hash] ?? 0;
+    receiver.crcDiagnostics.crcMismatchFrames += 1;
+    receiver.crcDiagnostics.analysedFrames += 1;
+    receiver.crcDiagnostics.analysedBitCount = 708 * 8;
+    if (options.failureStableBits !== undefined) {
+      receiver.crcDiagnostics.stableBitCount = options.failureStableBits;
+    }
+    if (options.failureMeanBitFlip !== undefined) {
+      receiver.crcDiagnostics.meanBitFlipVsPrevious = options.failureMeanBitFlip;
+    }
+    failureFingerprint = {hash, raw: new Uint8Array(8).fill(0) };
+    receiver.geometry = {
+      ...receiver.geometry,
+      failure: {
+        boundingBox: {x: 100, y: 200, width: 310, height: 310},
+        pixelsPerCell: 3.23, phaseX: 0.5, phaseY: 0.5, rotation: 0,
+        refinementScore: options.failureRefinementScore ?? 0.41,
+        reservedPatternScore: 0.966, contrast: 172, threshold: 128,
+        candidates: 6, seeds: 12, refined: 5, bestSeedScore: 0.9,
+        secondSeedScore: 0.7, selectedCandidate: 0, stage: 'G7c',
+        stageReason: 'crc-fail',
+      },
+    };
+  };
+
+  const noteSuccess = (index: number): void => {
+    receiver.geometry = {
+      ...receiver.geometry,
+      success: {
+        boundingBox: {x: 100, y: 200, width: 310, height: 310},
+        pixelsPerCell: 3.23, phaseX: 0.5, phaseY: 0.5, rotation: 0,
+        refinementScore: 0.99, reservedPatternScore: 0.999, contrast: 178, threshold: 128,
+        candidates: 6, seeds: 12, refined: 6, bestSeedScore: 0.99,
+        secondSeedScore: 0.8, selectedCandidate: 0, stage: 'G7d', stageReason: 'crc-pass',
+      },
+    };
+    void index;
+  };
 
   // ---- r17 camera model -------------------------------------------------------
   // The camera is a SEPARATE source from the optical link: it delivers frames on its own
@@ -231,6 +303,10 @@ export function createFakePeer(options: FakePeerOptions = {}): FakePeer {
   /** Frames the fake optical link delivered during the CURRENT step. */
   const receiveFrames = (): void => {
     if (!sender.broadcasting || !receiverAcceptsFrames()) return;
+    // r19: every delivered frame feeds the camera timing model too, using the host's own
+    // clock and a synthetic processing duration (options.frameProcessingMs).
+    cameraTiming.note(now, options.frameProcessingMs ?? 25);
+    receiver.cameraTiming = cameraTiming.snapshot();
     receiver.cameraFrames += FRAMES_PER_TICK;
     receiver.processedFrames += FRAMES_PER_TICK;
     receiver.decodeAttempts += FRAMES_PER_TICK;
@@ -255,6 +331,7 @@ export function createFakePeer(options: FakePeerOptions = {}): FakePeer {
         // An unusable setup: the locator finds the carrier but nothing decodes.
         receiver.crcFailures += FRAMES_PER_TICK;
         receiver.locateFailures += 2;
+        noteFailure();
         return;
       }
       receiver.successfulDecodes += 14;
@@ -262,6 +339,7 @@ export function createFakePeer(options: FakePeerOptions = {}): FakePeer {
       for (const index of accepted) {
         noteDecode(index);
         addIndex(index);
+        noteSuccess(index);
       }
       return;
     }
@@ -280,6 +358,8 @@ export function createFakePeer(options: FakePeerOptions = {}): FakePeer {
     runId: 'run-r14-test',
     buildId: 'tf012-r14-test',
     device: 'node-test-rig',
+    ...(options.steps ? {steps: options.steps} : {}),
+    ...(options.probe ? {probe: true} : {}),
     ports: {
       send: (message) => {
         const check = validateTf012AutoControlMessage(message);
@@ -352,6 +432,8 @@ export function createFakePeer(options: FakePeerOptions = {}): FakePeer {
       resetReceiverMetrics: () => {
         const fresh = emptyReceiverSample();
         Object.assign(receiver, fresh);
+        // The host resets its camera timing counters at the same boundary (r19 contract).
+        cameraTiming.reset();
         resets.push({tickIndex, now});
       },
       cameraStatus: (): Tf012AutoCameraStatus => ({
@@ -438,6 +520,7 @@ export function createFakePeer(options: FakePeerOptions = {}): FakePeer {
     resets,
     abortTick: () => abortTick,
     stalls,
+    failureFingerprint: () => failureFingerprint,
     tickOfAction: (action) => {
       const index = commands.findIndex((message) => String(message.action) === action);
       return index < 0 ? -1 : commandTicks[index] ?? -1;

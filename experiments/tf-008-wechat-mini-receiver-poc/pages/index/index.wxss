@@ -50,6 +50,7 @@
 .autobar .abtoken { flex: 0 0 34%; }
 .autobar .abmain { display: flex; gap: 12rpx; margin-top: 12rpx; }
 .autobar .abstart { flex: 1; text-align: center; font-size: 30rpx; font-weight: 800; color: #fff; background: #1d4ed8; padding: 20rpx 0; border-radius: 14rpx; }
+.autobar .abprobe { flex: 1; text-align: center; font-size: 26rpx; font-weight: 700; color: #fff; background: #0f766e; padding: 20rpx 0; border-radius: 14rpx; }
 .autobar .abstop { flex: 0 0 26%; text-align: center; font-size: 26rpx; font-weight: 700; color: #1e3a8a; background: #dbeafe; padding: 20rpx 0; border-radius: 14rpx; }
 .autobar .abrow { display: flex; gap: 10rpx; margin-top: 10rpx; align-items: flex-start; }
 .autobar .abk { flex: 0 0 26%; font-size: 22rpx; color: #1e40af; }

@@ -21,6 +21,7 @@ const {
   tf012AutoCommand,
   tf012AutoHelloMessage,
   createTf012AutoOrchestrator,
+  TF012_AUTO_PROBE_STEPS,
   TF012_AUTO_RECEIVER_ROLE,
   TF012_AUTO_SENDER_ROLE,
 } = require('./optical-core.js');
@@ -215,6 +216,8 @@ function createAutoTestRunner(options) {
   /** Last sender TELEMETRY (host clock); the freshness rule depends on it. */
   let telemetryAt = null;
   let resultUpload = 'pending';
+  /** r19: the plan this runner was started with (the A1..A5 sweep or the static probe). */
+  let lastRunOptions = {};
   let lastSenderSample = {
     mode: 'static', holdMs: null, cursor: null, paused: false, broadcasting: false,
     canvasDevicePx: null, canvasHash: null, pausedAt: null, resumedAt: null,
@@ -317,6 +320,32 @@ function createAutoTestRunner(options) {
     };
   }
 
+  /**
+   * Shared start path for both plans: same ports, same pre-flight, same deadlines.
+   */
+  const startWith = (planOptions) => {
+    if (orchestrator) return false;
+    lastRunOptions = planOptions;
+    orchestrator = createTf012AutoOrchestrator({
+      runId: runId || ('tf012-' + Date.now()),
+      buildId: buildId || null,
+      device: device || null,
+      ports: buildPorts(),
+      ...planOptions,
+    });
+    orchestrator.start(Date.now());
+    if (timer) clearInterval(timer);
+    timer = setInterval(() => {
+      if (!orchestrator) return;
+      orchestrator.tick(Date.now());
+      if (orchestrator.finalResult()) {
+        clearInterval(timer);
+        timer = null;
+      }
+    }, 250);
+    return true;
+  };
+
   return {
     connect: () => client.connect(),
     status: () => client.status(),
@@ -326,27 +355,14 @@ function createAutoTestRunner(options) {
     peerPresent: () => senderPeerPresent,
     telemetryAt: () => telemetryAt,
     uploadStatus: () => resultUpload,
-    /** Start the automated A1..A5 sequence. The run waits for the sender peer. */
-    start: () => {
-      if (orchestrator) return false;
-      orchestrator = createTf012AutoOrchestrator({
-        runId: runId || ('tf012-' + Date.now()),
-        buildId: buildId || null,
-        device: device || null,
-        ports: buildPorts(),
-      });
-      orchestrator.start(Date.now());
-      if (timer) clearInterval(timer);
-      timer = setInterval(() => {
-        if (!orchestrator) return;
-        orchestrator.tick(Date.now());
-        if (orchestrator.finalResult()) {
-          clearInterval(timer);
-          timer = null;
-        }
-      }, 250);
-      return true;
-    },
+    /**
+     * Shared start path for BOTH plans. Everything that differs between the A1..A5 sweep
+     * and the r19 static probe is a parameter, so the pre-flight, the confirmations and the
+     * evidence cannot diverge between them.
+     */
+    start: () => startWith({}),
+    /** r19: one 10 s STATIC chunk-0 hold — diagnostic evidence only. */
+    startProbe: () => startWith({steps: TF012_AUTO_PROBE_STEPS, probe: true}),
     abort: (reason, options) => {
       // r18: the host supplies the REAL instant and the source; without them the machine
       // has no clock of its own and r17 wrote a finish time in the past.
@@ -365,6 +381,8 @@ function createAutoTestRunner(options) {
       }
     },
     isRunning: () => Boolean(orchestrator) && !orchestrator.finalResult(),
+    /** r19: true when this runner is running the short static diagnostic probe. */
+    isProbe: () => lastRunOptions.probe === true,
     stepResults: () => (orchestrator ? orchestrator.stepResults() : []),
     finalResult: () => (orchestrator ? orchestrator.finalResult() : null),
     dispose: () => {
