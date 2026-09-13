@@ -16,7 +16,7 @@
     "lab:tunnel:tiled": "OPTILINK_LAB_PAGE=tiled node lab-tunnel.mjs",
     "lab:tunnel:tf007f": "node lab-tunnel-tf007f.mjs",
     "build": "tsc --noEmit && vite build",
-    "test": "node --test src/*.test.ts src/optical-core/*.test.ts && node --check lab-server-tf007f.mjs && node --check lab-tunnel-tf007f.mjs && node lab-tf007f-smoke.mjs",
+    "test": "node --test src/*.test.ts src/optical-core/*.test.ts && node --check lab-server-tf007f.mjs && node --check lab-tunnel-tf007f.mjs && node lab-tf007f-smoke.mjs && node lab-tf012-peer-smoke.mjs",
     "bench:headless": "playwright test carrier-bench.spec.mjs --config=playwright.config.mjs --reporter=line",
     "bench:tiled": "npm run bench:physical-selftest && playwright test tiled-carrier.spec.mjs --config=playwright.config.mjs --reporter=line",
     "bench:temporal": "playwright test tiled-temporal.spec.mjs --config=playwright.config.mjs --reporter=line",

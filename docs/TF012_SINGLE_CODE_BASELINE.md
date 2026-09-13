@@ -383,6 +383,78 @@ Every field is `null` when its denominator is 0. A run with no decode attempts h
 `null` (0/0 is undefined), **not** 0 %. These metrics are diagnostic: they rank
 PASSing points and **never decide PASS**.
 
+## r15 PEER DISCOVERY / 对端发现
+
+**Physical evidence (r14 build).** The PC showed `AUTO TEST CONTROL ONLINE` with
+`Control peer: WAITING FOR PHONE` and `sent 102` telemetry messages; the phone showed
+`WAITING FOR PC SENDER`. Both endpoints were connected to the coordinator, **neither was
+registered**, and nothing was relayed in either direction.
+
+**Root cause.** The endpoints announced themselves as `{type:'command', action:'HELLO'}`
+while the coordinator only registers roles on `{type:'hello'}`. The handshake therefore
+fell through to the *control* relay branch, where a client with no registered role is
+rejected — `policy-rejected: unknown role`. No registry entry ever existed, so:
+
+* the coordinator had no role to address peer notices to,
+* `TELEMETRY` from the PC was never delivered to the phone (this is also why r13 froze the
+  default sender sample on every step),
+* commands from the phone were never delivered to the PC,
+* both ends reported "connected but waiting for the peer" — forever.
+
+There was a second, independent defect: even for a valid hello the coordinator only told
+the **already-connected** side about the newcomer. Whoever connected second was never told
+about the first, so presence depended on connection order.
+
+**Fix — four distinct message classes, each with its own validator** (`tf012-auto-plan.ts`,
+shared by both endpoints and enforced by the relay):
+
+| Class | Shape | Validator |
+| --- | --- | --- |
+| handshake / registration | `{type:'hello', role, buildId?, runId?, planVersion?}` | `validateTf012AutoHelloMessage` |
+| peer presence notice | `{type:'peer', event:'hello'\|'bye', role}` | `validateTf012AutoPeerNotice` |
+| control / telemetry | `{type:'command', action, …}` | `validateTf012AutoControlMessage` (unchanged, strict) |
+| run result | `{type:'lab-result', run}` | `validateAutoLabResult` |
+
+Peer discovery is **never** fed to the control validator, and the control validator was
+**not** loosened: a `peer` notice and a `hello` are both invalid control messages, and a
+payload-shaped `hello` is rejected by the relay (`field chunkPayload is not allowed on
+hello`). The coordinator also accepts the legacy `{type:'command', action:'HELLO'}` spelling
+so a client's build cannot break the link on its own.
+
+**Order-independent presence** (`tf012-auto-peers.ts`, pure registry): on hello the relay
+
+1. tells every already-present peer that the newcomer arrived, **and**
+2. tells the newcomer about every peer already present,
+
+so both connection orders converge on the same state. On disconnect the survivor receives
+`{type:'peer', event:'bye', role}`.
+
+**Handshake progression on the phone** — only the last stage may start a run:
+
+```
+CONTROL ONLINE                      (socket to the coordinator)
+  ↓  {type:'peer', event:'hello', role:'tf012-auto-sender'}
+PEER FOUND / 已发现发送端
+  ↓  fresh TELEMETRY (≤1500 ms)
+SENDER CONNECTED / 发送端已连接     ← SETUP may begin
+```
+
+A peer hello alone is never enough: the r14 freshness rule is unchanged, so a peer with no
+fresh telemetry still reads `PEER FOUND, TELEMETRY STALE`.
+
+**PC panel.** `Control peer:` now reads `PHONE CONNECTED / 手机已连接 (N ms ago)` once the
+relay confirms the phone, and the telemetry row shows both directions
+(`TX 500 ms · sent N · RX M cmd`). While no peer is registered it still says
+`WAITING FOR PHONE / 等待手机`, and `no control channel` without `?lab=`.
+
+**Verification.** `tf012-auto-peer.test.ts` (10 cases: both directions for both connection
+orders, peer-without-telemetry still waiting, peer-with-telemetry connected, malformed peer
+messages ignored safely on both ends, no payload on the discovery path, and the two
+endpoints pinned to the canonical hello class) plus `lab-tf012-peer-smoke.mjs`, which boots
+the **real** `lab-server.mjs` and proves registration, both-order discovery, relayed
+control/telemetry, the `unknown role` refusal, the payload-hello refusal and the `bye`
+notice.
+
 ## r14 CONTROL-PLANE CORRECTNESS / 控制面正确性
 
 **Why r14 exists.** The first one-tap physical run produced a `COMPLETE` JSON for an

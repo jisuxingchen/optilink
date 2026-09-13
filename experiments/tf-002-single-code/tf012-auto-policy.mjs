@@ -14,6 +14,7 @@ import {
   TF012_AUTO_RECEIVER_ROLE,
   TF012_AUTO_SENDER_ROLE,
   validateTf012AutoControlMessage,
+  validateTf012AutoHelloMessage,
 } from './src/optical-core/tf012-auto-plan.ts';
 
 export {TF012_AUTO_RECEIVER_ROLE, TF012_AUTO_SENDER_ROLE};
@@ -33,14 +34,13 @@ function isRecord(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-/** HELLO must declare one of the two sanctioned roles. */
+/**
+ * HELLO must declare one of the two sanctioned roles. Delegates to the SHARED hello
+ * validator so the relay, the browser sender and the Mini Program agree on one definition
+ * — and so the handshake is never validated as a control envelope.
+ */
 export function allowTf012AutoHello(message) {
-  if (!isRecord(message)) return {ok: false, reason: 'hello must be an object'};
-  if (message.role !== TF012_AUTO_SENDER_ROLE && message.role !== TF012_AUTO_RECEIVER_ROLE) {
-    return {ok: false, reason: 'hello role is not a TF-012 auto-test role'};
-  }
-  const check = validateTf012AutoControlMessage({type: 'command', action: 'HELLO', ...message, type: undefined});
-  return check.ok ? {ok: true, reason: 'ok'} : {ok: false, reason: check.reason};
+  return validateTf012AutoHelloMessage(message);
 }
 
 /**

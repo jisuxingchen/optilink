@@ -34,6 +34,10 @@
       <view class="abstop" bindtap="onAutoTestStop">Stop / 停止</view>
     </view>
     <view class="abrow"><text class="abk">AUTO TEST</text><text class="abv">{{autoStepLabel}}</text></view>
+    <!-- r15 handshake stages: control socket, peer registration, telemetry freshness.
+         A peer HELLO alone must NOT read as "connected". -->
+    <view class="abrow"><text class="abk">peer</text><text class="abv">{{autoSenderPeerPresent}}</text></view>
+    <view class="abrow"><text class="abk">telemetry fresh</text><text class="abv">{{autoTelemetryFresh}}</text></view>
     <!-- r14 control-plane evidence: what was requested, whether the sender proved it,
          and how old the telemetry proving it is. -->
     <view class="abrow"><text class="abk">{{autoCommand}}</text><text class="abv">Sender confirmed: {{autoSenderConfirmed}}</text></view>

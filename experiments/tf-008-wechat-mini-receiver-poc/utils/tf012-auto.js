@@ -13,7 +13,9 @@
  */
 const {
   validateTf012AutoControlMessage,
+  validateTf012AutoPeerNotice,
   tf012AutoCommand,
+  tf012AutoHelloMessage,
   createTf012AutoOrchestrator,
   TF012_AUTO_RECEIVER_ROLE,
   TF012_AUTO_SENDER_ROLE,
@@ -94,6 +96,16 @@ function createControlClient(options) {
     return send(message);
   };
 
+  /**
+   * Register with the relay. r15: this is its OWN message class ({type:'hello'}), not a
+   * control envelope. Sending it as `{type:'command', action:'HELLO'}` — as r13/r14 did —
+   * meant the relay never registered the role, so nothing was ever relayed and both ends
+   * sat at "waiting for peer" while appearing connected.
+   */
+  const sendHello = () => send(tf012AutoHelloMessage(TF012_AUTO_RECEIVER_ROLE, {
+    runId: null, buildId: options.buildId || null, planVersion: null,
+  }));
+
   const send = (message) => {
     if (!connected || !socket) return false;
     try {
@@ -123,9 +135,7 @@ function createControlClient(options) {
       status.connected = true;
       status.lastError = null;
       if (onLog) onLog('control channel open');
-      publish(tf012AutoCommand('HELLO', {
-        role: TF012_AUTO_RECEIVER_ROLE, runId: null, buildId: null, planVersion: null,
-      }));
+      sendHello();
       if (onStatus) onStatus({...status});
     });
     socket.onMessage((event) => {
@@ -167,6 +177,7 @@ function createControlClient(options) {
     connect,
     publish,
     publishResult,
+    sendHello,
     status: () => ({...status}),
     close: () => {
       if (socket) socket.close({});
@@ -188,11 +199,13 @@ function createAutoTestRunner(options) {
     url, token, buildId, device, runId,
     receiverSample, resetReceiverMetrics,
     onProgress, onStepResult, onRunResult, onStatus, onLog,
-    setDeclaredHoldMs, onUploadStatus,
+    setDeclaredHoldMs, onUploadStatus, onPeerChange,
   } = options;
 
   let orchestrator = null;
   let timer = null;
+  /** Relay-confirmed sender peer present (see the peer notice handler). */
+  let senderPeerPresent = false;
   /** Relay-confirmed sender HELLO (host clock) — NOT the phone's own socket state. */
   let senderHelloAt = null;
   /** Last sender TELEMETRY (host clock); the freshness rule depends on it. */
@@ -204,15 +217,24 @@ function createAutoTestRunner(options) {
   };
 
   const client = createControlClient({
-    url, token,
+    url, token, buildId,
     onMessage: (message) => {
       if (!message || typeof message !== 'object') return;
-      // Relay notices: a peer hello names the role that announced itself, and the
-      // result-saved / policy-rejected events tell us whether the run JSON landed.
-      if (message.type === 'peer' && message.event === 'hello') {
+      // r15 — MESSAGE CLASS 2: peer presence. Checked BEFORE the "must be a command"
+      // filter, because a presence notice is deliberately not a command. r14's code could
+      // never reach its `type === 'peer'` branch for exactly that reason.
+      const notice = validateTf012AutoPeerNotice(message);
+      if (notice.ok) {
         if (message.role === TF012_AUTO_SENDER_ROLE) {
-          senderHelloAt = Date.now();
-          if (onLog) onLog('sender HELLO confirmed by relay');
+          if (message.event === 'hello') {
+            senderPeerPresent = true;
+            senderHelloAt = Date.now();
+            if (onLog) onLog('sender peer confirmed by relay');
+          } else {
+            senderPeerPresent = false;
+            if (onLog) onLog('sender peer left');
+          }
+          if (onPeerChange) onPeerChange({senderPeerPresent, senderHelloAt});
         }
         return;
       }
@@ -225,15 +247,12 @@ function createAutoTestRunner(options) {
           resultUpload = 'failed';
           if (onUploadStatus) onUploadStatus(resultUpload);
           if (onLog) onLog('lab rejected a message: ' + String(message.reason));
+        } else if (message.event === 'registered') {
+          if (onLog) onLog('registered with the lab as ' + String(message.role));
         }
         return;
       }
       if (message.type !== 'command') return;
-      if (message.action === 'HELLO' && message.role === TF012_AUTO_SENDER_ROLE) {
-        senderHelloAt = Date.now();
-        if (onLog) onLog('sender connected');
-        return;
-      }
       // The sender reports telemetry; the orchestrator owns everything else.
       if (message.action === 'TELEMETRY') {
         telemetryAt = Date.now();
@@ -267,8 +286,7 @@ function createAutoTestRunner(options) {
         controlConnected: () => client.status().connected,
         senderHelloAt: () => senderHelloAt,
         telemetryAt: () => telemetryAt,
-      },
-      onStepResult: (result) => {
+      },      onStepResult: (result) => {
         if (onStepResult) onStepResult(result);
       },
       onRunResult: (result) => {
@@ -295,6 +313,8 @@ function createAutoTestRunner(options) {
     status: () => client.status(),
     senderSample: () => ({...lastSenderSample}),
     senderHelloAt: () => senderHelloAt,
+    /** r15: relay-confirmed sender peer present (peer discovery, not command traffic). */
+    peerPresent: () => senderPeerPresent,
     telemetryAt: () => telemetryAt,
     uploadStatus: () => resultUpload,
     /** Start the automated A1..A5 sequence. The run waits for the sender peer. */

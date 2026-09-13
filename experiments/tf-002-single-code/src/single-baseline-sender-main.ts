@@ -691,11 +691,13 @@ function renderAutoPanel(): void {
   // r14: the PC must show what the phone ASKED FOR next to what the carrier actually
   // does, so a control-plane failure is visible here instead of only on the phone.
   if (autoPeerCell) {
+    // r15: presence comes from the relay's peer notice, so the label is explicit about
+    // which side is missing instead of a generic wait.
     autoPeerCell.textContent = !client
       ? 'no control channel'
-      : client.peerSeenAt == null
-        ? 'WAITING FOR PHONE / 等待手机'
-        : `${Date.now() - client.peerSeenAt} ms ago / 手机在线`;
+      : client.peerConnected
+        ? `PHONE CONNECTED / 手机已连接 (${Date.now() - (client.peerSeenAt ?? Date.now())} ms ago)`
+        : 'WAITING FOR PHONE / 等待手机';
   }
   const localExpected = client ? null : localAutoExpectedState(sample);
   const localSample: Tf012AutoSenderState = {
@@ -732,7 +734,7 @@ function renderAutoPanel(): void {
   }
   if (autoTelemetryCell) {
     autoTelemetryCell.textContent = client
-      ? `TELEMETRY ${AUTO_TELEMETRY_INTERVAL_MS} ms · sent ${client.telemetrySent}`
+      ? `TX ${AUTO_TELEMETRY_INTERVAL_MS} ms · sent ${client.telemetrySent} · RX ${client.peerMessages} cmd`
       : 'not running / 未运行';
   }
 }

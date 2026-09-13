@@ -11,9 +11,11 @@
 import {
   TF012_AUTO_SENDER_ROLE,
   tf012AutoCommand,
+  tf012AutoHelloMessage,
   tf012AutoSenderStateLabel,
   tf012AutoSenderStateMismatch,
   validateTf012AutoControlMessage,
+  validateTf012AutoPeerNotice,
   type Tf012AutoEnvelope,
   type Tf012AutoSenderState,
 } from './optical-core/tf012-auto-plan.ts';
@@ -66,6 +68,8 @@ export interface Tf012AutoClientStatus {
   peerConnected: boolean;
   /** Host-clock timestamp of the last inbound message from the phone, or null. */
   peerSeenAt: number | null;
+  /** Messages received FROM the phone (control), for the panel's RX readout. */
+  peerMessages: number;
   /** The state the phone last REQUESTED, as a phrase such as "CYCLIC 1000 ms". */
   requestedLabel: string;
   /** The sender's live state, same vocabulary. */
@@ -90,7 +94,7 @@ export function createTf012AutoSenderClient(options: Tf012AutoSenderClientOption
   let stepId: string | null = null;
   const status: Tf012AutoClientStatus = {
     connected: false, url: options.url, runId: null, stepId: null, phase: 'IDLE',
-    peerConnected: false, peerSeenAt: null,
+    peerConnected: false, peerSeenAt: null, peerMessages: 0,
     requestedLabel: '—', actualLabel: '—', requestedConfirmed: false, requestedMismatch: null,
     lastRejected: null, telemetrySent: 0, commandsApplied: 0,
   };
@@ -164,6 +168,7 @@ export function createTf012AutoSenderClient(options: Tf012AutoSenderClientOption
     // Any inbound control message proves the phone is on the other end.
     status.peerSeenAt = Date.now();
     status.peerConnected = true;
+    status.peerMessages += 1;
     if (action === 'HELLO') {
       status.connected = true;
       options.onStatus?.({...status});
@@ -246,27 +251,39 @@ export function createTf012AutoSenderClient(options: Tf012AutoSenderClientOption
     }
     socket.addEventListener('open', () => {
       status.connected = true;
-      publish(tf012AutoCommand('HELLO', {
-        role: TF012_AUTO_SENDER_ROLE,
+      // r15: the handshake is its OWN message class ({type:'hello'}), never a control
+      // envelope. The relay registers the role from this message; sending it as
+      // `{type:'command', action:'HELLO'}` is what left both ends unregistered in r14.
+      socket?.send(JSON.stringify(tf012AutoHelloMessage(TF012_AUTO_SENDER_ROLE, {
         buildId: options.buildId ?? null,
         runId: null,
         planVersion: null,
-      }));
+      })));
       if (telemetryTimer !== null) window.clearInterval(telemetryTimer);
       telemetryTimer = window.setInterval(sendTelemetry, telemetryIntervalMs);
       options.onStatus?.({...status});
     });
     socket.addEventListener('message', (event) => {
       try {
-        const parsed = JSON.parse(String(event.data));
-        // The relay announces the phone's handshake: that, not our own socket state, is
-        // what tells the PC panel that a real control peer exists.
-        if (parsed && parsed.type === 'peer' && parsed.event === 'hello') {
-          status.peerSeenAt = Date.now();
-          status.peerConnected = true;
+        const parsed: unknown = JSON.parse(String(event.data));
+        // MESSAGE CLASS 2: peer presence. Handled by its own validator and NEVER fed to
+        // the control validator — a `{type:'peer'}` notice is not a control envelope.
+        const notice = validateTf012AutoPeerNotice(parsed);
+        if (notice.ok) {
+          const peer = parsed as {event: string};
+          if (peer.event === 'hello') {
+            status.peerConnected = true;
+            status.peerSeenAt = Date.now();
+          } else {
+            status.peerConnected = false;
+          }
           options.onStatus?.({...status});
           return;
         }
+        // Anything else that is not a control envelope is ignored, never "validated as
+        // control" and never able to mutate state.
+        const envelope = parsed as {type?: unknown};
+        if (envelope?.type !== 'command') return;
         apply(parsed);
       } catch {
         status.lastRejected = 'malformed JSON';

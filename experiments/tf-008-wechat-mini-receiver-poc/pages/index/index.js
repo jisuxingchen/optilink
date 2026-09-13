@@ -350,6 +350,8 @@ Page({
     autoRunStatus: 'Run: IDLE / 未开始',
     autoControlStatus: 'Control: OFFLINE / 控制通道未连接',
     autoHandshake: 'WAITING FOR PC SENDER / 等待电脑发送端',
+    autoSenderPeerPresent: 'NO PEER / 未发现发送端',
+    autoTelemetryFresh: 'NO / 无',
     autoCommand: 'Command: —',
     autoSenderConfirmed: 'NO / 未确认',
     autoSenderMismatch: '—',
@@ -1216,6 +1218,9 @@ Page({
       onStepResult: (result) => this.onAutoStepResult(result),
       onRunResult: (result) => this.onAutoRunResult(result),
       onUploadStatus: (status) => this.onAutoUploadStatus(status),
+      onPeerChange: (peer) => this.setData({autoSenderPeerPresent: peer.senderPeerPresent
+        ? 'PEER FOUND / 已发现发送端'
+        : 'NO PEER / 未发现发送端'}),
       onLog: (text) => this.appendLog('auto: ' + text),
       // Control-channel health is its OWN field: it must never overwrite the run status.
       onStatus: (status) => this.setData({autoConnected: status.connected,
@@ -1255,13 +1260,15 @@ Page({
       : progress.status === 'WAITING_FOR_SENDER'
         ? 'Run: WAITING FOR PC SENDER / 等待电脑发送端'
         : 'Run: ' + progress.status;
+    // The handshake progression, in order: control socket, peer registration, fresh
+    // telemetry. Only the last stage may start a run — a peer HELLO alone is not enough.
     const handshake = !progress.senderConnected
       ? 'WAITING FOR PC SENDER / 等待电脑发送端'
       : !progress.senderHello
-        ? 'CONTROL ONLINE, NO SENDER HELLO / 已连接，未见发送端握手'
-        : progress.telemetryFresh
-          ? 'SENDER CONNECTED / 发送端已连接'
-          : 'SENDER TELEMETRY STALE / 发送端遥测延迟';
+        ? 'CONTROL ONLINE, NO PEER / 控制通道在线，未发现发送端'
+        : !progress.telemetryFresh
+          ? 'PEER FOUND, TELEMETRY STALE / 已发现发送端，遥测过期'
+          : 'SENDER CONNECTED / 发送端已连接';
     return {
       autoRunning: progress.phase !== 'DONE' && progress.phase !== 'ABORTED',
       autoPhase: progress.phase,
@@ -1274,6 +1281,8 @@ Page({
       autoSenderConnected: progress.senderConnected,
       autoRunStatus: runStatus,
       autoHandshake: handshake,
+      autoSenderPeerPresent: progress.senderHello ? 'PEER FOUND / 已发现发送端' : 'NO PEER / 未发现发送端',
+      autoTelemetryFresh: progress.telemetryFresh ? 'FRESH / 新鲜' : 'NO / 无',
       autoCommand: 'Command: ' + progress.requested,
       autoSenderConfirmed: progress.senderConfirmed ? 'YES / 已确认' : 'NO / 未确认',
       autoSenderMismatch: progress.senderMismatch || '—',

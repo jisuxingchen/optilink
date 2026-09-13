@@ -212,6 +212,119 @@ export function tf012AutoSenderStateMismatch(
 export const TF012_AUTO_SENDER_ROLE = 'tf012-auto-sender';
 export const TF012_AUTO_RECEIVER_ROLE = 'tf012-auto-receiver';
 
+// ---------------------------------------------------------------------------
+// Message CLASSES on the control channel (r15)
+// ---------------------------------------------------------------------------
+//
+// r13/r14 sent the handshake as `{type:'command', action:'HELLO'}` while the relay only
+// registered roles on `{type:'hello'}`. The result was reproduced physically: both ends
+// were connected, neither was registered, and every relayed message was rejected as
+// `unknown role` — no telemetry reached the phone and no command reached the PC.
+//
+// There are now FOUR distinct classes, each with its own validator. Peer discovery is
+// never fed to the control validator, and the control validator is never loosened:
+//
+//   1. handshake/registration : {type:'hello', role}
+//   2. peer presence notice   : {type:'peer', event:'hello'|'bye', role}
+//   3. control/telemetry      : {type:'command', action, ...}   (strict allowlist)
+//   4. run result             : {type:'lab-result', run}
+
+export type Tf012AutoHelloRole = typeof TF012_AUTO_SENDER_ROLE | typeof TF012_AUTO_RECEIVER_ROLE;
+
+/** Fields allowed on a registration hello. Flat, tiny, no room for payload. */
+export const TF012_AUTO_HELLO_FIELDS: readonly string[] =
+  ['type', 'role', 'buildId', 'runId', 'planVersion'];
+
+/** Fields allowed on a presence notice — the relay constructs these itself. */
+export const TF012_AUTO_PEER_FIELDS: readonly string[] = ['type', 'event', 'role'];
+
+export function isTf012AutoRole(value: unknown): value is Tf012AutoHelloRole {
+  return value === TF012_AUTO_SENDER_ROLE || value === TF012_AUTO_RECEIVER_ROLE;
+}
+
+/** The opposite end of a two-role link; null for anything that is not a role. */
+export function tf012AutoPeerRole(role: unknown): Tf012AutoHelloRole | null {
+  if (role === TF012_AUTO_SENDER_ROLE) return TF012_AUTO_RECEIVER_ROLE;
+  if (role === TF012_AUTO_RECEIVER_ROLE) return TF012_AUTO_SENDER_ROLE;
+  return null;
+}
+
+/**
+ * Is this a registration hello? Accepts the canonical `{type:'hello'}` spelling AND the
+ * legacy `{type:'command', action:'HELLO'}` one, so the coordinator can register a client
+ * without depending on which build it is running.
+ */
+export function isTf012AutoHelloMessage(message: unknown): boolean {
+  if (!isPlainRecord(message)) return false;
+  if (message.type === 'hello') return true;
+  return message.type === 'command' && message.action === 'HELLO';
+}
+
+/** Validate a registration hello (own rules — NOT the control envelope allowlist). */
+export function validateTf012AutoHelloMessage(message: unknown): Tf012AutoValidation {
+  if (!isPlainRecord(message)) return {ok: false, reason: 'hello must be a JSON object'};
+  const canonical = message.type === 'hello';
+  if (!canonical && !(message.type === 'command' && message.action === 'HELLO')) {
+    return {ok: false, reason: 'not a handshake message'};
+  }
+  if (!isTf012AutoRole(message.role)) {
+    return {ok: false, reason: `hello role ${String(message.role)} is not a TF-012 auto-test role`};
+  }
+  for (const key of Object.keys(message)) {
+    const allowed = canonical ? TF012_AUTO_HELLO_FIELDS
+      : [...TF012_AUTO_HELLO_FIELDS, 'action'];
+    if (!allowed.includes(key)) return {ok: false, reason: `field ${key} is not allowed on hello`};
+  }
+  for (const [key, value] of Object.entries(message)) {
+    if (value === null || value === undefined) continue;
+    if (typeof value === 'object') return {ok: false, reason: `${key} must not be an object`};
+    if (typeof value === 'string' && value.length > TF012_AUTO_MAX_STRING_LENGTH) {
+      return {ok: false, reason: `${key} exceeds the control-channel string budget`};
+    }
+  }
+  return {ok: true, reason: 'ok'};
+}
+
+/** Build the canonical registration hello. Throws on an illegal one. */
+export function tf012AutoHelloMessage(
+  role: Tf012AutoHelloRole,
+  fields: Record<string, unknown> = {},
+): {type: 'hello'; role: Tf012AutoHelloRole; [key: string]: unknown} {
+  const message = {type: 'hello' as const, role, ...fields};
+  const check = validateTf012AutoHelloMessage(message);
+  if (!check.ok) throw new Error(`Illegal TF-012 auto hello: ${check.reason}`);
+  return message;
+}
+
+/** A presence notice, built by the relay and accepted by both endpoints. */
+export function tf012AutoPeerNotice(
+  event: 'hello' | 'bye',
+  role: Tf012AutoHelloRole,
+): {type: 'peer'; event: 'hello' | 'bye'; role: Tf012AutoHelloRole} {
+  return {type: 'peer', event, role};
+}
+
+/**
+ * Validate a presence notice. Deliberately tiny: a notice may only ever say which of the
+ * two roles arrived or left. Anything else is ignored (and never validated as control).
+ */
+export function validateTf012AutoPeerNotice(message: unknown): Tf012AutoValidation {
+  if (!isPlainRecord(message)) return {ok: false, reason: 'peer notice must be a JSON object'};
+  if (message.type !== 'peer') return {ok: false, reason: 'not a peer notice'};
+  if (message.event !== 'hello' && message.event !== 'bye') {
+    return {ok: false, reason: `unknown peer event ${String(message.event)}`};
+  }
+  if (!isTf012AutoRole(message.role)) {
+    return {ok: false, reason: `peer role ${String(message.role)} is not a TF-012 auto-test role`};
+  }
+  for (const key of Object.keys(message)) {
+    if (!TF012_AUTO_PEER_FIELDS.includes(key)) {
+      return {ok: false, reason: `field ${key} is not allowed on a peer notice`};
+    }
+  }
+  return {ok: true, reason: 'ok'};
+}
+
 export type Tf012AutoCommandAction =
   | 'HELLO'
   | 'SET_MODE'
