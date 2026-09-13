@@ -340,7 +340,7 @@ Page({
     historyMax: HISTORY_MAX,
     historyCount: 0,
     // TF-012 r13 AUTO PHYSICAL TEST state (one-tap run).
-    autoControlUrl: '',
+    autoControlUrl: 'ws://192.168.1.164:5173/lab',
     autoControlToken: '',
     autoConnected: false,
     autoRunning: false,
