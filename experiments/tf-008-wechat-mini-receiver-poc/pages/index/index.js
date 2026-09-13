@@ -378,6 +378,20 @@ Page({
     autoFinalJson: '',
     autoSetupLabel: '—',
     autoSetupReasons: '—',
+    // r17 PRE-FLIGHT: the five prerequisites (camera, control, peer, telemetry, sender)
+    // must all read READY before SETUP measuring starts; the window rows below always
+    // label the time span they belong to.
+    autoPrereqCamera: 'WAITING / 等待',
+    autoPrereqControl: 'OFFLINE / 未连接',
+    autoPrereqPeer: 'NONE / 未发现',
+    autoPrereqTelemetry: 'STALE / 过期',
+    autoPrereqSender: 'WAITING / 等待',
+    autoCameraDetail: 'not probed yet',
+    autoSetupConfirmed: 'NO / 未确认',
+    autoSetupCountdown: '—',
+    autoSetupWindowSpan: 'not measured',
+    autoSetupWindowCounters: '—',
+    autoSetupWindowOptics: '—',
     holdMsDeclarationLocked: false,
     autoHarnessError: autoHarnessLoadError,
     autoPlanSteps: TF012_AUTO_STEP_COUNT,
@@ -826,6 +840,12 @@ Page({
     this.receivedFrames++;
     this.windowReceived++;
     this.lastFrameAt = now;
+    // r17 AUTO-TEST ACQUISITION COUNTER. Deliberately NOT reset by resetMetrics():
+    // the harness must prove frames are arriving DURING THIS RUN, so it reads a
+    // monotonic sequence and takes deltas. Frames delivered before the run began are
+    // history, not acquisition.
+    this.autoCameraFrameSeq = (this.autoCameraFrameSeq || 0) + 1;
+    this.autoCameraLastFrameAt = now;
 
     // First frame proves the callback is actually live.
     if (!this.data.callbackActive) {
@@ -944,6 +964,12 @@ Page({
       this.recordError('baseline_receiver_unavailable');
       return;
     }
+    // r17: counted AFTER the pipeline check, because this counter answers a different
+    // question from baselineFramesReceived — "is the receiver the setup gate reads
+    // actually being fed?" A page in another mode delivers camera frames all day while
+    // this stays at zero, which is exactly how a camera fault was reported as an
+    // OPTICAL fault in r15b.
+    this.autoBaselineFrameSeq = (this.autoBaselineFrameSeq || 0) + 1;
     if (this.baselineBusy) {
       this.baselinePending = { buffer, width, height };
       this.baselineFramesReplaced++;
@@ -1181,7 +1207,39 @@ Page({
     this.resetMetrics();
   },
 
-  /** One tap: connect the control channel and run the automated sequence. */
+  /**
+   * Live CAMERA-ACQUISITION state for the auto harness (r17).
+   *
+   * Local counters and a host timestamp only: no image data, no network. `baselineFrames`
+   * counts frames that actually entered the single-code baseline receiver, so the harness
+   * can tell "the viewfinder is live" apart from "the pipeline the setup gate reads is
+   * being fed" — the distinction whose absence produced a false optical verdict in r15b.
+   */
+  autoCameraStatus() {
+    return {
+      listening: Boolean(this.frameListener) && Boolean(this.data.running),
+      callbackActive: Boolean(this.data.callbackActive),
+      framesReceived: this.autoCameraFrameSeq || 0,
+      baselineFrames: this.autoBaselineFrameSeq || 0,
+      lastFrameAt: this.autoCameraLastFrameAt || null
+    };
+  },
+
+  /**
+   * One tap: prepare the receiver, connect the control channel and run the sequence.
+   *
+   * r17 PRE-FLIGHT. The tap now guarantees the two things the setup gate depends on that
+   * the PO should never have to arrange by hand:
+   *
+   *   1. the page is in SINGLE-CODE BASELINE mode — the only mode whose receiver the gate
+   *      reads. In receive/benchmark mode the camera can be perfectly live while the
+   *      baseline receiver stays at zero, which is what r15b's run hit;
+   *   2. the camera frame listener is running. The orchestrator then WAITS for proof that
+   *      frames are arriving into that pipeline before it issues SETUP, so the 5 s setup
+   *      window can never be spent on a dark pipeline.
+   *
+   * Still exactly one tap: everything below happens before the runner is created.
+   */
   onAutoTest() {
     if (this.autoRunner && this.autoRunner.isRunning()) {
       wx.showToast({title: 'Auto test already running / 自动测试进行中', icon: 'none'});
@@ -1198,6 +1256,16 @@ Page({
       wx.showToast({title: 'Set the control channel URL first / 请先填写控制地址', icon: 'none'});
       return;
     }
+    // The auto plan is a SINGLE-CODE BASELINE plan: switch the page first, then start the
+    // camera. Both are idempotent, so a second tap never disturbs a running session.
+    if (this.data.mode !== 'baseline') {
+      this.setMode('baseline');
+      this.appendLog('AUTO TEST pre-flight: switched to single-code baseline / 已切换到单码基线');
+    }
+    if (!this.data.running) {
+      this.startCamera();
+      this.appendLog('AUTO TEST pre-flight: camera start requested / 已请求启动相机');
+    }
     const runner = createAutoTestRunner({
       url,
       token: this.data.autoControlToken || '',
@@ -1205,6 +1273,7 @@ Page({
       device: this.data.deviceLabel || null,
       receiverSample: () => this.autoStepReceiverSample(),
       resetReceiverMetrics: () => this.autoResetMetrics(),
+      cameraStatus: () => this.autoCameraStatus(),
       setDeclaredHoldMs: (holdMs) => {
         // The phone declaration follows the ACTIVE STEP automatically. Static steps
         // declare no hold time; the sender is told the same thing by the orchestrator.
@@ -1261,14 +1330,31 @@ Page({
         ? 'Run: WAITING FOR PC SENDER / 等待电脑发送端'
         : 'Run: ' + progress.status;
     // The handshake progression, in order: control socket, peer registration, fresh
-    // telemetry. Only the last stage may start a run — a peer HELLO alone is not enough.
+    // telemetry, live camera acquisition. Only the last stage may start a run — a peer
+    // HELLO alone is not enough, and neither is a sender peer without a camera pipeline.
     const handshake = !progress.senderConnected
       ? 'WAITING FOR PC SENDER / 等待电脑发送端'
       : !progress.senderHello
         ? 'CONTROL ONLINE, NO PEER / 控制通道在线，未发现发送端'
         : !progress.telemetryFresh
           ? 'PEER FOUND, TELEMETRY STALE / 已发现发送端，遥测过期'
-          : 'SENDER CONNECTED / 发送端已连接';
+          : !progress.cameraReady
+            ? 'PEER READY, WAITING FOR CAMERA / 发送端就绪，等待相机'
+            : 'SENDER CONNECTED / 发送端已连接';
+    // r17 PRE-FLIGHT READINESS: the five prerequisites the PO must be able to CHECK
+    // before SETUP measuring begins. Each is evidence, not an optimistic label.
+    const prereqCamera = progress.cameraReady ? 'READY / 就绪' : 'WAITING / 等待';
+    const prereqControl = progress.senderConnected ? 'ONLINE / 在线' : 'OFFLINE / 未连接';
+    const prereqPeer = progress.senderHello ? 'FOUND / 已发现' : 'NONE / 未发现';
+    const prereqTelemetry = progress.telemetryFresh ? 'FRESH / 新鲜' : 'STALE / 过期';
+    const prereqSender = progress.setupConfirmed
+      ? 'CONFIRMED / 已确认'
+      : progress.senderConfirmed ? 'CONFIRMED / 已确认' : 'WAITING / 等待';
+    const setupCountdown = progress.setupWindowOpen
+      ? 'SETUP MEASURING ' + Math.max(0, Math.ceil(progress.remainingMs / 1000)) + '...'
+      : progress.phase === 'CONFIRMING_SETUP'
+        ? 'WAITING FOR SENDER CONFIRMATION / 等待发送端确认'
+        : '—';
     return {
       autoRunning: progress.phase !== 'DONE' && progress.phase !== 'ABORTED',
       autoPhase: progress.phase,
@@ -1281,6 +1367,15 @@ Page({
       autoSenderConnected: progress.senderConnected,
       autoRunStatus: runStatus,
       autoHandshake: handshake,
+      // Pre-flight block: CAMERA / CONTROL / PEER / TELEMETRY / SENDER, then the window.
+      autoPrereqCamera: prereqCamera,
+      autoPrereqControl: prereqControl,
+      autoPrereqPeer: prereqPeer,
+      autoPrereqTelemetry: prereqTelemetry,
+      autoPrereqSender: prereqSender,
+      autoCameraDetail: progress.cameraDetail,
+      autoSetupConfirmed: progress.setupConfirmed ? 'YES / 已确认' : 'NO / 未确认',
+      autoSetupCountdown: setupCountdown,
       autoSenderPeerPresent: progress.senderHello ? 'PEER FOUND / 已发现发送端' : 'NO PEER / 未发现发送端',
       autoTelemetryFresh: progress.telemetryFresh ? 'FRESH / 新鲜' : 'NO / 无',
       autoCommand: 'Command: ' + progress.requested,
@@ -1320,6 +1415,7 @@ Page({
     this.autoFinalResult = result;
     const validity = result.validity || {valid: false, checks: []};
     const failed = (validity.checks || []).filter((check) => !check.ok);
+    const setupWindow = result.setupGate ? result.setupGate.evidenceWindow : null;
     this.setData({
       autoRunning: false,
       autoRunStatus: result.status === 'COMPLETE'
@@ -1333,19 +1429,56 @@ Page({
       autoSetupLabel: result.setupGate ? result.setupGate.label : '—',
       autoSetupReasons: result.setupGate && result.setupGate.reasons.length
         ? result.setupGate.reasons.join('; ')
-        : 'none'
+        : 'none',
+      // r17: exactly the window the gate was evaluated over, so the numbers on screen
+      // cannot silently come from a different time span than the verdict.
+      autoSetupWindowSpan: setupWindow
+        ? setupWindow.startedAtIso + ' → ' + setupWindow.finishedAtIso + ' (' + setupWindow.durationMs + ' ms)'
+        : 'not measured (run ended before the setup window opened)',
+      autoSetupWindowCounters: setupWindow
+        ? 'frames=' + setupWindow.cameraFrames
+          + ' processed=' + setupWindow.processedFrames
+          + ' decodeAttempts=' + setupWindow.decodeAttempts
+          + ' ok=' + setupWindow.successfulDecodes
+          + ' crc=' + setupWindow.crcFailures
+          + ' locate=' + setupWindow.locateFailures
+        : '—',
+      autoSetupWindowOptics: setupWindow
+        ? 'codePx=' + setupWindow.observedCodeWidthPx
+          + ' px/cell=' + setupWindow.pixelsPerCell
+          + ' reserved=' + setupWindow.reservedPatternScore
+          + ' contrast=' + setupWindow.contrast
+        : '—'
     });
     this.refreshAutoFinalJson();
-    if (result.status === 'SETUP_NOT_READY') {
+    if (result.status === 'CAMERA_NOT_READY') {
+      // An acquisition fault is NOT an optical verdict: say which one it is, with the
+      // camera counters as the evidence.
+      const camera = this.autoCameraStatus();
+      wx.showModal({
+        title: 'CAMERA NOT READY / 相机未就绪',
+        content: 'status=' + result.status
+          + '\ncamera frames=' + camera.framesReceived
+          + ' baseline pipeline=' + camera.baselineFrames
+          + '\nlistener=' + String(camera.listening)
+          + ' callbackActive=' + String(camera.callbackActive)
+          + '\npage mode=' + this.data.mode
+          + '\nsetup window=' + this.data.autoSetupWindowCounters
+          + '\n' + (result.setupGate && result.setupGate.reasons.length
+            ? result.setupGate.reasons.join('\n') : 'see JSON'),
+        showCancel: false
+      });
+    } else if (result.status === 'SETUP_NOT_READY') {
       wx.showModal({
         title: 'SETUP NOT READY / 取景条件未就绪',
-        content: 'observedCodeWidthPx=' + this.autoStepReceiverSample().observedCodeWidthPx
-          + '\npixelsPerCell=' + this.autoStepReceiverSample().pixelsPerCellX
-          + '\nreservedPatternScore=' + this.autoStepReceiverSample().reservedPatternScore
-          + '\ncontrast=' + this.autoStepReceiverSample().contrast
-          + '\nsuccessfulDecodes=' + this.autoStepReceiverSample().successfulDecodes
-          + '\ncrcFailures=' + this.autoStepReceiverSample().crcFailures
-          + '\nlocateFailures=' + this.autoStepReceiverSample().locateFailures,
+        // The modal shows the SAME sample the gate used. r15b displayed live counters
+        // here (4000+ decodes) next to a gate verdict of zero, because the two were from
+        // different windows and neither was labelled.
+        content: 'setup window ' + this.data.autoSetupWindowSpan
+          + '\n' + this.data.autoSetupWindowCounters
+          + '\n' + this.data.autoSetupWindowOptics
+          + '\n' + (result.setupGate && result.setupGate.reasons.length
+            ? result.setupGate.reasons.join('\n') : 'see JSON'),
         showCancel: false
       });
     } else if (!validity.valid) {

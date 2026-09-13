@@ -21,6 +21,7 @@ import {
 import {
   createTf012AutoOrchestrator,
   emptyReceiverSample,
+  type Tf012AutoCameraStatus,
   type Tf012AutoProgress,
   type Tf012AutoReceiverSample,
   type Tf012AutoRunResult,
@@ -62,6 +63,40 @@ export interface FakePeerOptions {
   /** Extra control messages injected at a given tick index (for hostile-input tests). */
   injectAtTick?: number;
   inject?: (context: FakePeerContext) => void;
+
+  // ---- r17 camera acquisition -------------------------------------------------
+  /** The frame listener exists and was started. False = the phone never started it. */
+  cameraListening?: boolean;
+  /** At least one CameraFrame callback has fired. False = the view is dead. */
+  cameraCallbackActive?: boolean;
+  /** Camera frames delivered per tick while "running". */
+  cameraFramesPerTick?: number;
+  /** The camera only starts delivering once this tick index is reached. */
+  cameraStartsAfterTicks?: number;
+  /** The camera stops delivering once this tick index is reached. */
+  cameraStopsAfterTicks?: number;
+  /**
+   * Frames delivered but NOT ingested by the single-code baseline pipeline. False models
+   * a page that is not running the baseline receiver (the r15b signature: the receiver
+   * the gate reads stays at zero while the camera is perfectly live).
+   */
+  cameraFeedsBaseline?: boolean;
+  /** Simulate a page whose receiver stopped producing frames mid-setup. */
+  receiverFramesStopAfterTicks?: number;
+  /** The carrier is already broadcasting when the run starts (a leftover session). */
+  broadcastingAtStart?: boolean;
+  /**
+   * The mode the carrier is in BEFORE any command arrives. Default 'static' (chunk 0).
+   * 'cyclic' models the realistic case that matters for SETUP: the PC sender was left
+   * cycling, so the run can only confirm "static chunk 0" after SET_MODE actually lands.
+   */
+  initialMode?: 'static' | 'cyclic';
+}
+
+/** One metric reset, recorded so tests can prove WHEN it happened. */
+export interface FakePeerReset {
+  tickIndex: number;
+  now: number;
 }
 
 export interface FakePeerContext {
@@ -89,6 +124,12 @@ export interface FakePeer {
   setHelloAt: (value: number | null) => void;
   /** Command actions in emission order. */
   actions: () => string[];
+  /** r17: every metric reset, with the tick it happened on. */
+  resets: FakePeerReset[];
+  /** r17: the tick index of the first command with this action, or -1. */
+  tickOfAction: (action: string) => number;
+  /** r17: live camera state the orchestrator reads. */
+  cameraStatus: () => Tf012AutoCameraStatus;
 }
 
 const FRAMES_PER_TICK = 15;
@@ -97,6 +138,8 @@ export function createFakePeer(options: FakePeerOptions = {}): FakePeer {
   const tickMs = options.tickMs ?? 500;
   const maxTicks = options.maxTicks ?? 400;
   const commands: Tf012AutoEnvelope[] = [];
+  /** Tick index each command was emitted on (parallel to `commands`). */
+  const commandTicks: number[] = [];
   const frozen: Tf012AutoStepResult[] = [];
   const progress: Tf012AutoProgress[] = [];
   let final: Tf012AutoRunResult | null = null;
@@ -116,10 +159,35 @@ export function createFakePeer(options: FakePeerOptions = {}): FakePeer {
   };
 
   const sender: Tf012AutoSenderSample = {
-    mode: 'static', holdMs: null, cursor: 0, paused: false, broadcasting: false,
+    mode: options.initialMode ?? 'static', holdMs: null, cursor: 0, paused: false,
+    broadcasting: options.broadcastingAtStart === true,
     canvasDevicePx: 1020, canvasHash: 'aaaa', pausedAt: null, resumedAt: null,
   };
   const receiver = emptyReceiverSample();
+
+  // ---- r17 camera model -------------------------------------------------------
+  // The camera is a SEPARATE source from the optical link: it delivers frames on its own
+  // schedule, and only frames that reach the baseline pipeline count as acquisition.
+  const resets: FakePeerReset[] = [];
+  let cameraSeq = 0;
+  let cameraPipelineSeq = 0;
+  let cameraLastFrameAt: number | null = null;
+  const cameraListening = (): boolean => options.cameraListening !== false;
+  const cameraDelivering = (): boolean => {
+    if (!cameraListening() || options.cameraCallbackActive === false) return false;
+    if (options.cameraStartsAfterTicks !== undefined && tickIndex < options.cameraStartsAfterTicks) return false;
+    if (options.cameraStopsAfterTicks !== undefined && tickIndex > options.cameraStopsAfterTicks) return false;
+    return true;
+  };
+  const deliverCameraFrames = (): void => {
+    if (!cameraDelivering()) return;
+    const perTick = options.cameraFramesPerTick ?? 3;
+    cameraSeq += perTick;
+    if (options.cameraFeedsBaseline !== false && cameraDelivering()) cameraPipelineSeq += perTick;
+    cameraLastFrameAt = now;
+  };
+  const receiverAcceptsFrames = (): boolean => !(options.receiverFramesStopAfterTicks !== undefined
+    && tickIndex > options.receiverFramesStopAfterTicks);
 
   const addIndex = (index: number): void => {
     if (!receiver.decodedChunkIndexes.includes(index)) {
@@ -133,7 +201,7 @@ export function createFakePeer(options: FakePeerOptions = {}): FakePeer {
 
   /** Frames the fake optical link delivered during the CURRENT step. */
   const receiveFrames = (): void => {
-    if (!sender.broadcasting) return;
+    if (!sender.broadcasting || !receiverAcceptsFrames()) return;
     receiver.cameraFrames += FRAMES_PER_TICK;
     receiver.processedFrames += FRAMES_PER_TICK;
     receiver.decodeAttempts += FRAMES_PER_TICK;
@@ -184,6 +252,7 @@ export function createFakePeer(options: FakePeerOptions = {}): FakePeer {
         const check = validateTf012AutoControlMessage(message);
         if (!check.ok) throw new Error(`illegal control message: ${check.reason}`);
         commands.push(message);
+        commandTicks.push(tickIndex);
         switch (message.action) {
           case 'SET_MODE': {
             if (options.obeyMode === false) break;
@@ -237,14 +306,21 @@ export function createFakePeer(options: FakePeerOptions = {}): FakePeer {
         // pinned to its chunk.
         if (sender.mode === 'cyclic' && sender.broadcasting && !sender.paused) {
           sender.cursor = ((sender.cursor ?? 0) + 1) % 16;
-        }
-        return {...sender};
+        }        return {...sender};
       },
       receiverSample: () => ({...receiver, decodedChunkIndexes: [...receiver.decodedChunkIndexes]}),
       resetReceiverMetrics: () => {
         const fresh = emptyReceiverSample();
         Object.assign(receiver, fresh);
+        resets.push({tickIndex, now});
       },
+      cameraStatus: (): Tf012AutoCameraStatus => ({
+        listening: cameraListening(),
+        callbackActive: options.cameraCallbackActive !== false && cameraLastFrameAt != null,
+        framesReceived: cameraSeq,
+        baselineFrames: cameraPipelineSeq,
+        lastFrameAt: cameraLastFrameAt,
+      }),
       link: {
         controlConnected: () => connected,
         senderHelloAt: () => helloAt,
@@ -270,6 +346,7 @@ export function createFakePeer(options: FakePeerOptions = {}): FakePeer {
         options.inject({tickIndex, now, orchestrator, commands});
       }
       applyPendingMode();
+      deliverCameraFrames();
       receiveFrames();
       orchestrator.tick(now);
       if (final) return;
@@ -300,6 +377,18 @@ export function createFakePeer(options: FakePeerOptions = {}): FakePeer {
       helloAt = value;
     },
     actions: () => commands.map((message) => String(message.action)),
+    resets,
+    tickOfAction: (action) => {
+      const index = commands.findIndex((message) => String(message.action) === action);
+      return index < 0 ? -1 : commandTicks[index] ?? -1;
+    },
+    cameraStatus: () => ({
+      listening: cameraListening(),
+      callbackActive: options.cameraCallbackActive !== false && cameraLastFrameAt != null,
+      framesReceived: cameraSeq,
+      baselineFrames: cameraPipelineSeq,
+      lastFrameAt: cameraLastFrameAt,
+    }),
   };
 }
 

@@ -421,17 +421,27 @@ test('r15 handshake: a peer with no fresh telemetry still reads as waiting', () 
 });
 
 test('r15 handshake: peer + fresh telemetry is the only "SENDER CONNECTED"', () => {
+  // r17 adds one more stage before a run may measure: camera acquisition. The progression
+  // is now control → peer → telemetry → CAMERA → connected.
   const connected = phoneHandshake({
     ...BASE_PROGRESS, senderConnected: true, senderHello: true, telemetryAgeMs: 40, telemetryFresh: true,
+    cameraReady: true,
   });
   assert.match(connected, /SENDER CONNECTED/);
+  // A ready peer with a dead camera is explicitly NOT the final stage.
+  assert.match(phoneHandshake({
+    ...BASE_PROGRESS, senderConnected: true, senderHello: true, telemetryAgeMs: 40, telemetryFresh: true,
+    cameraReady: false,
+  }), /WAITING FOR CAMERA/);
   // The full progression the task specified.
   assert.match(phoneHandshake({...BASE_PROGRESS, senderConnected: false, senderHello: false,
-    telemetryAgeMs: null, telemetryFresh: false}), /WAITING FOR PC SENDER/);
+    telemetryAgeMs: null, telemetryFresh: false, cameraReady: false}), /WAITING FOR PC SENDER/);
   assert.match(phoneHandshake({...BASE_PROGRESS, senderConnected: true, senderHello: false,
-    telemetryAgeMs: null, telemetryFresh: false}), /CONTROL ONLINE, NO PEER/);
+    telemetryAgeMs: null, telemetryFresh: false, cameraReady: false}), /CONTROL ONLINE, NO PEER/);
   assert.match(phoneHandshake({...BASE_PROGRESS, senderConnected: true, senderHello: true,
-    telemetryAgeMs: 40, telemetryFresh: true}), /SENDER CONNECTED/);
+    telemetryAgeMs: 99999, telemetryFresh: false, cameraReady: false}), /TELEMETRY STALE/);
+  assert.match(phoneHandshake({...BASE_PROGRESS, senderConnected: true, senderHello: true,
+    telemetryAgeMs: 40, telemetryFresh: true, cameraReady: true}), /SENDER CONNECTED/);
 });
 
 // ---------------------------------------------------------------------------

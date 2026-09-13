@@ -112,10 +112,18 @@ test('r14 handshake: SETUP begins only once fresh sender telemetry arrives', () 
   peer.tick(10);
   assert.equal(peer.commands.length, 0, 'still waiting for the sender');
 
-  // The sender finally reports in: only NOW may SETUP begin.
+  // The sender finally reports in. r17: this unlocks the CAMERA pre-flight, not SETUP —
+  // the setup gate reads the phone's camera pipeline, so acquisition is proven first.
   peer.setTelemetryAt(peer.now());
   peer.tick(1);
-  assert.equal(peer.progress.at(-1)?.phase, 'SETUP', 'SETUP starts on fresh telemetry');
+  assert.equal(peer.progress.at(-1)?.phase, 'WAITING_FOR_CAMERA',
+    'r17: a ready sender is followed by the camera check, not by SETUP');
+  assert.equal(peer.commands.length, 0, 'no SETUP command before acquisition is proven live');
+
+  // Only once frames are demonstrably arriving into the baseline pipeline are the SETUP
+  // commands issued.
+  peer.tick(2);
+  assert.equal(peer.progress.at(-1)?.phase, 'CONFIRMING_SETUP', 'SETUP commands are issued');
   assert.equal(peer.commands[0]?.action, 'SET_MODE');
   assert.equal(peer.commands[0]?.stepId, 'SETUP');
   assert.equal(peer.commands[1]?.action, 'START');

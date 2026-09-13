@@ -10,6 +10,10 @@
  * Network rule: this adapter sends CONTROL and TELEMETRY only, and every outbound
  * message is validated by the shared schema before it leaves the device. No payload,
  * no frame bytes, no oracle, no SHA path.
+ *
+ * r17: the adapter also relays the host's CAMERA-ACQUISITION state into the orchestrator.
+ * It is a set of local counters (frames delivered, frames ingested by the baseline
+ * receiver) and a host timestamp — never image data, and never anything from the network.
  */
 const {
   validateTf012AutoControlMessage,
@@ -197,7 +201,7 @@ function createControlClient(options) {
 function createAutoTestRunner(options) {
   const {
     url, token, buildId, device, runId,
-    receiverSample, resetReceiverMetrics,
+    receiverSample, resetReceiverMetrics, cameraStatus,
     onProgress, onStepResult, onRunResult, onStatus, onLog,
     setDeclaredHoldMs, onUploadStatus, onPeerChange,
   } = options;
@@ -280,6 +284,11 @@ function createAutoTestRunner(options) {
       senderSample: () => ({...lastSenderSample}),
       receiverSample: () => receiverSample(),
       resetReceiverMetrics: () => resetReceiverMetrics(),
+      // r17: the run may not begin measuring until frames are ACTUALLY arriving into the
+      // single-code baseline pipeline. A camera view is not camera acquisition.
+      cameraStatus: () => (cameraStatus
+        ? cameraStatus()
+        : {listening: false, callbackActive: false, framesReceived: 0, baselineFrames: 0, lastFrameAt: null}),
       // Handshake + freshness: the orchestrator refuses to measure anything until a
       // REAL sender peer has announced itself AND sent fresh telemetry.
       link: {

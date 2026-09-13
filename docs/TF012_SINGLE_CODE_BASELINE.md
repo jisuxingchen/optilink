@@ -383,6 +383,122 @@ Every field is `null` when its denominator is 0. A run with no decode attempts h
 `null` (0/0 is undefined), **not** 0 %. These metrics are diagnostic: they rank
 PASSing points and **never decide PASS**.
 
+## r17 AUTO-TEST PRE-FLIGHT / 自动测试起飞前检查
+
+**Physical evidence (r16 build, after the r15b relay fix).** The control plane finally
+worked: the phone showed `PEER FOUND`, `FRESH`, `SENDER CONNECTED`, `Sender confirmed: YES`.
+The same run reported `SETUP_NOT_READY` — an **optical** verdict — with setup evidence
+`successfulDecodes = 0`, `reservedPatternScore = 0`, `observedCodeWidthPx = 0`. Yet the
+receiver was physically decoding STATIC chunk 0 extremely well:
+
+```
+cameraFrames 4531 · decodeAttempts 4531 · successfulDecodes 4438 · crcFailures 93
+locateFailures 0 · decodeSuccessRatio 0.9795
+observedCodeWidthPx 303.73 · pixelsPerCell 3.164 · reservedPatternScore 0.9979 · contrast 175.41
+```
+
+The optics were excellent and the verdict said otherwise. That is a **harness sequencing
+fault**, and r17 exists to make it impossible.
+
+**Root cause 1 — nothing proved the camera was live.** The sequence went
+`WAITING_FOR_SENDER → SETUP`: the moment a sender peer had fresh telemetry, the 5 s setup
+window opened. Nothing checked that a `CameraFrame` callback had fired, that frames were
+still arriving, or — the subtle one — that they were reaching the **single-code baseline
+receiver**. The page can be in `receive` mode and deliver thousands of camera frames while
+`baselineReceiver` stays at zero: the gate then reads a receiver that has never seen a
+frame. The auto plan is a single-code plan, so the tap now switches the page to baseline
+mode and starts the camera itself, then waits for proof.
+
+**Root cause 2 — SETUP did not confirm the sender.** A1–A5 wait for live telemetry to prove
+the requested state before their measurement timer starts. SETUP did not: it sent
+`SET_MODE static chunk0` + `START` and began timing immediately. A carrier still cycling from
+the previous session therefore spent the setup window showing the wrong chunk — and the
+static invariant would have aborted the *next* step for it.
+
+**Root cause 3 — the window started at the wrong instant, and the reset came with it.**
+`resetReceiverMetrics()` ran at command issue, so the counters the gate read spanned the
+wrong span, and the failure modal re-read **live** counters (4000+ decodes) next to a gate
+verdict of zero — two different windows, neither labelled.
+
+**Fix — the state machine now has an explicit pre-flight:**
+
+```
+IDLE
+ → WAITING_FOR_SENDER            socket + relay-confirmed HELLO + telemetry ≤1500 ms
+ → WAITING_FOR_CAMERA            acquisition proven live
+ → CONFIRMING_SETUP              SET_MODE static chunk0 + START issued; nothing measured
+ → SETUP_MEASURING               telemetry PROVED static chunk0 → reset → 5 s window
+ → A1 … A5
+```
+
+Camera readiness is evaluated by the pure
+`tf012AutoCameraReadiness(status, nowMs, baseline)`:
+
+| Criterion | Threshold |
+| --- | --- |
+| frame listener running | `listening` |
+| a `CameraFrame` callback has fired | `callbackActive` |
+| frames since the run started | ≥ `TF012_AUTO_CAMERA_MIN_FRAMES` (5) |
+| frames ingested by the baseline pipeline | ≥ `TF012_AUTO_CAMERA_MIN_BASELINE_FRAMES` (5) |
+| newest frame age | ≤ `TF012_AUTO_CAMERA_FRAME_FRESH_MS` (1000 ms) |
+
+Frames are counted as **deltas** from the moment the wait began, so "the camera delivered
+frames earlier" is history, not acquisition. Decode success is deliberately **not** a
+readiness criterion — that belongs to the setup gate.
+
+**Setup confirmation** uses the same discipline as A1–A5 — `mode=static`, `cursor=0`,
+`broadcasting=true`, `paused=false` — via the shared
+`tf012AutoExpectedSenderState(TF012_AUTO_SETUP_STEP)`. The metric reset and the window
+baseline happen **at confirmation**. If the sender never proves the state within
+`TF012_AUTO_COMMAND_CONFIRM_TIMEOUT_MS`, the run ends as `SENDER_STATE_NOT_CONFIRMED`, not
+as an optical verdict.
+
+**Named outcomes instead of a false optical verdict:**
+
+| Status | Meaning |
+| --- | --- |
+| `CAMERA_NOT_READY` | acquisition never came live within 15 s, frames never reached the baseline pipeline, or the setup window held **zero** camera frames |
+| `SENDER_STATE_NOT_CONFIRMED` | SETUP (or a step) never proved its requested state |
+| `SETUP_NOT_READY` | the window really contained frames, and the optics really were unusable |
+
+**Evidence window.** `setupGate.evidenceWindow` carries the exact span the verdict belongs
+to — `startedAt`, `finishedAt`, `durationMs`, `cameraFrames`, `processedFrames`,
+`decodeAttempts`, `successfulDecodes`, `crcFailures`, `locateFailures`, `uniqueReceived`,
+`observedCodeWidthPx`, `pixelsPerCell`, `reservedPatternScore`, `contrast`,
+`frameRotationIndex` — with **delta** counters, and it is recorded even when the zero-frame
+guard aborts. The phone labels its live grid `LIVE counters (since last reset)` and prints
+the gate's numbers under `SETUP window (gate evidence)`, so a live count and a gate verdict
+can never be read as the same measurement again. The failure modal shows the window, its
+counters, its optics and the gate reasons — never a fresh re-read of the live sample.
+
+**Phone pre-flight display** — five prerequisites, then the window:
+
+```
+Camera:    WAITING / READY        (with live frame counts, or the exact reason)
+Control:   ONLINE
+Peer:      FOUND
+Telemetry: FRESH
+Sender:    WAITING / CONFIRMED
+setup window: SETUP MEASURING 5…4…3…2…1
+```
+
+The handshake line gains one stage: `PEER READY, WAITING FOR CAMERA / 发送端就绪，等待相机`.
+A camera that is not ready **does not consume setup duration** — the window has not opened.
+
+**Not changed.** OptiGrid, locator, decoder, CRC, matrix size, chunk size, the r15b
+socket-keyed presence model, the four message classes and their validators, the A1–A5
+scientific intent, and the network rule (control/telemetry only; `networkPayloadPath`
+stays `NONE`; the baseline pages still use no `fetch`/XHR). The ~3.16 px/cell ≈ 98 % decode
+result is treated as proof that the **optics were fine**, never as a threshold to enforce.
+
+**Verification.** `tf012-auto-preflight.test.ts` (19 cases: one-tap camera start and
+baseline switch, a second tap being inert, SETUP blocked before `callbackActive` / before
+fresh frames / when frames bypass the baseline pipeline, both wait states, the camera-wait
+timeout, command ordering, window-opens-on-confirmation, the four-field confirmation rule,
+reset-at-measurement-start, post-confirmation-only evidence, the zero-frame → 
+`CAMERA_NOT_READY` case, the phone showing exactly the gate's window, A1–A5 unchanged, and
+no new network path) plus the updated r14/r15 suites; the full Node suite is 250 cases.
+
 ## r15 PEER DISCOVERY / 对端发现
 
 **Physical evidence (r14 build).** The PC showed `AUTO TEST CONTROL ONLINE` with

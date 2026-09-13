@@ -135,6 +135,92 @@ export interface Tf012AutoSenderLink {
   telemetryAt: () => number | null;
 }
 
+/**
+ * Live CAMERA acquisition state, measured by the HOST (the phone).
+ *
+ * r17 exists because of a physical run that reported SETUP_NOT_READY — an OPTICAL
+ * verdict — while the phone was decoding STATIC chunk 0 at 97.95% with a 0.998 reserved
+ * score. The gate had been evaluated against a receiver that had never processed a
+ * single frame for this run: the harness had spent its 5 s setup window before the
+ * camera pipeline was feeding it, and then blamed the framing.
+ *
+ * A relay connection is not a sender (r14); by the same rule, a camera VIEW is not
+ * camera ACQUISITION. The run may not begin measuring until frames are actually
+ * arriving AND reaching the single-code baseline pipeline.
+ */
+export interface Tf012AutoCameraStatus {
+  /** The frame listener exists and has been started. */
+  listening: boolean;
+  /** At least one CameraFrame callback has fired since the listener started. */
+  callbackActive: boolean;
+  /** Monotonic count of camera frames delivered to the page (never reset mid-run). */
+  framesReceived: number;
+  /**
+   * Monotonic count of frames actually INGESTED by the single-code baseline receiver.
+   * This is what separates "the viewfinder is showing pixels" from "the pipeline the
+   * setup gate reads is being fed" — the exact distinction r15b's run lacked.
+   */
+  baselineFrames: number;
+  /** Host-clock timestamp of the newest camera frame, or null. */
+  lastFrameAt: number | null;
+}
+
+/** A camera frame older than this is not evidence of live acquisition. */
+export const TF012_AUTO_CAMERA_FRAME_FRESH_MS = 1000;
+/** Frames that must arrive AFTER the run started looking, before SETUP may be issued. */
+export const TF012_AUTO_CAMERA_MIN_FRAMES = 5;
+/** Frames that must reach the BASELINE pipeline (proves the receiver is being fed). */
+export const TF012_AUTO_CAMERA_MIN_BASELINE_FRAMES = 5;
+/**
+ * How long the harness waits for acquisition after the sender peer is ready. A camera
+ * that never starts must END the run as CAMERA_NOT_READY — never as an optical verdict.
+ */
+export const TF012_AUTO_CAMERA_WAIT_TIMEOUT_MS = 15000;
+
+/** The camera-readiness verdict, with the reasons a UI can show verbatim. */
+export interface Tf012AutoCameraReadiness {
+  ready: boolean;
+  reasons: string[];
+  /** Camera frames counted SINCE the run began waiting for the camera. */
+  frames: number;
+  /** Of those, how many reached the single-code baseline pipeline. */
+  baselineFrames: number;
+  lastFrameAgeMs: number | null;
+}
+
+/**
+ * Decide whether camera acquisition is live, from counters measured by the host.
+ *
+ * Frames are counted as DELTAS against the baseline captured when the run started
+ * waiting: "the camera delivered frames at some point earlier" is not readiness, it is
+ * history. The baseline-pipeline count is required separately because a page that is not
+ * running the single-code pipeline can deliver thousands of camera frames while the
+ * receiver the gate reads stays at zero — precisely the r15b physical signature.
+ */
+export function tf012AutoCameraReadiness(
+  status: Tf012AutoCameraStatus,
+  nowMs: number,
+  baseline: {framesReceived: number; baselineFrames: number},
+): Tf012AutoCameraReadiness {
+  const reasons: string[] = [];
+  const frames = Math.max(0, status.framesReceived - baseline.framesReceived);
+  const baselineFrames = Math.max(0, status.baselineFrames - baseline.baselineFrames);
+  const lastFrameAgeMs = status.lastFrameAt == null ? null : Math.max(0, nowMs - status.lastFrameAt);
+  if (!status.listening) reasons.push('camera frame listener is not running');
+  if (!status.callbackActive) reasons.push('no CameraFrame callback has fired yet');
+  if (lastFrameAgeMs == null) reasons.push('no camera frame has ever arrived');
+  else if (lastFrameAgeMs > TF012_AUTO_CAMERA_FRAME_FRESH_MS) {
+    reasons.push(`newest camera frame is ${lastFrameAgeMs} ms old`);
+  }
+  if (frames < TF012_AUTO_CAMERA_MIN_FRAMES) {
+    reasons.push(`only ${frames} camera frames since the run started (need ${TF012_AUTO_CAMERA_MIN_FRAMES})`);
+  }
+  if (baselineFrames < TF012_AUTO_CAMERA_MIN_BASELINE_FRAMES) {
+    reasons.push(`only ${baselineFrames} frames reached the single-code baseline pipeline (need ${TF012_AUTO_CAMERA_MIN_BASELINE_FRAMES})`);
+  }
+  return {ready: reasons.length === 0, reasons, frames, baselineFrames, lastFrameAgeMs};
+}
+
 /** Sender telemetry older than this is not evidence of anything. */
 export const TF012_AUTO_TELEMETRY_FRESH_MS = 1500;
 /** How long a step waits for telemetry to confirm the requested sender state. */
@@ -156,6 +242,7 @@ export const TF012_AUTO_TELEMETRY_LOSS_MS = 5000;
 export type Tf012AutoRunStatus =
   | 'COMPLETE'
   | 'ABORTED'
+  | 'CAMERA_NOT_READY'
   | 'SETUP_NOT_READY'
   | 'SENDER_STATE_NOT_CONFIRMED'
   | 'STATIC_INVARIANT_VIOLATION'
@@ -228,7 +315,16 @@ export interface Tf012AutoRunTimeline {
   requestedAtIso: string;
   /** When the relay-confirmed sender HELLO arrived. */
   senderHelloAtIso: string | null;
-  /** When SETUP actually began (first fresh sender telemetry). */
+  /** r17: when camera acquisition was proven live (frames arriving into the baseline). */
+  cameraReadyAtIso: string | null;
+  /** r17: when the SETUP commands (static chunk 0) were issued. Starts no timer. */
+  setupRequestedAtIso: string | null;
+  /** r17: when live telemetry PROVED static chunk 0 running. Opens the setup window. */
+  setupConfirmedAtIso: string | null;
+  /**
+   * When SETUP measuring actually began. Equal to `setupConfirmedAtIso` by construction:
+   * the window opens on confirmation, never on command issue.
+   */
   setupStartedAtIso: string | null;
   stopSentAtIso: string | null;
   stopConfirmedAtIso: string | null;
@@ -256,11 +352,65 @@ export interface Tf012AutoRunResult {
 // SETUP GATE — evidence-based readiness, no hard px/cell threshold
 // ---------------------------------------------------------------------------
 
+/**
+ * The evidence WINDOW the setup gate was evaluated over.
+ *
+ * Counters are DELTAS across the window (post-confirmation → gate evaluation), so the
+ * phone can never display a live decode count from a different window next to a gate
+ * verdict from this one without the two being labelled as different windows. The optical
+ * readings (code width, px/cell, reserved score, contrast) are the end-of-window
+ * snapshot: they are instantaneous measurements, not counters.
+ */
+export interface Tf012AutoSetupEvidenceWindow {
+  startedAtIso: string;
+  finishedAtIso: string;
+  durationMs: number;
+  cameraFrames: number;
+  processedFrames: number;
+  decodeAttempts: number;
+  successfulDecodes: number;
+  crcFailures: number;
+  locateFailures: number;
+  uniqueReceived: number;
+  observedCodeWidthPx: number | null;
+  pixelsPerCell: number | null;
+  reservedPatternScore: number | null;
+  contrast: number | null;
+  frameRotationIndex: number | null;
+}
+
+export function tf012AutoSetupEvidenceWindow(
+  start: Tf012AutoReceiverSample,
+  end: Tf012AutoReceiverSample,
+  startedAt: number,
+  finishedAt: number,
+): Tf012AutoSetupEvidenceWindow {
+  return {
+    startedAtIso: new Date(startedAt).toISOString(),
+    finishedAtIso: new Date(finishedAt).toISOString(),
+    durationMs: Math.max(0, finishedAt - startedAt),
+    cameraFrames: delta(start.cameraFrames, end.cameraFrames),
+    processedFrames: delta(start.processedFrames, end.processedFrames),
+    decodeAttempts: delta(start.decodeAttempts, end.decodeAttempts),
+    successfulDecodes: delta(start.successfulDecodes, end.successfulDecodes),
+    crcFailures: delta(start.crcFailures, end.crcFailures),
+    locateFailures: delta(start.locateFailures, end.locateFailures),
+    uniqueReceived: delta(start.uniqueReceived, end.uniqueReceived),
+    observedCodeWidthPx: end.observedCodeWidthPx,
+    pixelsPerCell: end.pixelsPerCellX,
+    reservedPatternScore: end.reservedPatternScore,
+    contrast: end.contrast,
+    frameRotationIndex: end.frameRotationIndex,
+  };
+}
+
 export interface Tf012AutoSetupGateResult {
   ready: boolean;
   label: 'SETUP READY / 取景条件就绪' | 'SETUP NOT READY / 取景条件未就绪';
   reasons: string[];
   evidence: Tf012AutoReceiverSample;
+  /** r17: the gate verdict's own interval. Null when SETUP never opened. */
+  evidenceWindow: Tf012AutoSetupEvidenceWindow | null;
 }
 
 /** A reserved-pattern score below this means the locator is guessing, not locking. */
@@ -293,6 +443,7 @@ export function evaluateTf012AutoSetupGate(sample: Tf012AutoReceiverSample): Tf0
     label: ready ? 'SETUP READY / 取景条件就绪' : 'SETUP NOT READY / 取景条件未就绪',
     reasons,
     evidence: sample,
+    evidenceWindow: null,
   };
 }
 
@@ -314,12 +465,26 @@ export interface Tf012AutoPorts {
   onRunResult: (result: Tf012AutoRunResult) => void;
   /** Handshake + freshness signals for the sender peer. */
   link: Tf012AutoSenderLink;
+  /**
+   * r17: live camera-acquisition state. Required, not optional — a harness that can run
+   * without proving acquisition is the defect this revision removes.
+   */
+  cameraStatus: () => Tf012AutoCameraStatus;
   /** Human-readable progress hook for the UI. */
   onProgress?: (progress: Tf012AutoProgress) => void;
 }
 
 export interface Tf012AutoProgress {
-  phase: 'WAITING_FOR_SENDER' | 'SETUP' | 'CONFIRMING' | 'STEP' | 'STOPPING' | 'DONE' | 'ABORTED';
+  phase:
+    | 'WAITING_FOR_SENDER'
+    | 'WAITING_FOR_CAMERA'
+    | 'CONFIRMING_SETUP'
+    | 'SETUP'
+    | 'CONFIRMING'
+    | 'STEP'
+    | 'STOPPING'
+    | 'DONE'
+    | 'ABORTED';
   /** The run outcome so far; never overwritten by a later connection update. */
   status: Tf012AutoRunStatus | 'RUNNING' | 'WAITING_FOR_SENDER';
   stepId: string | null;
@@ -335,6 +500,13 @@ export interface Tf012AutoProgress {
   /** Age of the newest sender telemetry, ms (null = never). */
   telemetryAgeMs: number | null;
   telemetryFresh: boolean;
+  /** r17: camera acquisition is live (frames arriving into the baseline pipeline). */
+  cameraReady: boolean;
+  /** r17: why the camera is not ready yet, or the frame counts once it is. */
+  cameraDetail: string;
+  /** r17: telemetry has proved the sender is in the requested SETUP state. */
+  setupConfirmed: boolean;  /** r17: the setup measurement interval is open (nothing before this is setup evidence). */
+  setupWindowOpen: boolean;
   /** The requested sender state for the active step, e.g. "CYCLIC 1000 ms". */
   requested: string;
   /** True once telemetry proved the sender is in the requested state. */
@@ -393,11 +565,28 @@ export class Tf012AutoOrchestrator {
   private readonly buildId: string | null;
   private readonly device: string | null;
 
-  private phase: 'IDLE' | 'WAITING_FOR_SENDER' | 'SETUP' | 'CONFIRMING' | 'RUNNING' | 'STOPPING' | 'DONE' | 'ABORTED' = 'IDLE';
+  private phase: 'IDLE' | 'WAITING_FOR_SENDER' | 'WAITING_FOR_CAMERA' | 'CONFIRMING_SETUP' | 'SETUP' | 'CONFIRMING' | 'RUNNING' | 'STOPPING' | 'DONE' | 'ABORTED' = 'IDLE';
   private requestedAt = 0;
   private startedAt = 0;
   private finishedAt = 0;
   private runtime: StepRuntime | null = null;
+  // ---- r17 camera pre-flight -------------------------------------------------
+  /** When the run began waiting for camera acquisition. */
+  private cameraWaitStartedAt: number | null = null;
+  /** Frame counters captured when the wait began: readiness counts DELTAS from here. */
+  private cameraBaselineFrames = 0;
+  private cameraBaselinePipelineFrames = 0;
+  /** When acquisition was proven live; null means SETUP may not be issued. */
+  private cameraReadyAt: number | null = null;
+  private cameraReadiness: Tf012AutoCameraReadiness | null = null;
+  // ---- r17 setup sequencing --------------------------------------------------
+  /** When the SETUP commands were issued (no timer runs from here). */
+  private setupRequestedAt: number | null = null;
+  /** When telemetry proved static chunk 0: the instant the setup window opens. */
+  private setupConfirmedAt: number | null = null;
+  /** Receiver snapshot taken right after the post-confirmation reset. */
+  private setupWindowStart: Tf012AutoReceiverSample | null = null;
+  private setupWindowStartedAt: number | null = null;
   private readonly results: Tf012AutoStepResult[] = [];
   private gate: Tf012AutoSetupGateResult | null = null;
   private abortedReason: Tf012AutoRunStatus | null = null;
@@ -441,7 +630,7 @@ export class Tf012AutoOrchestrator {
     return this.runResult;
   }
 
-  /** Begin: wait for a REAL sender peer before any step may be measured. */
+  /** Begin: wait for a REAL sender peer, then for a LIVE camera, before any step. */
   start(nowMs: number): void {
     if (this.phase !== 'IDLE') return;
     this.requestedAt = nowMs;
@@ -475,6 +664,23 @@ export class Tf012AutoOrchestrator {
   private telemetryIsFresh(nowMs: number): boolean {
     const age = this.telemetryAgeMs(nowMs);
     return age != null && age <= TF012_AUTO_TELEMETRY_FRESH_MS;
+  }
+
+  /** One line the UI can show verbatim: frame counts when ready, reasons when not. */
+  private cameraDetailText(): string {
+    if (this.cameraReadyAt != null) {
+      const readiness = this.cameraReadiness;
+      return readiness
+        ? `live: ${readiness.frames} frames, ${readiness.baselineFrames} into the baseline pipeline`
+        : 'live';
+    }
+    const readiness = this.cameraReadiness;
+    if (!readiness) return 'not probed yet';
+    const counts = `${readiness.frames} frames, ${readiness.baselineFrames} into the baseline pipeline`;
+    const age = readiness.lastFrameAgeMs == null
+      ? 'no frame yet'
+      : `last frame ${readiness.lastFrameAgeMs} ms ago`;
+    return `${counts}, ${age} — ${readiness.reasons.join('; ')}`;
   }
 
   /**
@@ -516,12 +722,44 @@ export class Tf012AutoOrchestrator {
       return;
     }
 
+    if (this.phase === 'WAITING_FOR_CAMERA') {
+      this.tickWaitingForCamera(nowMs);
+      return;
+    }
+
+    if (this.phase === 'CONFIRMING_SETUP') {
+      this.tickConfirmingSetup(nowMs);
+      return;
+    }
+
     if (this.phase === 'SETUP') {
-      if (!this.runtime) { this.emitProgress(nowMs); return; }
+      if (!this.runtime || this.runtime.measuredAt == null) { this.emitProgress(nowMs); return; }
       const violation = this.staticInvariantViolation();
       if (violation) { this.failRun('STATIC_INVARIANT_VIOLATION', violation, nowMs); return; }
-      if (nowMs - this.runtime.issuedAt >= this.setupStep.durationMs) {
-        this.gate = evaluateTf012AutoSetupGate(this.ports.receiverSample());
+      if (nowMs - this.runtime.measuredAt >= this.setupStep.durationMs) {
+        const endSample = this.ports.receiverSample();
+        const window = tf012AutoSetupEvidenceWindow(
+          this.setupWindowStart ?? endSample,
+          endSample,
+          this.setupWindowStartedAt ?? this.runtime.measuredAt,
+          nowMs,
+        );
+        const setupFrames = window.cameraFrames;
+        // The gate is recorded BEFORE the zero-frame guard can abort, so the frozen JSON
+        // always carries the window the harness actually saw.
+        const gate = evaluateTf012AutoSetupGate(endSample);
+        if (setupFrames === 0) {
+          gate.reasons.unshift(`no camera frames arrived during SETUP (${window.durationMs} ms open)`);
+        }
+        this.gate = Object.freeze({...gate, evidenceWindow: window});
+        // A setup hold with NO camera frames at all is a harness fault, not an optical
+        // one. r15b reported SETUP_NOT_READY (an optics verdict) for exactly this state;
+        // it must now be named as the acquisition problem it is.
+        if (setupFrames === 0) {
+          this.failRun('CAMERA_NOT_READY',
+            `no camera frames arrived during SETUP (${window.durationMs} ms open)`, nowMs);
+          return;
+        }
         this.staticInvariants.push({
           id: 'static_setup_invariant', ok: true,
           detail: 'SETUP observed chunk 0 only',
@@ -553,7 +791,11 @@ export class Tf012AutoOrchestrator {
     this.emitProgress(nowMs);
   }
 
-  /** WAITING_FOR_SENDER → SETUP needs all three: socket, HELLO, fresh telemetry. */
+  /**
+   * WAITING_FOR_SENDER → WAITING_FOR_CAMERA needs all three: socket, HELLO, fresh
+   * telemetry. r17: the sender being ready no longer starts SETUP — the setup gate
+   * reads the PHONE's camera pipeline, so acquisition must be proven live first.
+   */
   private tickWaitingForSender(nowMs: number): void {
     const helloAt = this.ports.link.senderHelloAt();
     if (helloAt != null && this.senderHelloAt == null) this.senderHelloAt = helloAt;
@@ -563,27 +805,106 @@ export class Tf012AutoOrchestrator {
     const connected = this.ports.link.controlConnected();
     const fresh = this.telemetryIsFresh(nowMs);
     if (connected && helloAt != null && fresh) {
+      this.phase = 'WAITING_FOR_CAMERA';
       this.startedAt = nowMs;
-      this.phase = 'SETUP';
-      this.runtime = {
-        step: this.setupStep,
-        issuedAt: nowMs,
-        measuredAt: nowMs,
-        pauseIssuedAt: null,
-        pauseConfirmedAt: null,
-        paused: false,
-        intervalStart: null,
-        stepStartSample: null,
-        confirmDeadlineAt: nowMs + TF012_AUTO_COMMAND_CONFIRM_TIMEOUT_MS,
-      };
+      this.cameraWaitStartedAt = nowMs;
+      // Count frames from NOW. "The camera delivered frames before the PO tapped the
+      // button" is history, not acquisition, and history is what made the r15b run look
+      // like an optical failure.
+      const status = this.ports.cameraStatus();
+      this.cameraBaselineFrames = status.framesReceived;
+      this.cameraBaselinePipelineFrames = status.baselineFrames;
+    }
+    this.emitProgress(nowMs);
+  }
+
+  /** WAITING_FOR_CAMERA → CONFIRMING_SETUP requires proven live acquisition. */
+  private tickWaitingForCamera(nowMs: number): void {
+    const readiness = tf012AutoCameraReadiness(this.ports.cameraStatus(), nowMs, {
+      framesReceived: this.cameraBaselineFrames,
+      baselineFrames: this.cameraBaselinePipelineFrames,
+    });
+    this.cameraReadiness = readiness;
+    if (readiness.ready) {
+      this.cameraReadyAt = nowMs;
+      this.requestSetup(nowMs);
+      this.emitProgress(nowMs);
+      return;
+    }
+    if (this.cameraWaitStartedAt != null
+      && nowMs - this.cameraWaitStartedAt >= TF012_AUTO_CAMERA_WAIT_TIMEOUT_MS) {
+      this.failRun('CAMERA_NOT_READY',
+        `camera acquisition was not live within ${TF012_AUTO_CAMERA_WAIT_TIMEOUT_MS} ms: ${readiness.reasons.join('; ')}`,
+        nowMs);
+      return;
+    }
+    this.emitProgress(nowMs);
+  }
+
+  /**
+   * Issue the SETUP request. The commands go out here, but NOTHING is measured yet: the
+   * setup window does not open until live telemetry proves the sender is static chunk 0
+   * (see `tickConfirmingSetup`). r15b's physical run timed the window from this instant
+   * and evaluated the gate against a receiver that had not yet produced a frame.
+   */
+  private requestSetup(nowMs: number): void {
+    this.phase = 'CONFIRMING_SETUP';
+    this.setupRequestedAt = nowMs;
+    this.runtime = {
+      step: this.setupStep,
+      issuedAt: nowMs,
+      measuredAt: null,
+      pauseIssuedAt: null,
+      pauseConfirmedAt: null,
+      paused: false,
+      intervalStart: null,
+      stepStartSample: null,
+      confirmDeadlineAt: nowMs + TF012_AUTO_COMMAND_CONFIRM_TIMEOUT_MS,
+    };
+    if (this.ports.senderSample().paused) {
+      // A carrier left FROZEN by an aborted A4 can never confirm "static chunk 0
+      // running", so it is released first — the same rule `beginStep` applies.
+      this.ports.send(tf012AutoCommand('RESUME', {runId: this.runId, stepId: this.setupStep.id}));
+    }
+    this.ports.send(tf012AutoCommand('SET_MODE', {
+      runId: this.runId, stepId: this.setupStep.id, mode: 'static', chunkIndex: this.setupStep.chunkIndex,
+    }));
+    this.ports.send(tf012AutoCommand('START', {runId: this.runId, stepId: this.setupStep.id}));
+  }
+
+  /**
+   * CONFIRMING_SETUP → SETUP. The sender must PROVE static chunk 0 before the window
+   * opens: mode=static, cursor=0, broadcasting=true, paused=false. The metric reset and
+   * the window baseline happen at THIS instant, never at command issue time, so the gate
+   * can only ever be evaluated over post-confirmation frames.
+   */
+  private tickConfirmingSetup(nowMs: number): void {
+    const runtime = this.runtime;
+    if (!runtime) { this.emitProgress(nowMs); return; }
+    const expected = tf012AutoExpectedSenderState(this.setupStep);
+    const {confirmed, mismatch} = this.senderConfirmation(nowMs, expected, runtime.issuedAt);
+    if (confirmed) {
+      runtime.measuredAt = nowMs;
+      this.setupConfirmedAt = nowMs;
+      this.confirmations.push({
+        id: 'confirm_SETUP', ok: true,
+        detail: `SETUP ${tf012AutoSenderStateLabel(expected)} confirmed by telemetry`,
+      });
       this.ports.resetReceiverMetrics();
-      const setupStart = this.ports.receiverSample();
-      this.runtime.intervalStart = setupStart;
-      this.runtime.stepStartSample = setupStart;
-      this.ports.send(tf012AutoCommand('SET_MODE', {
-        runId: this.runId, stepId: this.setupStep.id, mode: 'static', chunkIndex: this.setupStep.chunkIndex,
-      }));
-      this.ports.send(tf012AutoCommand('START', {runId: this.runId, stepId: this.setupStep.id}));
+      const start = this.ports.receiverSample();
+      runtime.intervalStart = start;
+      runtime.stepStartSample = start;
+      this.setupWindowStart = start;
+      this.setupWindowStartedAt = nowMs;
+      this.phase = 'SETUP';
+      this.emitProgress(nowMs);
+      return;
+    }
+    if (nowMs >= runtime.confirmDeadlineAt) {
+      this.confirmations.push({id: 'confirm_SETUP', ok: false, detail: mismatch ?? 'not confirmed'});
+      this.failRun('SENDER_STATE_NOT_CONFIRMED',
+        `SETUP: ${mismatch ?? 'requested sender state not confirmed'}`, nowMs);
+      return;
     }
     this.emitProgress(nowMs);
   }
@@ -912,11 +1233,14 @@ export class Tf012AutoOrchestrator {
       timeline: {
         requestedAtIso: new Date(this.requestedAt).toISOString(),
         senderHelloAtIso: this.senderHelloAt == null ? null : new Date(this.senderHelloAt).toISOString(),
-        setupStartedAtIso: this.startedAt ? new Date(this.startedAt).toISOString() : null,
+        cameraReadyAtIso: this.cameraReadyAt == null ? null : new Date(this.cameraReadyAt).toISOString(),
+        setupRequestedAtIso: this.setupRequestedAt == null ? null : new Date(this.setupRequestedAt).toISOString(),
+        setupConfirmedAtIso: this.setupConfirmedAt == null ? null : new Date(this.setupConfirmedAt).toISOString(),
+        setupStartedAtIso: this.setupWindowStartedAt == null ? null : new Date(this.setupWindowStartedAt).toISOString(),
         stopSentAtIso: this.stopSentAt == null ? null : new Date(this.stopSentAt).toISOString(),
         stopConfirmedAtIso: this.stopConfirmedAt == null ? null : new Date(this.stopConfirmedAt).toISOString(),
       },
-      setupGate: this.gate ?? evaluateTf012AutoSetupGate(this.ports.receiverSample()),
+      setupGate: this.gate ?? {...evaluateTf012AutoSetupGate(this.ports.receiverSample()), evidenceWindow: null},
       steps: [...this.results],
       stepsCompleted: this.results.length,
       stepsPlanned: this.steps.length,
@@ -943,6 +1267,14 @@ export class Tf012AutoOrchestrator {
     const elapsed = measuredAt != null ? nowMs - measuredAt : 0;
     const senderConfirmed = measuredAt != null;
     const sample = this.ports.senderSample();
+    // Keep the camera detail live while the run is still waiting for acquisition, so the
+    // phone can show WHY it has not started instead of an unexplained pause.
+    if (this.cameraReadyAt == null && this.phase === 'WAITING_FOR_CAMERA') {
+      this.cameraReadiness = tf012AutoCameraReadiness(this.ports.cameraStatus(), nowMs, {
+        framesReceived: this.cameraBaselineFrames,
+        baselineFrames: this.cameraBaselinePipelineFrames,
+      });
+    }
     const remainingMs = step
       ? (step.id === 'A4'
         ? Math.max(0, (step.runMs ?? 0) + (step.pauseMs ?? 0) - elapsed)
@@ -966,6 +1298,10 @@ export class Tf012AutoOrchestrator {
       senderHello: this.ports.link.senderHelloAt() != null,
       telemetryAgeMs,
       telemetryFresh: telemetryAgeMs != null && telemetryAgeMs <= TF012_AUTO_TELEMETRY_FRESH_MS,
+      cameraReady: this.cameraReadyAt != null,
+      cameraDetail: this.cameraDetailText(),
+      setupConfirmed: this.setupConfirmedAt != null,
+      setupWindowOpen: this.phase === 'SETUP',
       requested: expected ? tf012AutoSenderStateLabel(expected) : '—',
       senderConfirmed,
       senderMismatch: expected && !senderConfirmed

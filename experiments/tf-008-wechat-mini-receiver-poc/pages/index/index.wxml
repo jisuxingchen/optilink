@@ -34,6 +34,14 @@
       <view class="abstop" bindtap="onAutoTestStop">Stop / 停止</view>
     </view>
     <view class="abrow"><text class="abk">AUTO TEST</text><text class="abv">{{autoStepLabel}}</text></view>
+    <!-- r17 PRE-FLIGHT: all five prerequisites must be READY before the setup window
+         opens. SETUP MEASURING below shows the countdown for THAT window only. -->
+    <view class="abrow"><text class="abk">Camera</text><text class="abv">{{autoPrereqCamera}} · {{autoCameraDetail}}</text></view>
+    <view class="abrow"><text class="abk">Control</text><text class="abv">{{autoPrereqControl}}</text></view>
+    <view class="abrow"><text class="abk">Peer</text><text class="abv">{{autoPrereqPeer}}</text></view>
+    <view class="abrow"><text class="abk">Telemetry</text><text class="abv">{{autoPrereqTelemetry}}</text></view>
+    <view class="abrow"><text class="abk">Sender</text><text class="abv">{{autoPrereqSender}}</text></view>
+    <view class="abrow"><text class="abk">setup window</text><text class="abv">{{autoSetupCountdown}}</text></view>
     <!-- r15 handshake stages: control socket, peer registration, telemetry freshness.
          A peer HELLO alone must NOT read as "connected". -->
     <view class="abrow"><text class="abk">peer</text><text class="abv">{{autoSenderPeerPresent}}</text></view>
@@ -41,9 +49,13 @@
     <!-- r14 control-plane evidence: what was requested, whether the sender proved it,
          and how old the telemetry proving it is. -->
     <view class="abrow"><text class="abk">{{autoCommand}}</text><text class="abv">Sender confirmed: {{autoSenderConfirmed}}</text></view>
+    <view class="abrow"><text class="abk">setup sender confirmed</text><text class="abv">{{autoSetupConfirmed}}</text></view>
     <view class="abrow"><text class="abk">telemetry age</text><text class="abv">{{autoTelemetryAge}}</text></view>
     <view class="abrow"><text class="abk">mismatch</text><text class="abv">{{autoSenderMismatch}}</text></view>
     <view class="abrow"><text class="abk">A4 pause</text><text class="abv">requested {{autoPauseRequested}} · confirmed {{autoPauseConfirmed}} · frozen cursor {{autoFrozenCursor}}</text></view>
+    <!-- The grid below is the LIVE window (since the last metric reset). The gate rows
+         further down are the SETUP window. They are DIFFERENT windows and are labelled. -->
+    <view class="abrow"><text class="abk">LIVE counters (since last reset)</text><text class="abv"></text></view>
     <view class="abgrid">
       <view class="abcell"><text class="abck">Step</text><text class="abcv">{{autoStepIndex}} / {{autoStepCount}}</text></view>
       <view class="abcell"><text class="abck">holdMs</text><text class="abcv">{{autoStepHoldMs}}</text></view>
@@ -56,6 +68,11 @@
       <view class="abcell"><text class="abck">reserved</text><text class="abcv">{{baselineReservedScore}}</text></view>
       <view class="abcell"><text class="abck">frozen</text><text class="abcv">{{autoFrozenSteps}} / {{autoPlanSteps}}</text></view>
     </view>
+    <!-- r17 SETUP window: the exact span the gate was evaluated over. Never mixed with
+         the live counters above without its own label. -->
+    <view class="abrow"><text class="abk">SETUP window (gate evidence)</text><text class="abv">{{autoSetupWindowSpan}}</text></view>
+    <view class="abrow"><text class="abk">setup window counters</text><text class="abv">{{autoSetupWindowCounters}}</text></view>
+    <view class="abrow"><text class="abk">setup window optics</text><text class="abv">{{autoSetupWindowOptics}}</text></view>
     <view class="abrow"><text class="abk">setup gate</text><text class="abv">{{autoSetupLabel}}</text></view>
     <view class="abrow"><text class="abk">setup notes</text><text class="abv">{{autoSetupReasons}}</text></view>
     <view class="abrow"><text class="abk">last frozen</text><text class="abv">{{autoLastFrozenStep}}</text></view>
