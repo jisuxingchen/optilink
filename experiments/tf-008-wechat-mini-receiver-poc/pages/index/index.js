@@ -68,7 +68,7 @@ const TF012_AUTO_STEP_COUNT = (opticalCore && Number.isFinite(opticalCore.TF012_
 
 // Unmistakable build identifier — must be visible on the phone to prove the
 // device is running the latest shared-receive package (not a stale cache).
-const BUILD_ID = 'tf012-r15-0fae3dd';
+const BUILD_ID = 'tf012-r16-0fd881d';
 
 /**
  * Monotonic millisecond clock for the speed-ladder benchmark.
