@@ -12,6 +12,113 @@
   border-color: #10b981;
 }
 
+/* ===========================================================================
+   TF-012 r21 MINIMAL RECEIVE / 极简接收 — the DEFAULT one-screen UI.
+   Deliberately the only thing with strong colours: the PO must be able to read
+   Camera / Sender / Progress / Result from arm's length, and nothing else.
+   =========================================================================== */
+.simple {
+  margin: 8rpx 16rpx 24rpx;
+  padding: 20rpx 22rpx;
+  background: #0b1220;
+  border: 3rpx solid #1d4ed8;
+  border-radius: 14rpx;
+}
+
+.srow {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8rpx;
+}
+
+.sk {
+  font-size: 28rpx;
+  color: #94a3b8;
+}
+
+.sv {
+  font-size: 30rpx;
+  font-weight: 700;
+  color: #e2e8f0;
+}
+
+.svok { color: #34d399; }
+.svbad { color: #f87171; }
+
+.sbtn {
+  margin: 18rpx 0 0;
+  font-size: 40rpx;
+  font-weight: 700;
+  line-height: 2.6;
+  border-radius: 10rpx;
+  background: #1d4ed8;
+  color: #fff;
+}
+
+.sbtns {
+  display: flex;
+  flex-direction: row;
+  gap: 12rpx;
+}
+
+.sbtn2 {
+  flex: 1;
+  font-size: 26rpx;
+  font-weight: 400;
+  line-height: 2.4;
+  background: #1e293b;
+  color: #e2e8f0;
+  border: 1rpx solid #334155;
+}
+
+.sbig {
+  margin-top: 22rpx;
+  font-size: 46rpx;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.sline {
+  margin-top: 6rpx;
+  font-size: 26rpx;
+  color: #cbd5e1;
+}
+
+.sres {
+  margin-top: 20rpx;
+  font-size: 44rpx;
+  font-weight: 700;
+  text-align: center;
+  padding: 12rpx;
+  border-radius: 10rpx;
+}
+
+.sres.pending { background: #1e293b; color: #cbd5e1; }
+.sres.ok { background: #065f46; color: #d1fae5; }
+.sres.bad { background: #7f1d1d; color: #fecaca; }
+
+.sdetail {
+  margin-top: 8rpx;
+  font-size: 26rpx;
+  color: #94a3b8;
+  text-align: center;
+}
+
+.spass {
+  margin-top: 10rpx;
+  text-align: center;
+  font-size: 30rpx;
+  font-weight: 700;
+}
+
+.snote {
+  margin-top: 14rpx;
+  font-size: 22rpx;
+  color: #64748b;
+}
+
 .pipeline-error {
   background: #7f1d1d;
   color: #fecaca;

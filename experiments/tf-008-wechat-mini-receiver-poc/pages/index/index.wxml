@@ -9,6 +9,14 @@
     <text class="{{bootStatus === 'BOOT OK' ? 'tsok' : 'tsbad'}}">{{bootStatus}}{{bootError ? ' · ' + bootError : ''}}</text>
   </view>
 
+  <!-- ================= ADVANCED DIAGNOSTICS / 高级诊断 =================
+       r21: EVERYTHING below this line is the r13..r20 diagnostic harness — the A1..A5
+       sweep, the static probe, the SETUP gate, the holdMs declaration, the mode buttons,
+       KEY STATUS, the history tools and the full evidence panels. It is OFF by default:
+       the default path is the one-screen minimal receive UI under the viewfinder, and the
+       normal runtime never computes phase timing, fingerprints, rotation histograms,
+       scheduler percentiles or sampling geometry. -->
+  <block wx:if="{{showAdvanced}}">
   <!-- ========== SENDER holdMs DECLARATION / 发送端每码停留声明 ==========
        r9: moved to the FIRST SCREEN, above the viewfinder, because the PO could
        not find it before. It is annotation + theoretical metrics ONLY: it never
@@ -128,6 +136,7 @@
     <view class="hbrates">{{theoChunkRate}} · {{theoPayloadRate}}</view>
     <view class="hbnote">Stage B 100/90/75/60/50/40 · outlier check 750 · annotation only, never affects decode / 仅用于标注，不影响解码</view>
   </view>
+  </block>
 
   <camera
     device-position="back"
@@ -139,6 +148,50 @@
     bindstop="onCameraStop"
     binderror="onCameraError"
   />
+
+  <!-- ================= TF-012 r21 MINIMAL RECEIVE / 极简接收 (DEFAULT) =================
+       One screen, one action. The camera is already running (auto-start), so the PO taps
+       START RECEIVE once and the run ends the instant 16/16 chunks + SHA-256 MATCH are
+       true — no SETUP, no A1..A5, no fixed dwell time. Advanced Diagnostics stays OFF
+       unless it is explicitly turned on below. -->
+  <view class="simple" wx:if="{{!showAdvanced}}">
+    <view class="srow">
+      <text class="sk">Camera / 相机</text>
+      <text class="sv {{simpleCameraLabel === 'READY / 就绪' ? 'svok' : 'svbad'}}">{{simpleCameraLabel}}</text>
+    </view>
+    <view class="srow">
+      <text class="sk">Sender / 发送端</text>
+      <text class="sv {{simpleSenderLabel === 'CONNECTED / 已连接' ? 'svok' : 'svbad'}}">{{simpleSenderLabel}}</text>
+    </view>
+
+    <button class="sbtn" bindtap="onSimpleStart" disabled="{{simpleStatus === 'RECEIVING'}}">START RECEIVE / 开始接收</button>
+    <view class="sbtns">
+      <button class="sbtn sbtn2" bindtap="onSimpleStaticCheck" disabled="{{simpleStatus === 'RECEIVING'}}">STATIC CHECK / 静态检查</button>
+      <button class="sbtn sbtn2" bindtap="onSimpleAgain">RUN AGAIN / 重新运行</button>
+    </view>
+
+    <view class="sbig">Progress / 进度: {{simpleProgress}}</view>
+    <view class="sline">Decode: {{simpleDecode}}</view>
+    <view class="sline">Geometry: {{simpleGeometry}}</view>
+    <view class="sline">Elapsed / 用时: {{simpleElapsed}}</view>
+
+    <view class="sres {{simpleResultClass}}">Result / 结果: {{simpleResult}}</view>
+    <view class="sdetail">{{simpleDetail}}</view>
+    <view class="spass" wx:if="{{simpleResult === 'PASS'}}">
+      <text class="svok">{{simplePassBytes}} · {{simplePassElapsed}} · {{simplePassSha}}</text>
+    </view>
+
+    <view class="sbtns">
+      <button class="sbtn sbtn2" bindtap="onSimpleCopy">COPY RESULT / 复制结果</button>
+      <button class="sbtn sbtn2" bindtap="onSimpleToggleAdvanced">ADVANCED DIAGNOSTICS / 高级诊断</button>
+    </view>
+    <view class="snote">buildId {{buildId}} · payload path NONE · UI updates {{simpleUiUpdates}}</view>
+  </view>
+
+  <block wx:if="{{showAdvanced}}">
+  <view class="controls">
+    <button class="btn" bindtap="onSimpleToggleAdvanced">BACK TO SIMPLE RECEIVE / 返回极简接收</button>
+  </view>
 
   <view class="controls">
     <button class="btn primary" bindtap="startCamera" disabled="{{running}}">Start Camera</button>
@@ -412,4 +465,5 @@
 
   <view class="log">{{log}}</view>
   </view>
+  </block>
 </view>

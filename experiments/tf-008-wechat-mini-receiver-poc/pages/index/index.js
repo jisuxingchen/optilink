@@ -60,6 +60,18 @@ const createAutoTestRunner = autoHarness && typeof autoHarness.createAutoTestRun
   ? autoHarness.createAutoTestRunner
   : null;
 
+// TF-012 r21 MINIMAL RECEIVE MODE (pure, platform-free decision module).
+// Same guarded-load discipline: a failure must be visible, never silent. The DEFAULT
+// receive path uses ONLY this module's decision function — no orchestrator, no plan, no
+// phase telemetry.
+let simpleMode = null;
+let simpleModeLoadError = '';
+try {
+  simpleMode = require('../../utils/tf012-simple.js');
+} catch (err) {
+  simpleModeLoadError = String(err && err.message ? err.message : err);
+}
+
 // TF-012 r13: the number of planned auto-test steps, read from the SHARED plan so the
 // phone cannot disagree with the orchestrator about how long the run is.
 const TF012_AUTO_STEP_COUNT = (opticalCore && Number.isFinite(opticalCore.TF012_AUTO_STEP_COUNT))
@@ -68,7 +80,7 @@ const TF012_AUTO_STEP_COUNT = (opticalCore && Number.isFinite(opticalCore.TF012_
 
 // Unmistakable build identifier — must be visible on the phone to prove the
 // device is running the latest shared-receive package (not a stale cache).
-const BUILD_ID = 'tf012-r20-ecb6044';
+const BUILD_ID = 'tf012-r21-pending';
 
 /**
  * Monotonic millisecond clock for the speed-ladder benchmark.
@@ -138,6 +150,25 @@ Page({
     permissionStatus: 'unknown',
     maxZoom: '—',
     networkPath: 'NONE',
+
+    // TF-012 r21 MINIMAL RECEIVE MODE / 极简接收模式 — the DEFAULT one-screen UI.
+    // Everything the PO needs to run a receive and read the verdict, and nothing else.
+    // The r13–r20 diagnostic harness lives behind `showAdvanced` (below) and is OFF here.
+    showAdvanced: false,
+    simpleStatus: 'WAITING',
+    simpleResult: 'WAITING',
+    simpleResultClass: 'pending',
+    simpleDetail: 'tap START RECEIVE / 点击开始接收',
+    simpleProgress: '0 / 16',
+    simpleDecode: '0 OK · 0 CRC · — FPS',
+    simpleGeometry: '— · — · contrast — · rot —',
+    simpleElapsed: '0.0 s',
+    simpleCameraLabel: 'NOT READY / 未就绪',
+    simpleSenderLabel: 'NOT CONNECTED / 未连接',
+    simplePassBytes: '—',
+    simplePassElapsed: '—',
+    simplePassSha: '—',
+    simpleUiUpdates: 0,
 
     // receive mode state (SharedOpticalReceiveCore)
     productStage: 'Waiting for transfer',
@@ -473,6 +504,18 @@ Page({
   // r8 frozen-result history (local storage only; survives Reset Metrics).
   testHistory: [],
 
+  // TF-012 r21 minimal receive state. `simple` is the run object from
+  // utils/tf012-simple.js; when it is null, NOTHING of the simple path runs.
+  simple: null,
+  simpleKind: null,
+  simpleFinalized: false,
+  simpleUiUpdates: 0,
+  simpleClient: null,          // optional control channel (presence + telemetry only)
+  simpleClientConnected: false,
+  simplePeerPresent: false,
+  simpleSenderBroadcasting: false,
+  simpleAfterFinishFrames: 0,  // camera frames dropped after the run ended (idle proof)
+
   onLoad() {
     this.collectDeviceEvidence();
     this.readCameraPermission();
@@ -493,6 +536,16 @@ Page({
     const ladderLabels = ladder.map((value) => value + ' ms');
     this.setData({ holdMsLadder: ladderLabels, clockSource: CLOCK_SOURCE });
     this.applyHoldMs(BASELINE_DEFAULT_HOLD_MS);
+
+    // r21: the control URL/token are remembered, so the MINIMAL path never needs typing.
+    const savedUrl = storageAdapter.load('optilink.tf012.autoControlUrl');
+    const savedToken = storageAdapter.load('optilink.tf012.autoControlToken');
+    if (savedUrl || savedToken) {
+      this.setData({
+        autoControlUrl: savedUrl || this.data.autoControlUrl,
+        autoControlToken: savedToken || ''
+      });
+    }
 
     // TF-012 r8: restore the frozen-result history and the first-screen key panel.
     this.loadHistory();
@@ -525,6 +578,15 @@ Page({
     this.persistCheckpoint();
   },
 
+  /**
+   * r21: the DEFAULT experience is "open the Mini Program and it is ready". The control
+   * channel is OPTIONAL in the minimal path — a receive never depends on it, and a
+   * failure to connect can only ever cost the Sender status line.
+   */
+  onReady() {
+    this.simpleEnsureControl();
+  },
+
   onUnload() {
     this.stopAll();
   },
@@ -534,6 +596,9 @@ Page({
     const maxZoom = e.detail && e.detail.maxZoom;
     if (maxZoom != null) this.setData({ maxZoom: String(maxZoom) });
     this.appendLog('camera init done, maxZoom=' + maxZoom);
+    // r21 AUTO-START: the camera component is ready, so the default path needs no tap for
+    // it. startCamera() is idempotent, so a re-init cannot disturb a running session.
+    if (!this.data.running) this.startCamera();
   },
 
   onCameraStop() {
@@ -983,6 +1048,13 @@ Page({
       this.recordError('baseline_receiver_unavailable');
       return;
     }
+    // r21: once a MINIMAL run has finished, the camera must stop costing main-thread time.
+    // The frames are dropped here (no view, no ingest, no pending slot) so a PASSed phone
+    // is idle and cool, and RUN AGAIN stays instant because the camera keeps running.
+    if (this.simple && this.simple.finished) {
+      this.simpleAfterFinishFrames++;
+      return;
+    }
     // r17: counted AFTER the pipeline check, because this counter answers a different
     // question from baselineFramesReceived — "is the receiver the setup gate reads
     // actually being fed?" A page in another mode delivers camera frames all day while
@@ -1027,11 +1099,17 @@ Page({
       this.processedFrames++;
       this.windowProcessed++;
       if (receiver.complete && !this.baselineFinalized) this.finalizeBaseline();
+      // r21: the MINIMAL receive run is driven by the FRAME itself, so a PASS never waits
+      // for a timer. Cheap by construction: one comparison plus (at most) one decision.
+      if (this.simple) this.simpleAfterFrame();
     } catch (err) {
       this.recordError('baseline_failed:' + (err && err.message));
     } finally {
       // r19: one timing sample per PROCESSED frame (arrival + how long it took).
-      if (this.autoCameraTiming && entry && typeof entry.arrivedAt === 'number') {
+      // r21: ADVANCED ONLY. The normal path must not pay for diagnostic instrumentation:
+      // the tracker allocates per frame, and the physical runs already showed a ~99.7 %
+      // processing duty ratio.
+      if (this.data.showAdvanced && this.autoCameraTiming && entry && typeof entry.arrivedAt === 'number') {
         this.autoCameraTiming.note(entry.arrivedAt, clockMs() - t0);
       }
       const next = this.baselinePending;
@@ -1167,21 +1245,293 @@ Page({
       }
     }
 
-    if (this.data.mode === 'receive') {
-      this.onReceiveTick();
-    } else if (this.data.mode === 'baseline') {
-      this.onBaselineTick();
+    if (this.data.showAdvanced) {
+      if (this.data.mode === 'receive') {
+        this.onReceiveTick();
+      } else if (this.data.mode === 'baseline') {
+        this.onBaselineTick();
+      } else {
+        this.onBenchmarkTick();
+      }
     } else {
-      this.onBenchmarkTick();
+      // r21 NORMAL MODE: ONE small, change-gated patch at the tick rate (2 Hz <= 4 Hz).
+      // No fingerprints, no rotation histogram, no scheduler percentiles, no phase
+      // timing, no 30-field G7 patch — none of it is computed on this path.
+      this.simpleTick();
     }
 
-    // Rotate the FPS window.
+    // Rotate the FPS window (the simple patch reads it before this reset).
     this.windowStartAt = Date.now();
     this.windowReceived = 0;
     this.windowProcessed = 0;
 
-    // TF-012 r13: refresh the one-tap auto-test panel from the shared orchestrator.
+    // TF-012 r13: the auto harness keeps its own cadence whenever a runner exists,
+    // independent of which UI is on screen. It is a no-op without one.
     this.autoTick();
+  },
+
+  // ---- TF-012 r21 MINIMAL RECEIVE MODE / 极简接收模式 --------------------
+  //
+  // THE DEFAULT PATH. One tap and one decision:
+  //
+  //   CameraFrame → locate → sample → CRC → chunk → dedupe → reconstruct → SHA-256
+  //
+  // and it ends the INSTANT that decision is true: 16/16 unique chunks, 10240 assembled
+  // bytes, SHA-256 MATCH. There is NO SETUP gate, NO A1..A5, NO static probe, NO auto
+  // orchestrator, NO phase timing, NO fingerprints and NO rotation histogram on this
+  // path — all of that stays available behind ADVANCED DIAGNOSTICS (showAdvanced).
+  //
+  // Every decision lives in utils/tf012-simple.js (pure and unit-tested); this block is
+  // only the wiring: run lifecycle, a throttled change-gated UI patch, and the small
+  // result artefact.
+
+  /** A flat LOCAL snapshot of the receiver state the decision reads. No diagnostics. */
+  simpleCounters() {
+    const receiver = this.baselineReceiver;
+    const metrics = (receiver && receiver.metrics) ? receiver.metrics : null;
+    const result = this.baselineResult;
+    return {
+      cameraFrames: metrics ? metrics.cameraFrames : 0,
+      decodeAttempts: metrics ? metrics.decodeAttempts : 0,
+      successfulDecodes: metrics ? metrics.decodeSuccess : 0,
+      crcFailures: metrics ? metrics.crcFailures : 0,
+      locateFailures: metrics ? metrics.locateFailures : 0,
+      uniqueReceived: receiver ? receiver.receivedUniqueCount : 0,
+      totalChunks: receiver ? (receiver.totalChunks || simpleMode.SIMPLE_TOTAL_CHUNKS) : 0,
+      assembledBytes: result && result.bytes ? result.bytes.length : 0,
+      fileLength: receiver ? receiver.totalFileBytes : 0,
+      shaResult: result ? (result.match ? 'MATCH' : 'MISMATCH') : 'INCOMPLETE',
+      codeWidthPx: metrics ? metrics.codeWidthPx : null,
+      pixelsPerCell: metrics ? metrics.pixPerCellX : null,
+      contrast: metrics ? metrics.contrast : null,
+      rotation: metrics ? metrics.rotation : null
+    };
+  },
+
+  /** START RECEIVE / 开始接收 — the primary (and only) default action. */
+  onSimpleStart() {
+    this.simpleStart(simpleMode.SIMPLE_KIND_RECEIVE);
+  },
+
+  /** STATIC DECODE CHECK — a 5 s alignment check that passes at N valid decodes. */
+  onSimpleStaticCheck() {
+    this.simpleStart(simpleMode.SIMPLE_KIND_STATIC);
+  },
+
+  /** RUN AGAIN / 重新运行 — same kind, fresh receiver, fresh clock. */
+  onSimpleAgain() {
+    this.simpleStart(this.simpleKind || simpleMode.SIMPLE_KIND_RECEIVE);
+  },
+
+  /**
+   * Begin a run. The receiver state is reset so 16/16 is THIS run's evidence, never the
+   * previous run's, and the camera is already running (auto-started) — so a run costs one
+   * tap and starts measuring immediately.
+   */
+  simpleStart(kind) {
+    if (!simpleMode) {
+      wx.showToast({title: 'simple module unavailable: ' + simpleModeLoadError, icon: 'none'});
+      return;
+    }
+    this.simpleKind = kind === simpleMode.SIMPLE_KIND_STATIC
+      ? simpleMode.SIMPLE_KIND_STATIC
+      : simpleMode.SIMPLE_KIND_RECEIVE;
+    // The single-code receiver IS the receive path: locate → decode → chunk → dedupe.
+    if (this.data.mode !== 'baseline') {
+      this.setMode('baseline');
+    } else {
+      this.resetMetrics();
+    }
+    this.baselineFinalized = false;
+    this.simpleFinalized = false;
+    this.simpleAfterFinishFrames = 0;
+    this.simple = simpleMode.simpleRun(this.simpleKind, Date.now());
+    // A run never waits for the camera to be started by hand.
+    if (!this.data.running) this.startCamera();
+    this.simpleEnsureControl();
+    this.simpleFlush(true);
+    this.appendLog('SIMPLE ' + this.simpleKind + ' started');
+  },
+
+  /**
+   * The per-frame hook. Called from the baseline pipeline AFTER the receiver ingested the
+   * frame, so it is on the hot path and must stay trivial: two comparisons plus, at most,
+   * one decision call.
+   */
+  simpleAfterFrame() {
+    if (!this.simple || this.simple.finished) return;
+    // The existing pipeline reconstructs and SHA-256s the completed transfer before this
+    // line runs (receiver.complete → finalizeBaseline), so the decision sees the digest.
+    const decision = simpleMode.simpleDecision(this.simple, this.simpleCounters(), Date.now());
+    if (decision) this.simpleFinish(decision);
+  },
+
+  /**
+   * The throttled UI refresh (2 Hz, < 4 Hz). It is CHANGE-GATED: the patch is computed
+   * from cheap counters and published only when a value actually differs, so a quiet run
+   * costs no setData at all. It also evaluates the bound, which is how a dead camera still
+   * FAILS instead of hanging.
+   */
+  simpleTick() {
+    if (!this.simple || this.simple.finished) {
+      this.simpleFlush(false);
+      return;
+    }
+    const decision = simpleMode.simpleDecision(this.simple, this.simpleCounters(), Date.now());
+    if (decision) {
+      this.simpleFinish(decision);
+      return;
+    }
+    this.simpleFlush(false);
+  },
+
+  /** Publish the minimal patch, or nothing when nothing changed. */
+  simpleFlush(force) {
+    if (!simpleMode) return false;
+    const run = this.simple;
+    const counters = this.simpleCounters();
+    const now = Date.now();
+    const elapsedMs = run ? Math.max(0, now - run.startedAt) : 0;
+    const windowSeconds = Math.max(0.2, (now - this.windowStartAt) / 1000);
+    const fps = this.windowReceived > 0 ? this.windowReceived / windowSeconds : null;
+    const status = run ? run.status : simpleMode.SIMPLE_STATUS_IDLE;
+    const finished = Boolean(run && run.finished);
+    const patch = {
+      simpleStatus: status,
+      simpleResult: status,
+      simpleResultClass: finished ? (status === simpleMode.SIMPLE_STATUS_PASS ? 'ok' : 'bad') : 'pending',
+      simpleDetail: simpleMode.simpleDetailText(status, run ? run.reason : null, counters),
+      simpleProgress: simpleMode.simpleProgressText(
+        counters.uniqueReceived, counters.totalChunks || simpleMode.SIMPLE_TOTAL_CHUNKS),
+      simpleDecode: simpleMode.simpleDecodeText(counters, fps),
+      simpleGeometry: simpleMode.simpleGeometryText(counters),
+      simpleElapsed: simpleMode.simpleElapsedText(elapsedMs),
+      simpleCameraLabel: simpleMode.simpleCameraText(this.data.running, this.data.callbackActive),
+      simpleSenderLabel: simpleMode.simpleSenderText(this.simplePeerPresent, this.simpleClientConnected),
+      simplePassBytes: counters.assembledBytes > 0 ? counters.assembledBytes + ' B' : '—',
+      simplePassElapsed: finished ? simpleMode.simpleElapsedText(elapsedMs) : '—',
+      simplePassSha: counters.shaResult === 'MATCH'
+        ? 'SHA-256 MATCH'
+        : (finished ? 'SHA-256 ' + counters.shaResult : '—')
+    };
+    let changed = Boolean(force);
+    if (!changed) {
+      const keys = Object.keys(patch);
+      for (let index = 0; index < keys.length; index += 1) {
+        if (this.data[keys[index]] !== patch[keys[index]]) { changed = true; break; }
+      }
+    }
+    if (!changed) return false;
+    this.simpleUiUpdates = (this.simpleUiUpdates || 0) + 1;
+    patch.simpleUiUpdates = this.simpleUiUpdates;
+    this.setData(patch);
+    return true;
+  },
+
+  /** Terminal verdict. The run never re-decides, and the camera stops being fed. */
+  simpleFinish(decision) {
+    const run = this.simple;
+    if (!run || run.finished) {
+      return;
+    }
+    run.finished = true;
+    run.finishedAt = Date.now();
+    run.status = decision.status;
+    run.reason = decision.reason;
+    this.simpleFlush(true);
+    this.appendLog('SIMPLE ' + decision.status + ' (' + decision.reason + ') in '
+      + simpleMode.simpleElapsedText(decision.elapsedMs));
+  },
+
+  /** The SMALL result artefact: local measurements and local digests only. */
+  simpleResultPayload() {
+    const run = this.simple;
+    const counters = this.simpleCounters();
+    const startedAt = run ? run.startedAt : Date.now();
+    const finishedAt = (run && run.finishedAt) ? run.finishedAt : Date.now();
+    const result = this.baselineResult;
+    return simpleMode.simpleResultJson({
+      buildId: BUILD_ID,
+      mode: 'simple-receive',
+      status: run ? run.status : simpleMode.SIMPLE_STATUS_IDLE,
+      reason: run ? run.reason : null,
+      startedAtIso: new Date(startedAt).toISOString(),
+      finishedAtIso: (run && run.finishedAt) ? new Date(run.finishedAt).toISOString() : null,
+      elapsedMs: Math.max(0, finishedAt - startedAt),
+      sha256: result ? result.sha256Hex : null,
+      manifestSha256: result ? result.expectedSha256 : null,
+      counters
+    });
+  },
+
+  /** COPY RESULT / 复制结果 — the default path's only export. */
+  onSimpleCopy() {
+    const payload = this.simpleResultPayload();
+    this.copyToClipboard(JSON.stringify(payload, null, 2), 'Result copied / 已复制结果');
+  },
+
+  /** ADVANCED DIAGNOSTICS toggle. OFF is the default and the PO's normal state. */
+  onSimpleToggleAdvanced() {
+    const next = !this.data.showAdvanced;
+    const patch = {showAdvanced: next};
+    if (next) Object.assign(patch, {showDiagnostics: true}, this.buildKeyStatusPatch());
+    this.setData(patch);
+    this.appendLog(next
+      ? 'advanced diagnostics ON / 已开启高级诊断'
+      : 'advanced diagnostics OFF / 已关闭高级诊断 (minimal receive UI)');
+  },
+
+  /**
+   * The optional control channel. It carries CONTROL and TELEMETRY only (never payload),
+   * it is what makes "Sender: CONNECTED" meaningful (a relay-confirmed peer, not a socket),
+   * and NOTHING about a receive depends on it.
+   */
+  simpleEnsureControl() {
+    if (this.simpleClient || !autoHarness || typeof autoHarness.createControlClient !== 'function') return;
+    const url = this.data.autoControlUrl;
+    if (!url) return;
+    try {
+      this.simpleClient = autoHarness.createControlClient({
+        url,
+        token: this.data.autoControlToken || '',
+        buildId: BUILD_ID,
+        onMessage: (message) => this.simpleOnMessage(message),
+        onStatus: (status) => this.simpleOnStatus(status),
+        onLog: (text) => this.appendLog('control: ' + text)
+      });
+      this.simpleClient.connect();
+    } catch (err) {
+      this.simpleClient = null;
+      this.appendLog('control channel unavailable: ' + (err && err.message));
+    }
+  },
+
+  simpleOnStatus(status) {
+    this.simpleClientConnected = Boolean(status && status.connected);
+  },
+
+  simpleOnMessage(message) {
+    if (!message || typeof message !== 'object') return;
+    // MESSAGE CLASS 2 — presence. A relay-confirmed sender peer, never our own socket.
+    const notice = (opticalCore && typeof opticalCore.validateTf012AutoPeerNotice === 'function')
+      ? opticalCore.validateTf012AutoPeerNotice(message)
+      : {ok: false};
+    if (notice.ok) {
+      // The role string is the SHARED constant, never a locally spelled literal: the
+      // r15 handshake bug was exactly a message-class/role mismatch that unit tests with a
+      // hard-coded string could not see.
+      const senderRole = (opticalCore && opticalCore.TF012_AUTO_SENDER_ROLE) || null;
+      if (senderRole && message.role === senderRole) {
+        this.simplePeerPresent = message.event === 'hello';
+        this.simpleFlush(true);
+      }
+      return;
+    }
+    // Telemetry tells us whether the carrier is actually broadcasting. Useful, optional.
+    if (message.type === 'command' && message.action === 'TELEMETRY') {
+      this.simpleSenderBroadcasting = Boolean(message.broadcasting);
+      this.simpleFlush(false);
+    }
   },
 
   // ---- TF-012 r13 AUTO PHYSICAL TEST / 自动物理测试 ----------------------
@@ -1302,6 +1652,9 @@ Page({
       wx.showToast({title: 'Set the control channel URL first / 请先填写控制地址', icon: 'none'});
       return;
     }
+    // r21: the A1..A5 sweep is ADVANCED-only. Tapping it here switches the advanced surface
+    // on, so the evidence it produces is visible without hunting for a second toggle.
+    this.setData({showAdvanced: true, showDiagnostics: true});
     // The auto plan is a SINGLE-CODE BASELINE plan: switch the page first, then start the
     // camera. Both are idempotent, so a second tap never disturbs a running session.
     if (this.data.mode !== 'baseline') {
@@ -1366,6 +1719,8 @@ Page({
       wx.showToast({title: 'Set the control channel URL first / 请先填写控制地址', icon: 'none'});
       return;
     }
+    // r21: the static probe is ADVANCED-only, like the sweep.
+    this.setData({showAdvanced: true, showDiagnostics: true});
     if (this.data.mode !== 'baseline') this.setMode('baseline');
     if (!this.data.running) this.startCamera();
     const runner = createAutoTestRunner({

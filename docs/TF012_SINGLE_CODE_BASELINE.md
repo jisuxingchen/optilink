@@ -383,6 +383,144 @@ Every field is `null` when its denominator is 0. A run with no decode attempts h
 `null` (0/0 is undefined), **not** 0 %. These metrics are diagnostic: they rank
 PASSing points and **never decide PASS**.
 
+## r21 MINIMAL RECEIVER / 极简接收器
+
+**Why.** r13–r20 turned the Mini Program into a diagnostic harness: a SETUP gate, an A1–A5
+sweep, a static probe, per-phase scheduler telemetry, camera timing, failure fingerprints,
+sampling geometry and a rotation histogram. Every one of those earns its place while the
+physics is being diagnosed — and every one of them is paid for in the camera callback path,
+where the physical runs measured a **processing duty ratio of ~99.7 %** (the JS thread busy
+almost the whole time) and a **SETUP_NOT_READY verdict that arrived only after a 5 s setup
+window plus an 85 s plan**.
+
+The PO's requirement is now the opposite: **simplify, keep only what is needed, reduce
+failure points, reduce waiting time.** r21 makes the MINIMAL path the default and moves the
+whole harness behind **ADVANCED DIAGNOSTICS** (off by default).
+
+### Default experience
+
+```
+open Mini Program  →  camera auto-starts  →  sender connected
+                   →  tap ONE button       →  receive  →  PASS/FAIL  →  COPY RESULT
+```
+
+One screen, and nothing else:
+
+| Row | Content |
+| --- | --- |
+| Build | `buildId` (top strip, always visible) |
+| Camera | `READY / 就绪` — frames are ARRIVING, not merely requested |
+| Sender | `CONNECTED / 已连接` — a relay-confirmed peer, never merely our own socket |
+| Primary button | **START RECEIVE / 开始接收** |
+| Progress | `unique chunks / total chunks` |
+| Decode | `123 OK · 14 CRC · 28.4 FPS` |
+| Geometry | `310px · 3.23px/cell · contrast 176 · rot 0` |
+| Result | `WAITING` / `PASS` / `FAIL` |
+| On PASS | `10240 B · 3.1 s · SHA-256 MATCH` |
+| Buttons | **COPY RESULT**, **RUN AGAIN**, **STATIC CHECK**, **ADVANCED DIAGNOSTICS** |
+
+No A1–A5, no static probe, no SETUP state machine, no diagnostics panel, no scrolling wall.
+`ADVANCED DIAGNOSTICS / 高级诊断` reveals the complete r13–r20 surface unchanged.
+
+### The simple receive path
+
+```
+CameraFrame → locate → sample → CRC → chunk → dedupe → reconstruct → SHA-256
+```
+
+It is the single-code baseline receiver with no orchestrator around it. PASS is, exactly as
+the frozen baseline payload has always defined it:
+
+``` 
+uniqueReceived == 16  AND  assembledBytes == 10240  AND  SHA-256 MATCH
+```
+
+All of the DECIDING lives in `utils/tf012-simple.js` — pure, platform-free,
+dependency-free and unit-tested without a phone, a camera or a socket:
+
+| Function | Role |
+| --- | --- |
+| `simpleRun(kind, nowMs)` | begin a run (`receive` or `static`) |
+| `simpleDecision(run, counters, nowMs)` | the ONLY place PASS/FAIL is decided; a finished run never decides twice |
+| `simpleProgressText` / `simpleDecodeText` / `simpleGeometryText` / `simpleElapsedText` | cheap UI text |
+| `simpleResultJson(input)` | the SMALL result artefact |
+
+### Event-driven completion — no fixed waits
+
+| Bound | Value | Behaviour |
+| --- | --- | --- |
+| camera ready | 5 s | after that the camera label reads NOT READY; a run still needs no camera *action* from the PO |
+| receive | 30 s | a bound, never a schedule |
+| static decode check | 5 s | passes at **10** valid decodes |
+
+**A PASS in 3 s finishes in 3 s.** The decision is evaluated on every processed frame, so the
+verdict is immediate; the same decision is evaluated on the 2 Hz UI tick as well, which is how
+a camera that stops delivering still FAILs at the bound instead of hanging. After the verdict
+the frames are dropped before the decoder (`simpleAfterFinishFrames`), so a finished phone is
+idle and cool and `RUN AGAIN` stays instant.
+
+### Throttled, change-gated UI (`setData` discipline)
+
+* **Nothing per camera frame.** The frame callback only batches counters on the instance.
+* **One small patch at 2 Hz** (`UI_REFRESH_MS = 500`, i.e. ≤ 4 Hz), and only when a value
+  actually **changed** — a quiet tick costs zero `setData`.
+* Meaningful state changes (run start, PASS, FAIL, timeout, peer presence) publish immediately.
+* `simpleUiUpdates` is shown in the UI so the refresh rate is observable on the device.
+
+### Hot-path diagnostics removed from the default path
+
+In normal mode the runtime does **not** compute: failure fingerprints, stable-bit analysis,
+`stableBitCount`, phase timing/`phaseTiming`, scheduler percentiles, `timingIntegrity`, camera
+timing samples, sampling geometry, rotation histograms, the G7 panel or the 30-field baseline
+patch. The r19 camera-timing `note()` call in the frame wrapper is gated behind
+`showAdvanced`, and the per-frame receiver API calls (`crcFailureDiagnostics()`,
+`geometryDiagnostics()`, `rotationDiagnostics()`, `decodedChunkCounts()`) are not made at all —
+a test installs spies and proves **zero** calls after 40 frames and several ticks.
+
+The default hot path is therefore as close as it can be to
+`locate → sample → CRC → chunk`.
+
+### Result JSON — small
+
+```json
+{
+  "buildId": "…", "mode": "simple-receive", "status": "PASS", "reason": "sha-match",
+  "startedAtIso": "…", "finishedAtIso": "…", "elapsedMs": 3120,
+  "cameraFrames": 45, "decodeAttempts": 45, "successfulDecodes": 16,
+  "crcFailures": 0, "locateFailures": 29,
+  "uniqueReceived": 16, "totalChunks": 16, "assembledBytes": 10240, "fileLength": 10240,
+  "sha256": "1e21881b…", "manifestSha256": "1e21881b…", "shaResult": "MATCH",
+  "observedCodeWidthPx": 310.4, "pixelsPerCell": 3.23, "contrast": 176.2, "rotation": 0,
+  "networkPayloadPath": "NONE"
+}
+```
+
+An exact-key test pins that list, every value is a scalar (no diagnostic trees) and the whole
+document stays under 1.2 kB. **Field-name note:** the reference digest is `manifestSha256` and
+the assembled length is `assembledBytes`, not "expected…"/"reconstructed…": the lab's
+payload-shaped-key guards refuse those fragments, and weakening a payload guard so a
+diagnostic field can be spelled the way we like is the wrong trade (the same call as r20's
+`plannedTicks`).
+
+The minimal path uploads nothing. It COPIES the small JSON; the lab upload stays on the
+advanced A1–A5 path, with its own dedicated validator. `networkPayloadPath` stays `NONE`, and
+on the wire the minimal path sends exactly ONE message — the `{type:'hello'}` handshake — which
+carries no digest, no chunk, no frame.
+
+### Governance
+
+This changes the Mini Program runtime, so **buildId moves to r21** (`tf012-r21-<content-sha>`),
+and both buildId prefix assertions follow. Everything the r13–r20 revisions established
+(message classes, validators, socket-keyed presence, the relay's payload-key scan, the
+`validate_project.py` governance checks) is untouched.
+
+### Verification
+
+`tf012-mini-simple.test.ts` — 13 cases, and the PASS case is proven through the **REAL**
+pipeline: the shared transfer's 16 chunks are rendered to camera frames and pushed through the
+page's own frame callback, so the locator, decoder, chunk store, reconstruction and SHA-256 are
+the shipped implementations (measured: `16/16`, `10240 B`, `MATCH`).
+
 ## r20 EVIDENCE INTEGRITY PATCH / 证据完整性补丁
 
 **Physical evidence (r19 build, second probe).** The same optics verdict as the first probe
