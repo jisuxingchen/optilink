@@ -51,7 +51,7 @@ test('pages/index/index.js registers Page() with visible boot data', () => {
   assert.ok(captured, 'Page() was called');
   const data = (captured as Record<string, unknown>).data as Record<string, unknown>;
   assert.ok(data.buildId, 'data.buildId present');
-  assert.match(String(data.buildId), /^tf012-r19-/, 'buildId uses the current tf012 build prefix');
+  assert.match(String(data.buildId), /^tf012-r20-/, 'buildId uses the current tf012 build prefix');
   assert.equal(data.mode, 'receive', 'mode defaults to receive');
   assert.ok('bootStatus' in data, 'boot status field present');
   assert.ok('bootError' in data, 'boot error field present');
