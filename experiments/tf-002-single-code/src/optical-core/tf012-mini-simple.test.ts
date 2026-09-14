@@ -410,6 +410,24 @@ test('r21 receive 5: the minimal receive PASSes on 16/16 + SHA MATCH through the
     assert.equal(payload.successfulDecodes, 16, 'every frame the locator locked decoded');
     assert.equal(payload.crcFailures, 0);
     assert.equal(payload.locateFailures, 0);
+
+    // The frozen gate must not be redefined by self-consistent optical metadata.
+    // A 1-chunk/640 B transfer with its own matching digest is NOT this baseline.
+    const wrongChunks = simpleMode.simpleRun('receive', 0);
+    const wrongChunkVerdict = simpleMode.simpleDecision(wrongChunks, {
+      uniqueReceived: 1, totalChunks: 1, assembledBytes: 640, fileLength: 640, shaResult: 'MATCH',
+    }, 100);
+    assert.equal(wrongChunkVerdict.status, 'FAIL');
+    assert.equal(wrongChunkVerdict.reason, 'baseline-total-chunks');
+
+    // Nor may metadata keep 16 chunks but redefine the file size.
+    const wrongBytes = simpleMode.simpleRun('receive', 0);
+    const wrongByteVerdict = simpleMode.simpleDecision(wrongBytes, {
+      uniqueReceived: 16, totalChunks: 16, assembledBytes: 9600, fileLength: 9600, shaResult: 'MATCH',
+    }, 100);
+    assert.equal(wrongByteVerdict.status, 'FAIL');
+    assert.equal(wrongByteVerdict.reason, 'baseline-file-bytes');
+
     // "If PASS occurs in 3 s: finish in 3 s" — the elapsed time is the REAL run length.
     assert.ok(payload.elapsedMs >= 3000 && payload.elapsedMs < 4000,
       `elapsed ${payload.elapsedMs} ms must be the real time, not a plan`);

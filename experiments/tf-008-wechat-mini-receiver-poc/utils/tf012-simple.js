@@ -120,14 +120,23 @@ function simpleDecision(run, counters, nowMs) {
     return null;
   }
 
+  // The MINIMAL receive gate is the FROZEN 10 KiB baseline, not merely any
+  // self-consistent transfer described by optical metadata. Receiver metadata is useful
+  // evidence, but it must never redefine the acceptance target.
   const total = numberOr(counts.totalChunks, run.totalChunks);
+  const length = numberOr(counts.fileLength, 0);
   const unique = numberOr(counts.uniqueReceived, 0);
-  if (unique >= total && total > 0) {
-    // All chunks are held. PASS requires the assembled length AND the digest, exactly
-    // as the frozen baseline payload has always defined it.
+  if (total !== run.totalChunks) {
+    return {status: SIMPLE_STATUS_FAIL, reason: 'baseline-total-chunks', elapsedMs};
+  }
+  if (length > 0 && length !== run.fileBytes) {
+    return {status: SIMPLE_STATUS_FAIL, reason: 'baseline-file-bytes', elapsedMs};
+  }
+  if (unique === run.totalChunks) {
+    // All 16 frozen-baseline chunks are held. PASS requires exactly 10,240 assembled
+    // bytes AND the local digest match. Metadata cannot shrink or expand this gate.
     const bytes = numberOr(counts.assembledBytes, 0);
-    const length = numberOr(counts.fileLength, run.fileBytes);
-    if (bytes !== length) {
+    if (bytes !== run.fileBytes) {
       return {status: SIMPLE_STATUS_FAIL, reason: 'file-length', elapsedMs};
     }
     if (counts.shaResult === 'MATCH') {
@@ -209,8 +218,12 @@ function simpleDetailText(status, reason, counters) {
     if (reason === 'receive-timeout') return 'timeout after ' + (SIMPLE_RECEIVE_TIMEOUT_MS / 1000)
       + ' s at ' + numberOr(counts.uniqueReceived, 0) + ' / ' + numberOr(counts.totalChunks, SIMPLE_TOTAL_CHUNKS) + ' chunks';
     if (reason === 'sha-mismatch') return 'all chunks received but SHA-256 MISMATCH';
+    if (reason === 'baseline-total-chunks') return 'baseline mismatch: '
+      + numberOr(counts.totalChunks, 0) + ' chunks, expected ' + SIMPLE_TOTAL_CHUNKS;
+    if (reason === 'baseline-file-bytes') return 'baseline mismatch: '
+      + numberOr(counts.fileLength, 0) + ' B, expected ' + SIMPLE_FILE_BYTES + ' B';
     if (reason === 'file-length') return 'all chunks received but length is '
-      + numberOr(counts.assembledBytes, 0) + ' B, expected ' + numberOr(counts.fileLength, SIMPLE_FILE_BYTES) + ' B';
+      + numberOr(counts.assembledBytes, 0) + ' B, expected ' + SIMPLE_FILE_BYTES + ' B';
     return String(reason || 'failed');
   }
   if (status === SIMPLE_STATUS_RECEIVING) return 'receiving';
