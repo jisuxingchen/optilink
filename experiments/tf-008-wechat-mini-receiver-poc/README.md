@@ -74,7 +74,7 @@ CameraFrame → locate → sample → CRC → chunk → dedupe → reconstruct �
 
 **How to run it**
 
-1. Open the Mini Program. The first screen must read `buildId tf012-r21-44a56ff`. The camera
+1. Open the Mini Program. The first screen must read `buildId tf012-r21-0cbbfdc`. The camera
    starts by itself (allow `scope.camera` if asked).
 2. On the PC, start the single-code baseline sender (the 16-chunk transfer).
 3. Wait until the phone shows **Camera: READY** and **Sender: CONNECTED**
