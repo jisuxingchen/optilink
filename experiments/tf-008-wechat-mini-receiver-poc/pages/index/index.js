@@ -388,6 +388,8 @@ Page({
     autoStepCameraTiming: '—',
     autoStepCrcFailure: '—',
     autoStepGeometry: '—',
+    autoStepRotation: '—',
+    autoRunPhaseTiming: '—',
     // r17 PRE-FLIGHT: the five prerequisites (camera, control, peer, telemetry, sender)
     // must all read READY before SETUP measuring starts; the window rows below always
     // label the time span they belong to.
@@ -1235,6 +1237,13 @@ Page({
       geometry: receiver && typeof receiver.geometryDiagnostics === 'function'
         ? receiver.geometryDiagnostics()
         : null,
+      // r20: how the sampling ROTATION was distributed over the frames of this scope, per
+      // frame and split by outcome. `frameRotationIndex` above is the latest lock only, so
+      // it cannot tell one orientation flip from per-frame instability. Local receiver
+      // data: no sender oracle, no network payload path.
+      rotations: receiver && typeof receiver.rotationDiagnostics === 'function'
+        ? receiver.rotationDiagnostics()
+        : null,
       cameraTiming: this.autoCameraTiming ? this.autoCameraTiming.snapshot() : null
     };
   },
@@ -1547,6 +1556,9 @@ Page({
       autoStepCameraTiming: this.autoStepCameraTimingText(result),
       autoStepCrcFailure: this.autoStepCrcFailureText(result),
       autoStepGeometry: this.autoStepGeometryText(result),
+      // r20: per-frame rotation histogram, and the per-phase timing verdicts.
+      autoStepRotation: this.autoStepRotationText(result),
+      autoRunPhaseTiming: this.autoRunPhaseTimingText(result),
       // r18: the abort record is explicit — source, reason and the real instant.
       autoAbortSummary: result.abort
         ? result.abort.source + ' · ' + result.abort.reason + ' · ' + result.abort.abortedAtIso
@@ -1651,6 +1663,58 @@ Page({
       + ' · score ' + sample.refinementScore.toFixed(4)
       + ' (2nd seed ' + sample.secondSeedScore.toFixed(3) + ')'
       + ' · candidate ' + sample.selectedCandidate + '/' + sample.candidates;
+  },
+
+  /**
+   * r20: the rotation histogram of the LAST frozen step, counted per FRAME. The geometry
+   * row above reports one lock; this reports whether the orientation was STABLE across the
+   * whole scope (one bucket, no transitions) or unstable (spread buckets, many
+   * transitions). Pure formatter over local receiver evidence.
+   */
+  autoStepRotationText(result) {
+    const step = result && Array.isArray(result.steps) ? result.steps[result.steps.length - 1] : null;
+    const rotations = step && step.receiver ? step.receiver.rotations : null;
+    if (!rotations) return '—';
+    const histogram = this.autoRotationHistogramText(rotations.rotations);
+    if (rotations.framesCounted === 0) {
+      return 'no frame reached a decode attempt (unlocated ' + rotations.unlocatedFrames + ')';
+    }
+    return histogram
+      + ' · counted ' + rotations.framesCounted
+      + ' · unlocated ' + rotations.unlocatedFrames
+      + ' · dominant ' + rotations.dominantRotation
+      + ' (' + (rotations.dominantRotationRatio == null
+        ? '—' : (rotations.dominantRotationRatio * 100).toFixed(0) + '%') + ')'
+      + ' · transitions ' + rotations.transitions
+      + ' · accepted only ' + this.autoRotationHistogramText(rotations.accepted);
+  },
+
+  /** `{0: 12, 3: 90}` → `rot 0×12 3×90`, sorted by index. Empty objects read as `none`. */
+  autoRotationHistogramText(histogram) {
+    if (!histogram) return 'none';
+    const keys = Object.keys(histogram).sort((a, b) => Number(a) - Number(b));
+    if (keys.length === 0) return 'none';
+    return keys.map((key) => 'rot ' + key + '×' + histogram[key]).join(' ');
+  },
+
+  /**
+   * r20: per-phase plan-vs-actual and the timing VERDICT for each phase. A phase that
+   * overshot its plan is named, and so is the reason (`ORCHESTRATOR_STALL`,
+   * `NO_TICKS_DURING_PLANNED_PHASE`, `PHASE_OVERSHOOT`). r19 showed only a run-wide
+   * valid/invalid flag, so a 5 s SETUP that actually ran 35.9 s read as "OK".
+   */
+  autoRunPhaseTimingText(result) {
+    const phases = result && Array.isArray(result.phaseTiming) ? result.phaseTiming : null;
+    if (!phases || phases.length === 0) return '—';
+    const invalid = result.timingIntegrity && Array.isArray(result.timingIntegrity.invalidPhases)
+      ? result.timingIntegrity.invalidPhases
+      : [];
+    const parts = phases.map((entry) => {
+      const plan = entry.plannedDurationMs == null ? '—' : entry.plannedDurationMs;
+      return entry.phase + ' ' + entry.actualDurationMs + '/' + plan + ' ms'
+        + (entry.timingValid ? '' : ' [' + entry.timingReason + ']');
+    });
+    return parts.join(' · ') + (invalid.length > 0 ? ' · INVALID: ' + invalid.join(', ') : '');
   },
 
   refreshAutoFinalJson() {

@@ -31,6 +31,7 @@ import {
   type Tf012AutoStepResult,
 } from './tf012-auto-orchestrator.ts';
 import {Tf012AutoCameraTimingTracker} from './tf012-auto-camera-timing.ts';
+import {SingleBaselineRotationTracker} from './single-baseline.ts';
 
 export interface FakePeerOptions {
   startAt?: number;
@@ -65,6 +66,11 @@ export interface FakePeerOptions {
   windowFps?: number | null;
   /** Extra control messages injected at a given tick index (for hostile-input tests). */
   injectAtTick?: number;
+  /**
+   * Runs BEFORE `orchestrator.tick()` on the requested tick — or on EVERY tick when
+   * `injectAtTick` is omitted, which is what a test needs when the tick it cares about
+   * depends on how the run progressed (e.g. "the first tick after A1 was issued").
+   */
   inject?: (context: FakePeerContext) => void;
 
   // ---- r17 camera acquisition -------------------------------------------------
@@ -104,7 +110,7 @@ export interface FakePeerOptions {
    * orchestrator's side (the r17 physical run stalled for 19 s and 30 s).
    */
   stallMs?: number;
-  /** Injected only on ticks whose LAST progress entry satisfies this predicate. */
+  /** Injected on ticks whose LAST progress entry satisfies this predicate. */
   stallOn?: (progress: Tf012AutoProgress) => boolean;
   /** How many stalls may be injected (default 1). */
   stallTimes?: number;
@@ -119,6 +125,12 @@ export interface FakePeerOptions {
   failureMeanBitFlip?: number;
   /** Refinement score of the best rejected frame. */
   failureRefinementScore?: number;
+  /**
+   * r20: the sampling rotation of each counted frame, cycled in order and restarted at
+   * every metric reset. `[0]` (the default) is a perfectly stable orientation; `[1, 3]`
+   * alternates, which is the physical r19 signature of orientation instability.
+   */
+  rotationSequence?: readonly number[];
   /** r19: run a different plan (the static probe) instead of the shipped A1..A5 sweep. */
   steps?: readonly Tf012AutoStep[];
   /** r19: mark the artefact as the short diagnostic probe. */
@@ -206,6 +218,26 @@ export function createFakePeer(options: FakePeerOptions = {}): FakePeer {
   const cameraTiming = new Tf012AutoCameraTimingTracker();
   /** Frames the fake decoder rejected, with the fingerprint it rejected them under. */
   let failureFingerprint: {hash: string; raw: Uint8Array} | null = null;
+
+  // ---- r20 rotation model -----------------------------------------------------
+  /** Per-frame sampling rotation, cycled; restarted at every metric reset. */
+  const rotationSequence = options.rotationSequence ?? [0];
+  let rotationFrame = 0;
+  const rotationTracker = new SingleBaselineRotationTracker();
+  /**
+   * One frame that reached the decode attempt: its rotation and its outcome. Called once
+   * per modelled frame, so the counts add up to the frames the fake says it decoded.
+   */
+  const noteRotationFrame = (outcome: 'accepted' | 'crc-failed'): void => {
+    const rotation = rotationSequence[rotationFrame % rotationSequence.length] ?? 0;
+    rotationFrame += 1;
+    rotationTracker.note(rotation, outcome);
+    receiver.rotations = rotationTracker.diagnostics();
+    receiver.frameRotationIndex = rotation;
+  };
+  const noteRotations = (count: number, outcome: 'accepted' | 'crc-failed'): void => {
+    for (let index = 0; index < count; index += 1) noteRotationFrame(outcome);
+  };
 
   const noteFailure = (): void => {
     receiver.crcDiagnostics.failedFrames += 1;
@@ -315,6 +347,7 @@ export function createFakePeer(options: FakePeerOptions = {}): FakePeer {
     if (sender.paused) {
       // A frozen carrier still decodes: that is the whole point of A4.
       receiver.successfulDecodes += 10;
+      noteRotations(FRAMES_PER_TICK, 'accepted');
       noteDecode(sender.cursor ?? 0);
       addIndex(sender.cursor ?? 0);
       return;
@@ -331,10 +364,16 @@ export function createFakePeer(options: FakePeerOptions = {}): FakePeer {
         // An unusable setup: the locator finds the carrier but nothing decodes.
         receiver.crcFailures += FRAMES_PER_TICK;
         receiver.locateFailures += 2;
+        // r20: the two locate failures are frames with NO lock, so they carry no rotation.
+        rotationTracker.noteUnlocated();
+        rotationTracker.noteUnlocated();
+        receiver.rotations = rotationTracker.diagnostics();
+        noteRotations(FRAMES_PER_TICK, 'crc-failed');
         noteFailure();
         return;
       }
       receiver.successfulDecodes += 14;
+      noteRotations(FRAMES_PER_TICK, 'accepted');
       const accepted = behaviour === 'chunk0' ? [0] : behaviour === 'many' ? [0, 1, 2] : [3];
       for (const index of accepted) {
         noteDecode(index);
@@ -344,6 +383,7 @@ export function createFakePeer(options: FakePeerOptions = {}): FakePeer {
       return;
     }
     receiver.successfulDecodes += 13;
+    noteRotations(FRAMES_PER_TICK, 'accepted');
     receiver.observedCodeWidthPx = 253;
     receiver.pixelsPerCellX = 2.64;
     receiver.pixelsPerCellY = 2.65;
@@ -428,12 +468,22 @@ export function createFakePeer(options: FakePeerOptions = {}): FakePeer {
         // interval delta would silently collapse to {}. The port contract is a fresh
         // snapshot, so the fake obeys it exactly like the phone does.
         acceptedDecodeCountByChunkIndex: {...receiver.acceptedDecodeCountByChunkIndex},
+        // r20: the rotation histogram is three more objects — same hazard.
+        rotations: {
+          ...receiver.rotations,
+          rotations: {...receiver.rotations.rotations},
+          accepted: {...receiver.rotations.accepted},
+          crcFailures: {...receiver.rotations.crcFailures},
+        },
       }),
       resetReceiverMetrics: () => {
         const fresh = emptyReceiverSample();
         Object.assign(receiver, fresh);
         // The host resets its camera timing counters at the same boundary (r19 contract).
         cameraTiming.reset();
+        // ...and its rotation histogram, which therefore reports exactly one scope (r20).
+        rotationTracker.reset();
+        rotationFrame = 0;
         resets.push({tickIndex, now});
       },
       cameraStatus: (): Tf012AutoCameraStatus => ({
@@ -482,7 +532,7 @@ export function createFakePeer(options: FakePeerOptions = {}): FakePeer {
         && (options.staleAfterTick === undefined || tickIndex <= options.staleAfterTick)) {
         telemetryAt = options.telemetryAgeMs === undefined ? now : now - options.telemetryAgeMs;
       }
-      if (options.injectAtTick === tickIndex && options.inject) {
+      if (options.inject && (options.injectAtTick === undefined || options.injectAtTick === tickIndex)) {
         options.inject({tickIndex, now, orchestrator, commands});
       }
       applyPendingMode();

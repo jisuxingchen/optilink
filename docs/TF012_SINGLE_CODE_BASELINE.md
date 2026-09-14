@@ -383,6 +383,94 @@ Every field is `null` when its denominator is 0. A run with no decode attempts h
 `null` (0/0 is undefined), **not** 0 %. These metrics are diagnostic: they rank
 PASSing points and **never decide PASS**.
 
+## r20 EVIDENCE INTEGRITY PATCH / 证据完整性补丁
+
+**Physical evidence (r19 build, second probe).** The same optics verdict as the first probe
+(`SETUP_NOT_READY`, 0/118 decodes, 0 locate failures) but the run's own timing block said
+something self-contradictory:
+
+```
+SETUP: tickCount 0 · largestTickGapMs null · actualDurationMs 35911 · plannedDurationMs 5000
+       overshootMs 30911 · timingValid TRUE          ← the defect
+setupGate.evidenceWindow.durationMs 9520             ← its own window was only 9.5 s
+phaseTiming: one run-wide "valid" verdict, no phase named
+rotation: 3 (single index) · distinctFingerprints 8/8 · stableBitCount 2675/5776
+```
+
+Two instrumentation defects, both about **when a phase is finished**:
+
+| Defect | Symptom | Cause |
+| --- | --- | --- |
+| **False-valid timing** | a 30.9 s overshoot on a 5 s plan reported `timingValid: true` | validity was derived from *measured* tick gaps only; a phase with `tickCount 0` has no measurable gap, so nothing could invalidate it |
+| **Phase scope closed on the next tick** | SETUP claimed 35 911 ms while its own evidence window was 9 520 ms | the tracker was closed by whichever tick next observed a *different* phase, so an abort + STOP tail between the real transition and the next tick was charged to the phase that had already ended |
+
+**1 — Every phase change is a transition (TASK 1/2).** `enterPhase(next, at)` is now the ONLY
+way `this.phase` changes, and it takes the instant that CAUSED the change: `start()`,
+`beginAbort()` (the abort instant itself, the key fix), the camera wait, the setup request,
+the setup confirmation, each step, the STOP, and the final DONE/ABORTED. The opening instant
+is recorded as the phase's first sample, so a phase's first interval is
+`first tick − transition`, not `tick₂ − tick₁`. Tick-only bookkeeping (`notePhase`) no longer
+opens or closes anything: it records the tick against the phase that is actually running.
+
+**2 — A phase's evidence is judged on its own terms (TASK 1).** Each phase now carries
+`timingReason` and `plannedTicks` (the plan divided by the 250 ms host cadence), and the
+verdict is chosen in this order:
+
+| Reason | Rule | Why this order |
+| --- | --- | --- |
+| `ORCHESTRATOR_STALL` | a measured gap > **1500 ms** | the cause; six cadences cannot be jitter, and the overshoot is only its consequence |
+| `NO_TICKS_DURING_PLANNED_PHASE` | a planned phase with `< 2` ticks that overshot by more than the tolerance | "no measurable gap" is **not** "no stall" — this is the r19 blind spot |
+| `PHASE_OVERSHOOT` | ran past its plan by more than **1000 ms** | four cadences: above one boundary tick plus one frame of processing, far below every overshoot observed (2.6 / 4.5 / 9.5 / 30.9 s) |
+| `OK` | none of the above | |
+
+The run-level `timingIntegrity` keeps the worst phase reason and lists **`invalidPhases`** by
+name, so "which phase?" no longer needs a manual subtraction. The 1500 ms stall rule is
+unchanged.
+
+**3 — Rotation counted PER FRAME (TASK 3/4).** `frameRotationIndex` is the rotation of ONE
+lock; two r19 probes reported rotation 1 then 3 with the code in the *same* image position,
+which is orientation instability — but a single index cannot distinguish one flip from a
+per-frame oscillation, and orientation is a prime suspect for a CRC stage that rejects ~80 %
+of frames. `SingleBaselineRotationTracker` (pure, deterministic, in `single-baseline.ts`)
+counts a rotation for every frame that reached a decode attempt:
+
+`framesCounted`, `unlocatedFrames` (no lock, so no rotation to report), `rotations` (all
+counted frames), `accepted` and `crcFailures` (the same frames **split by outcome**),
+`transitions` (how often the rotation changed between consecutive frames),
+`dominantRotation` + `dominantRotationRatio` and `lastRotation`.
+
+Interpretation: **one bucket and 0 transitions** = a stable orientation; **several buckets
+and many transitions** = the receiver is re-deciding the orientation every frame. The
+histogram is derived entirely from LOCAL camera frames — no sender oracle, no payload, no
+network path — and is frozen into the step root, into the SETUP gate evidence, and into the
+probe.
+
+**4 — Frozen evidence is a deep copy (TASK 4).** Object-valued blocks (rotation histogram,
+fingerprints, geometry) are copied at every freeze, including the SETUP window start, so a
+host that reuses one mutable sample object can no longer make the window, the interval or the
+artefact mutate after the fact. The phone returns `null` for a block it cannot build and the
+harness degrades it to an EMPTY block instead of throwing inside the tick loop and destroying
+a physical run.
+
+**Not changed.** Locator, rotation *selection* algorithm, refinement, sampling phase,
+OptiGrid, CRC, matrix size, chunk size, rendering. No decoder optimisation. The 1500 ms stall
+rule stands.
+
+**Verification.** `tf012-auto-evidence.test.ts` (12 cases: a phase closed at its transition so
+a synthetic 20 s post-SETUP abort lands on A1 and not on SETUP; a planned phase with no
+interior tick that overshot is `NO_TICKS_DURING_PLANNED_PHASE` with `timingValid: false`; a
+12 s gap is `ORCHESTRATOR_STALL` and outranks overshoot; a clean run reports every phase `OK`
+with no `invalidPhases`; `plannedTicks` derived from the plan and the cadence; stable vs
+alternating rotation histograms, outcome separation and unlocated frames; the histogram frozen
+into the SETUP gate evidence and the probe step; frozen evidence proven immune to mutation of
+the live host sample; and the no-payload/no-oracle guards, including the reason why the field
+is named `plannedTicks` and not "expected…") — 285 Node cases in total.
+
+**One-tap PO usage (unchanged):** STATIC PROBE — 静态诊断探针 (10 s chunk 0, no sweep). It is
+the correct next physical step: it collects the geometry, rotation, fingerprint and phase
+timing evidence for ONE carrier state without spending 85 s on a sweep whose setup gate has
+never opened.
+
 ## r19 DIAGNOSTIC EVIDENCE / 诊断证据
 
 **Physical evidence (r18 build).** `SETUP_NOT_READY`, and this time it was not a sequencing

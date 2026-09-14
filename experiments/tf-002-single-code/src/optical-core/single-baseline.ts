@@ -1337,6 +1337,130 @@ export function singleBaselineGeometrySample(
 export const SINGLE_BASELINE_FAILURE_RING = 8;
 
 /**
+ * How the sampling ROTATION was distributed over the transfer (r20).
+ *
+ * WHY THIS EXISTS: the r19 artefact carried `frameRotationIndex` — the rotation of ONE
+ * frame (the latest lock, or the best rejected one). Two physical r19 probes reported
+ * `rotation: 1` then `rotation: 3` with the code in the SAME image position, which is the
+ * signature of an unstable corner-order choice — but a single index cannot distinguish
+ * "the orientation flipped once" from "the receiver sits on a different rotation every
+ * frame", and orientation instability is a prime suspect for a CRC stage that rejects
+ * 80 % of frames. Counting a rotation PER FRAME, split by outcome, turns that into a
+ * measurement: a stable orientation shows one dominant bucket and zero transitions.
+ *
+ * Everything here is derived from the LOCAL camera frames. No sender oracle, no payload,
+ * no network path.
+ */
+export interface SingleBaselineRotationDiagnostics {
+  /** Frames that reached a decode attempt with a lock, i.e. that HAVE a sampling rotation. */
+  framesCounted: number;
+  /** Frames that produced no lock at all, so they have no sampling rotation to report. */
+  unlocatedFrames: number;
+  /** rotation index → counted frames, over every counted frame. */
+  rotations: Record<string, number>;
+  /** rotation index → counted frames the decoder ACCEPTED. */
+  accepted: Record<string, number>;
+  /** rotation index → counted frames the CRC stage REJECTED. */
+  crcFailures: Record<string, number>;
+  /** How many times the sampling rotation changed between consecutive counted frames. */
+  transitions: number;
+  /** The rotation seen most often (ties resolved to the lowest index), null when none. */
+  dominantRotation: number | null;
+  /** Share of counted frames using `dominantRotation`, 0..1 (null when none). */
+  dominantRotationRatio: number | null;
+  /** The rotation of the last counted frame, null when none — the r19 field's meaning. */
+  lastRotation: number | null;
+}
+
+export function emptyRotationDiagnostics(): SingleBaselineRotationDiagnostics {
+  return {
+    framesCounted: 0, unlocatedFrames: 0, rotations: {}, accepted: {}, crcFailures: {},
+    transitions: 0, dominantRotation: null, dominantRotationRatio: null, lastRotation: null,
+  };
+}
+
+/**
+ * Pure, deterministic rotation histogram. Kept as its own class (not inlined into the
+ * receiver) so the counting rules are unit-testable without a camera or a frame.
+ */
+export class SingleBaselineRotationTracker {
+  private readonly counts = new Map<number, number>();
+  private readonly accepted = new Map<number, number>();
+  private readonly crcFailures = new Map<number, number>();
+  private unlocated = 0;
+  private total = 0;
+  private transitions = 0;
+  private previous: number | null = null;
+  private last: number | null = null;
+
+  reset(): void {
+    this.counts.clear();
+    this.accepted.clear();
+    this.crcFailures.clear();
+    this.unlocated = 0;
+    this.total = 0;
+    this.transitions = 0;
+    this.previous = null;
+    this.last = null;
+  }
+
+  /** A frame that never produced a lock: it has no rotation and no outcome. */
+  noteUnlocated(): void {
+    this.unlocated += 1;
+  }
+
+  /**
+   * One frame that reached the decode attempt: count its sampling rotation, and its
+   * outcome. `crc-failed` covers every rejection stage, matching `crcFailures` on the
+   * receiver metrics.
+   */
+  note(rotation: number, outcome: 'accepted' | 'crc-failed'): void {
+    this.counts.set(rotation, (this.counts.get(rotation) ?? 0) + 1);
+    if (outcome === 'accepted') {
+      this.accepted.set(rotation, (this.accepted.get(rotation) ?? 0) + 1);
+    } else {
+      this.crcFailures.set(rotation, (this.crcFailures.get(rotation) ?? 0) + 1);
+    }
+    if (this.previous != null && rotation !== this.previous) this.transitions += 1;
+    this.previous = rotation;
+    this.last = rotation;
+    this.total += 1;
+  }
+
+  diagnostics(): SingleBaselineRotationDiagnostics {
+    const rotations: Record<string, number> = {};
+    for (const rotation of [...this.counts.keys()].sort((a, b) => a - b)) {
+      rotations[String(rotation)] = this.counts.get(rotation) ?? 0;
+    }
+    const accepted: Record<string, number> = {};
+    for (const rotation of [...this.accepted.keys()].sort((a, b) => a - b)) {
+      accepted[String(rotation)] = this.accepted.get(rotation) ?? 0;
+    }
+    const crcFailures: Record<string, number> = {};
+    for (const rotation of [...this.crcFailures.keys()].sort((a, b) => a - b)) {
+      crcFailures[String(rotation)] = this.crcFailures.get(rotation) ?? 0;
+    }
+    let dominant: number | null = null;
+    let dominantCount = 0;
+    for (const rotation of [...this.counts.keys()].sort((a, b) => a - b)) {
+      const count = this.counts.get(rotation) ?? 0;
+      if (count > dominantCount) { dominantCount = count; dominant = rotation; }
+    }
+    return {
+      framesCounted: this.total,
+      unlocatedFrames: this.unlocated,
+      rotations,
+      accepted,
+      crcFailures,
+      transitions: this.transitions,
+      dominantRotation: dominant,
+      dominantRotationRatio: this.total > 0 ? dominantCount / this.total : null,
+      lastRotation: this.last,
+    };
+  }
+}
+
+/**
  * Refinement attempts are capped so one frame stays bounded no matter how many
  * candidate regions were found. The highest-scoring seeds are tried first.
  */
@@ -1951,6 +2075,8 @@ export class SingleCodeBaselineReceiver {
   /** Sampling geometry of the best-scoring rejected frame, and of the last accepted one. */
   private worstFailureGeometry: SingleBaselineGeometrySample | null = null;
   private lastSuccessGeometry: SingleBaselineGeometrySample | null = null;
+  /** r20: per-frame sampling-rotation histogram, split by decode outcome. */
+  private readonly rotations = new SingleBaselineRotationTracker();
   metrics: SingleBaselineMetrics = emptyMetrics();
   lastRejectReason = '';
   reconstruction: SingleBaselineReconstruction | null = null;
@@ -1978,6 +2104,7 @@ export class SingleCodeBaselineReceiver {
     this.failureCrcMismatch = 0;
     this.worstFailureGeometry = null;
     this.lastSuccessGeometry = null;
+    this.rotations.reset();
     this.metrics = emptyMetrics();
     this.lastRejectReason = '';
     this.reconstruction = null;
@@ -2089,6 +2216,17 @@ export class SingleCodeBaselineReceiver {
     return {failure: this.worstFailureGeometry, success: this.lastSuccessGeometry};
   }
 
+  /**
+   * How the sampling rotation was distributed over the transfer (r20), counted PER FRAME
+   * and split by decode outcome. A stable orientation yields one dominant bucket and zero
+   * transitions; an unstable one yields several buckets and a high transition count. This
+   * supersedes the single-index `metrics.rotation` for diagnostic purposes — that field is
+   * kept unchanged as "the rotation of the latest frame".
+   */
+  rotationDiagnostics(): SingleBaselineRotationDiagnostics {
+    return this.rotations.diagnostics();
+  }
+
   get duplicateCount(): number {
     return this.metrics.duplicateChunks;
   }
@@ -2191,6 +2329,7 @@ export class SingleCodeBaselineReceiver {
     const lock = capture.lock;
     if (!lock) {
       this.metrics.locateFailures += 1;
+      this.rotations.noteUnlocated();
       return {located: false, decoded: false, result: 'locate-failed', chunkIndex: -1};
     }
     this.lock = lock;
@@ -2208,10 +2347,12 @@ export class SingleCodeBaselineReceiver {
     const decoded = capture.decoded;
     if (!decoded) {
       this.metrics.crcFailures += 1;
+      this.rotations.note(lock.rotation, 'crc-failed');
       this.noteDecodeFailure(capture);
       return {located: true, decoded: false, result: 'crc-failed', chunkIndex: -1};
     }
     this.metrics.decodeSuccess += 1;
+    this.rotations.note(lock.rotation, 'accepted');
     this.lastSuccessGeometry = singleBaselineGeometrySample(
       lock, capture.diagnostics, capture.candidates, capture.refined);
     const result = this.ingestDecoded(decoded, now);

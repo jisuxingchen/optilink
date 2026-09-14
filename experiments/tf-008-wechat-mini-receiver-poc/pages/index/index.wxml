@@ -86,12 +86,17 @@
     <!-- r18: why the run ended, by whom, and whether the tick loop stayed healthy. -->
     <view class="abrow"><text class="abk">abort record</text><text class="abv">{{autoAbortSummary}}</text></view>
     <view class="abrow"><text class="abk">run timing</text><text class="abv">{{autoRunTiming}}</text></view>
+    <!-- r20: the phase verdicts. A phase that overshot its plan while the tick loop was
+         stalled is NAMED here — r19 reported a 30.9 s SETUP overshoot as "valid". -->
+    <view class="abrow"><text class="abk">phase timing (per phase)</text><text class="abv">{{autoRunPhaseTiming}}</text></view>
     <!-- r19 EVIDENCE: camera timing, decoder-stage failure fingerprints, sampling geometry.
          All three are measured on THIS phone from the local camera frames — never from the
          sender over the network. -->
     <view class="abrow"><text class="abk">camera timing (last step)</text><text class="abv">{{autoStepCameraTiming}}</text></view>
     <view class="abrow"><text class="abk">CRC failures (last step)</text><text class="abv">{{autoStepCrcFailure}}</text></view>
     <view class="abrow"><text class="abk">sampling geometry (last step)</text><text class="abv">{{autoStepGeometry}}</text></view>
+    <!-- r20: rotation PER FRAME, split by outcome. `sampling geometry` shows one lock. -->
+    <view class="abrow"><text class="abk">rotation per frame (last step)</text><text class="abv">{{autoStepRotation}}</text></view>
     <view class="abrow"><text class="abk">harness valid</text><text class="abv">{{autoHarnessValid}}</text></view>
     <view class="abrow"><text class="abk">validity notes</text><text class="abv">{{autoValidityFailed}}</text></view>
     <view class="abrow"><text class="abk">result upload</text><text class="abv">{{autoResultUpload}}</text></view>

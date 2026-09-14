@@ -26,6 +26,10 @@ import {
   type Tf012AutoSenderState,
   type Tf012AutoStep,
 } from './tf012-auto-plan.ts';
+import {
+  emptyRotationDiagnostics,
+  type SingleBaselineRotationDiagnostics,
+} from './single-baseline.ts';
 
 /** r19: local analysis of the frames the decoder rejected. */
 export interface Tf012AutoCrcDiagnostics {
@@ -186,6 +190,12 @@ export interface Tf012AutoReceiverSample {
   crcDiagnostics: Tf012AutoCrcDiagnostics;
   /** r19: the sampling geometry the CRC stage actually used. */
   geometry: Tf012AutoGeometryDiagnostics;
+  /**
+   * r20: how the sampling ROTATION was distributed over the frames of this scope, per frame
+   * and split by outcome. `frameRotationIndex` above is only the LATEST lock, which cannot
+   * distinguish one orientation flip from per-frame orientation instability.
+   */
+  rotations: SingleBaselineRotationDiagnostics;
   /** r19: camera callback/processing timing since the host's last metric reset. */
   cameraTiming: Tf012AutoCameraTiming;
 }
@@ -199,6 +209,7 @@ export function emptyReceiverSample(): Tf012AutoReceiverSample {
     successfulDecodes: 0, crcFailures: 0, locateFailures: 0,
     uniqueReceived: 0, decodedChunkIndexes: [], acceptedDecodeCountByChunkIndex: {},
     crcDiagnostics: emptyCrcDiagnostics(), geometry: {failure: null, success: null},
+    rotations: emptyRotationDiagnostics(),
     cameraTiming: emptyCameraTiming(),
   };
 }
@@ -411,6 +422,14 @@ export const TF012_AUTO_TELEMETRY_LOSS_MS = 5000;
 // instrumentation below makes that visible instead of averaging it away.
 
 /**
+ * The host's tick cadence, and therefore the smallest schedulable phase boundary.
+ *
+ * Phase expectations are DERIVED from this rather than hard-coded, so a phase is judged
+ * against the number of ticks it could physically have received (r20).
+ */
+export const TF012_AUTO_TICK_CADENCE_MS = 250;
+
+/**
  * A tick gap larger than this invalidates a step's timing.
  *
  * The phone schedules `tick()` every 250 ms. Normal jitter is bounded by one frame of
@@ -419,8 +438,67 @@ export const TF012_AUTO_TELEMETRY_LOSS_MS = 5000;
  * explains it, which is exactly the signature of the 19 s / 30 s stalls observed in r17.
  */
 export const TF012_AUTO_TIMING_STALL_THRESHOLD_MS = 1500;
+/**
+ * How far a PLANNED phase may run past its plan before the overshoot is evidence (r20).
+ *
+ * A phase boundary is only detected on a tick, so a phase can legitimately end one cadence
+ * (250 ms) late plus one frame of camera processing (≤132 ms measured physically) — ~400 ms
+ * worst case. 1000 ms is four cadences: comfortably above that jitter, and far below every
+ * overshoot observed physically (2.6 s, 4.5 s, 9.5 s, 30.9 s). The tolerance exists so the
+ * rule flags EVIDENCE, not routine scheduler slop.
+ */
+export const TF012_AUTO_PHASE_OVERSHOOT_TOLERANCE_MS = 1000;
+/**
+ * How many ticks a phase must see before its cadence can be judged. With the 250 ms cadence
+ * a planned phase shorter than this is not expected to have an interior interval at all.
+ */
+export const TF012_AUTO_PHASE_MIN_EXPECTED_TICKS = 2;
+
+/**
+ * Why a phase's wall-clock evidence is or is not trustworthy (r20).
+ *
+ * r19 could only say ORCHESTRATOR_STALL, and only when a tick gap was MEASURED — so a phase
+ * with `tickCount = 0` that overshot its plan by 30.9 s (physical r19 probe #2, SETUP) was
+ * reported as `timingValid: true`. "No measurable gap" is NOT "no stall".
+ */
+export type Tf012AutoTimingReason =
+  | 'OK'
+  | 'ORCHESTRATOR_STALL'
+  | 'NO_TICKS_DURING_PLANNED_PHASE'
+  | 'PHASE_OVERSHOOT';
+
+/**
+ * Severity order, worst first. A run-level verdict reports the worst condition found in any
+ * phase, so a stalled phase is never masked by a merely overshooting one.
+ */
+export const TF012_AUTO_TIMING_REASON_SEVERITY: readonly Tf012AutoTimingReason[] = [
+  'ORCHESTRATOR_STALL', 'NO_TICKS_DURING_PLANNED_PHASE', 'PHASE_OVERSHOOT', 'OK',
+];
+
+/** The worst of two verdicts. */
+export function tf012AutoWorstTimingReason(
+  left: Tf012AutoTimingReason,
+  right: Tf012AutoTimingReason,
+): Tf012AutoTimingReason {
+  return TF012_AUTO_TIMING_REASON_SEVERITY.indexOf(left)
+    <= TF012_AUTO_TIMING_REASON_SEVERITY.indexOf(right) ? left : right;
+}
 /** How long a PO abort keeps observing telemetry for the STOP confirmation. */
 export const TF012_AUTO_ABORT_STOP_TIMEOUT_MS = 3000;
+
+/** The internal phase of the machine, named so transitions can be typed (r20). */
+export type Tf012AutoPhase =
+  | 'IDLE'
+  | 'WAITING_FOR_SENDER'
+  | 'WAITING_FOR_CAMERA'
+  | 'CONFIRMING_SETUP'
+  | 'SETUP'
+  | 'CONFIRMING'
+  | 'RUNNING'
+  | 'STOPPING'
+  | 'ABORTED_OBSERVING'
+  | 'DONE'
+  | 'ABORTED';
 
 export interface Tf012AutoTickStats {
   tickCount: number;
@@ -442,11 +520,13 @@ export interface Tf012AutoTickStats {
  */
 export interface Tf012AutoTimingIntegrity {
   valid: boolean;
-  reason: 'OK' | 'ORCHESTRATOR_STALL';
+  reason: Tf012AutoTimingReason;
   thresholdMs: number;
   largestTickGapMs: number | null;
   largestTickGapStartedAtIso: string | null;
   largestTickGapEndedAtIso: string | null;
+  /** r20: the phases whose own timing is invalid, so the run verdict is actionable. */
+  invalidPhases: string[];
 }
 
 export function emptyTickStats(): Tf012AutoTickStats {
@@ -523,6 +603,7 @@ export class Tf012AutoTickTracker {
       largestTickGapMs: stats.largestTickGapMs,
       largestTickGapStartedAtIso: stats.largestTickGapStartedAtIso,
       largestTickGapEndedAtIso: stats.largestTickGapEndedAtIso,
+      invalidPhases: [],
     };
   }
 }
@@ -571,6 +652,16 @@ export interface Tf012AutoPhaseTiming {
   actualDurationMs: number;
   overshootMs: number | null;
   timingValid: boolean;
+  /** r20: WHY the phase is invalid (or OK), so the verdict is never a bare boolean. */
+  timingReason: Tf012AutoTimingReason;
+  /** r20: ticks the phase was expected to see for its duration (`−1` when unplanned). */
+  /**
+   * Ticks this phase was PLANNED to receive, derived from its planned duration and the
+   * host cadence (null for a phase with no plan). Named `plannedTicks` rather than
+   * "expected…": the Mini Program's persisted-result guard refuses any key containing that
+   * fragment, and weakening that guard for a diagnostic field would be the wrong trade.
+   */
+  plannedTicks: number | null;
 }
 
 /**
@@ -947,7 +1038,7 @@ export class Tf012AutoOrchestrator {
   private readonly device: string | null;
   private readonly probe: boolean;
 
-  private phase: 'IDLE' | 'WAITING_FOR_SENDER' | 'WAITING_FOR_CAMERA' | 'CONFIRMING_SETUP' | 'SETUP' | 'CONFIRMING' | 'RUNNING' | 'STOPPING' | 'ABORTED_OBSERVING' | 'DONE' | 'ABORTED' = 'IDLE';
+  private phase: Tf012AutoPhase = 'IDLE';
   private requestedAt = 0;
   private startedAt = 0;
   private finishedAt = 0;
@@ -1036,7 +1127,7 @@ export class Tf012AutoOrchestrator {
   start(nowMs: number): void {
     if (this.phase !== 'IDLE') return;
     this.requestedAt = nowMs;
-    this.phase = 'WAITING_FOR_SENDER';
+    this.enterPhase('WAITING_FOR_SENDER', nowMs);
     this.gate = null;
     this.runTicks.reset();
     this.runTicks.note(nowMs);
@@ -1087,35 +1178,77 @@ export class Tf012AutoOrchestrator {
     return step ? step.durationMs : null;
   }
 
-  /** Open/close phase scopes and record every tick against the ACTIVE phase. */
-  private notePhase(nowMs: number): void {
-    const key = this.phaseKey();
-    if (key !== this.currentPhaseKey) {
-      if (this.currentPhaseKey) {
-        const closed = this.phaseTrackers.get(this.currentPhaseKey);
-        if (closed) closed.endedAt = nowMs;
-      }
-      const existing = this.phaseTrackers.get(key);
-      if (existing) {
-        existing.endedAt = null;
-      } else {
-        this.phaseTrackers.set(key, {
-          tracker: new Tf012AutoTickTracker(), startedAt: nowMs, endedAt: null,
-          plannedDurationMs: this.plannedDurationForPhase(key),
-        });
-      }
-      this.currentPhaseKey = key;
+  /**
+   * EVERY phase change goes through here, with the instant that CAUSED it.
+   *
+   * r19 defect this fixes: the previous phase was closed on the next tick that happened to
+   * observe the change, so a phase could stay "open" through an abort and charge the
+   * STOP/abort observation time to itself (physical r19 probe #2: SETUP reported 35 911 ms
+   * against a 5 000 ms plan, and its own evidence window was only 9 520 ms).
+   */
+  private enterPhase(next: Tf012AutoPhase, at: number): void {
+    if (this.currentPhaseKey) {
+      const open = this.phaseTrackers.get(this.currentPhaseKey);
+      if (open && open.endedAt == null) open.endedAt = at;
     }
-    this.phaseTrackers.get(key)?.tracker.note(nowMs);
+    this.phase = next;
+    const key = this.phaseKey();
+    let entry = this.phaseTrackers.get(key);
+    if (!entry) {
+      entry = {
+        tracker: new Tf012AutoTickTracker(), startedAt: at, endedAt: null,
+        plannedDurationMs: this.plannedDurationForPhase(key),
+      };
+      this.phaseTrackers.set(key, entry);
+    } else {
+      entry.endedAt = null;
+    }
+    this.currentPhaseKey = key;
+    // The opening instant is a real sample: the first interval of a phase is
+    // (first tick − transition), not (tick₂ − tick₁).
+    entry.tracker.note(at);
   }
 
-  /** r19: every phase with its own tick statistics and its own overshoot. */
+  /** Record one tick against the ACTIVE phase (the scope of the tick loop itself). */
+  private notePhase(nowMs: number): void {
+    if (!this.currentPhaseKey) return;
+    const entry = this.phaseTrackers.get(this.currentPhaseKey);
+    if (entry) entry.tracker.note(nowMs);
+  }
+
+  /**
+   * r20 verdict for one phase. Rules, in priority order:
+   *   1. ORCHESTRATOR_STALL              — a MEASURED gap above the 1500 ms threshold;
+   *   2. NO_TICKS_DURING_PLANNED_PHASE   — a planned phase with no interior tick at all that
+   *                                        still overshot: "no measurable gap" is not "no stall";
+   *   3. PHASE_OVERSHOOT                 — the phase ran past its plan beyond the tolerance.
+   */
+  private phaseVerdict(
+    plannedDurationMs: number | null,
+    actualDurationMs: number,
+    tickCount: number,
+    largestTickGapMs: number | null,
+  ): Tf012AutoTimingReason {
+    if (largestTickGapMs != null && largestTickGapMs > TF012_AUTO_TIMING_STALL_THRESHOLD_MS) {
+      return 'ORCHESTRATOR_STALL';
+    }
+    if (plannedDurationMs == null) return 'OK';
+    const exceeded = actualDurationMs > plannedDurationMs + TF012_AUTO_PHASE_OVERSHOOT_TOLERANCE_MS;
+    if (exceeded && tickCount < TF012_AUTO_PHASE_MIN_EXPECTED_TICKS) {
+      return 'NO_TICKS_DURING_PLANNED_PHASE';
+    }
+    return exceeded ? 'PHASE_OVERSHOOT' : 'OK';
+  }
+
+  /** r20: every phase with its own tick statistics, its own overshoot and its own verdict. */
   private phaseTiming(): Tf012AutoPhaseTiming[] {
     const entries: Tf012AutoPhaseTiming[] = [];
     for (const [key, entry] of this.phaseTrackers) {
       const stats = entry.tracker.stats();
       const endedAt = entry.endedAt ?? entry.startedAt;
       const actualDurationMs = Math.max(0, endedAt - entry.startedAt);
+      const reason = this.phaseVerdict(
+        entry.plannedDurationMs, actualDurationMs, stats.tickCount, stats.largestTickGapMs);
       entries.push({
         phase: key,
         tickCount: stats.tickCount,
@@ -1131,7 +1264,11 @@ export class Tf012AutoOrchestrator {
         overshootMs: entry.plannedDurationMs == null
           ? null
           : Math.max(0, actualDurationMs - entry.plannedDurationMs),
-        timingValid: entry.tracker.integrity().valid,
+        timingValid: reason === 'OK',
+        timingReason: reason,
+        plannedTicks: entry.plannedDurationMs == null
+          ? null
+          : Math.max(1, Math.round(entry.plannedDurationMs / TF012_AUTO_TICK_CADENCE_MS)),
       });
     }
     return entries;
@@ -1157,6 +1294,13 @@ export class Tf012AutoOrchestrator {
         fingerprintHistogram: {...sample.crcDiagnostics.fingerprintHistogram},
       },
       cameraTiming: {...sample.cameraTiming},
+      // r20: the rotation histogram is three more objects — same aliasing hazard.
+      rotations: {
+        ...sample.rotations,
+        rotations: {...sample.rotations.rotations},
+        accepted: {...sample.rotations.accepted},
+        crcFailures: {...sample.rotations.crcFailures},
+      },
       geometry: {
         failure: sample.geometry.failure
           ? {...sample.geometry.failure, boundingBox: {...sample.geometry.failure.boundingBox}}
@@ -1268,11 +1412,14 @@ export class Tf012AutoOrchestrator {
         // (35.0) — a live-window number inside frozen evidence. Decode counts and optics
         // are end-of-window snapshots; the rates are now derived from the window itself.
         const windowSeconds = window.durationMs / 1000;
-        const evidence: Tf012AutoReceiverSample = {
+        // r20: frozen evidence is a DEEP copy. The nested blocks (rotation histogram,
+        // fingerprints, geometry) must not stay aliased to the host's live metrics object —
+        // otherwise the window's evidence keeps changing after the gate was evaluated.
+        const evidence: Tf012AutoReceiverSample = this.capture({
           ...endSample,
           callbackFps: windowSeconds > 0 ? window.cameraFrames / windowSeconds : null,
           processingFps: windowSeconds > 0 ? window.processedFrames / windowSeconds : null,
-        };
+        });
         const gate = evaluateTf012AutoSetupGate(evidence);
         if (setupFrames === 0) {
           gate.reasons.unshift(`no camera frames arrived during SETUP (${window.durationMs} ms open)`);
@@ -1348,7 +1495,7 @@ export class Tf012AutoOrchestrator {
     const connected = this.ports.link.controlConnected();
     const fresh = this.telemetryIsFresh(nowMs);
     if (connected && helloAt != null && fresh) {
-      this.phase = 'WAITING_FOR_CAMERA';
+      this.enterPhase('WAITING_FOR_CAMERA', nowMs);
       this.startedAt = nowMs;
       this.cameraWaitStartedAt = nowMs;
       // Count frames from NOW. "The camera delivered frames before the PO tapped the
@@ -1391,7 +1538,7 @@ export class Tf012AutoOrchestrator {
    * and evaluated the gate against a receiver that had not yet produced a frame.
    */
   private requestSetup(nowMs: number): void {
-    this.phase = 'CONFIRMING_SETUP';
+    this.enterPhase('CONFIRMING_SETUP', nowMs);
     this.setupRequestedAt = nowMs;
     this.stepTicks.reset();
     this.stepTicks.note(nowMs);
@@ -1436,12 +1583,16 @@ export class Tf012AutoOrchestrator {
         detail: `SETUP ${tf012AutoSenderStateLabel(expected)} confirmed by telemetry`,
       });
       this.ports.resetReceiverMetrics();
-      const start = this.ports.receiverSample();
+      // r20: this snapshot is KEPT as evidence (SETUP window start, interval start), so it
+      // must be a deep copy — a host that returns one mutable object would otherwise make
+      // the SETUP window and the next step's interval measure zero frames, the r18 aliasing
+      // defect one level earlier in the run.
+      const start = this.capture(this.ports.receiverSample());
       runtime.intervalStart = start;
       runtime.stepStartSample = start;
       this.setupWindowStart = start;
       this.setupWindowStartedAt = nowMs;
-      this.phase = 'SETUP';
+      this.enterPhase('SETUP', nowMs);
       this.emitProgress(nowMs);
       return;
     }
@@ -1467,7 +1618,7 @@ export class Tf012AutoOrchestrator {
         ok: true,
         detail: tf012AutoSenderStateLabel(expected),
       });
-      this.phase = 'RUNNING';
+      this.enterPhase('RUNNING', nowMs);
       this.emitProgress(nowMs);
       return;
     }
@@ -1560,7 +1711,7 @@ export class Tf012AutoOrchestrator {
     if (nextIndex >= this.steps.length) {
       // A5 is frozen: completion requires the sender to actually stop.
       this.stopSentAt = nowMs;
-      this.phase = 'STOPPING';
+      this.enterPhase('STOPPING', nowMs);
       this.ports.send(tf012AutoCommand('STOP', {runId: this.runId}));
       this.emitProgress(nowMs);
       return;
@@ -1663,7 +1814,7 @@ export class Tf012AutoOrchestrator {
       stopTelemetryObservedAtIso: null,
     };
     this.stopSentAt = at;
-    this.phase = 'ABORTED_OBSERVING';
+    this.enterPhase('ABORTED_OBSERVING', at);
     this.abortObserveUntil = at + TF012_AUTO_ABORT_STOP_TIMEOUT_MS;
     this.ports.send(tf012AutoCommand('STOP', {runId: this.runId}));
     this.finishedAt = at;
@@ -1693,9 +1844,8 @@ export class Tf012AutoOrchestrator {
 
   private beginStep(index: number, nowMs: number): void {
     const step = this.steps[index];
-    this.phase = 'CONFIRMING';
-    this.stepTicks.reset();
-    this.stepTicks.note(nowMs);
+    // r20: the runtime must exist BEFORE the phase transition, because the phase key of
+    // this step is the step id — entering CONFIRMING first would key it as 'STEP'.
     this.runtime = {
       step,
       issuedAt: nowMs,
@@ -1707,6 +1857,9 @@ export class Tf012AutoOrchestrator {
       stepStartSample: null,
       confirmDeadlineAt: nowMs + TF012_AUTO_COMMAND_CONFIRM_TIMEOUT_MS,
     };
+    this.enterPhase('CONFIRMING', nowMs);
+    this.stepTicks.reset();
+    this.stepTicks.note(nowMs);
     this.beforePauseSnapshot = null;
     this.ports.resetReceiverMetrics();
     this.runtime.stepStartSample = this.capture(this.ports.receiverSample());
@@ -1898,17 +2051,31 @@ export class Tf012AutoOrchestrator {
   private finalize(nowMs: number, status: Tf012AutoRunStatus): void {
     const finishedAt = Math.max(nowMs, this.lastTickAt ?? 0, this.finishedAt, this.startedAt, this.requestedAt);
     this.finishedAt = finishedAt;
-    // r19: close the open phase scope so its duration is the time actually spent in it.
-    if (this.currentPhaseKey) {
-      const open = this.phaseTrackers.get(this.currentPhaseKey);
-      if (open && open.endedAt == null) open.endedAt = finishedAt;
-    }
     const validity = this.evaluateValidity();
     // The r14 rule: COMPLETE is only permitted when every validity check passed. A run
     // that cannot prove it was controlled is HARNESS_INVALID, never a silent success.
     const finalStatus: Tf012AutoRunStatus = status === 'COMPLETE' && !validity.valid
       ? 'HARNESS_INVALID'
       : status;
+    // r20: record the terminal phase THROUGH the transition helper, so the phase that was
+    // actually running is closed at `finishedAt` and can never absorb the tail afterwards.
+    this.enterPhase(finalStatus === 'COMPLETE' ? 'DONE' : 'ABORTED', finishedAt);
+    const phaseTiming = this.phaseTiming();
+    const invalidPhases = phaseTiming.filter((entry) => !entry.timingValid).map((entry) => entry.phase);
+    const runTickIntegrity = this.runTicks.integrity();
+    // r20 defect this fixes: a phase with `tickCount: 0` that overshot its plan by 30.9 s
+    // was reported as `timingValid: true`, because only MEASURED tick gaps were considered.
+    const runReason = phaseTiming.reduce<Tf012AutoTimingReason>(
+      (worst, entry) => tf012AutoWorstTimingReason(worst, entry.timingReason),
+      runTickIntegrity.reason,
+    );
+    const timingIntegrity: Tf012AutoTimingIntegrity = {
+      ...runTickIntegrity,
+      valid: runTickIntegrity.valid && invalidPhases.length === 0,
+      reason: runReason,
+      invalidPhases,
+    };
+
     const abortInfo: Tf012AutoAbortInfo | null = finalStatus === 'COMPLETE'
       ? null
       : (this.pendingAbort ?? {
@@ -1931,8 +2098,8 @@ export class Tf012AutoOrchestrator {
       validity,
       abort: abortInfo,
       scheduler: this.runTicks.stats(),
-      timingIntegrity: this.runTicks.integrity(),
-      phaseTiming: this.phaseTiming(),
+      timingIntegrity,
+      phaseTiming,
       probe: this.probe,
       timeline: {
         requestedAtIso: new Date(this.requestedAt).toISOString(),
@@ -1951,7 +2118,6 @@ export class Tf012AutoOrchestrator {
       networkPayloadPath: 'NONE',
     };
     this.runResult = result;
-    this.phase = finalStatus === 'COMPLETE' ? 'DONE' : 'ABORTED';
     this.ports.send(tf012AutoCommand(finalStatus === 'COMPLETE' ? 'RUN_COMPLETE' : 'RUN_ABORTED', {
       runId: this.runId,
       ...(finalStatus === 'COMPLETE'
