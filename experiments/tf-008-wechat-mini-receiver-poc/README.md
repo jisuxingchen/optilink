@@ -61,6 +61,48 @@ The page permanently shows **"OPTICAL CAMERA FRAME — LOCAL ONLY"** and
 - If previously denied, re-enable camera in WeChat settings. The status panel
   shows `granted` / `denied` / `not-requested`.
 
+## TF-012 r21 — MINIMAL RECEIVE (the default flow)
+
+Since r21 the Mini Program opens on the **minimal physical receiver**, not on the diagnostic
+harness:
+
+```
+open → camera auto-starts → sender connected → tap ONE button → receive → PASS/FAIL → COPY RESULT
+```
+
+CameraFrame → locate → sample → CRC → chunk → dedupe → reconstruct → SHA-256, and nothing else.
+
+**How to run it**
+
+1. Open the Mini Program. The first screen must read `buildId tf012-r21-44a56ff`. The camera
+   starts by itself (allow `scope.camera` if asked).
+2. On the PC, start the single-code baseline sender (the 16-chunk transfer).
+3. Wait until the phone shows **Camera: READY** and **Sender: CONNECTED**
+   (`SOCKET ONLY` = the relay is reachable but the PC sender is not announcing itself).
+4. Tap **START RECEIVE / 开始接收** once. The run ends the moment
+   `16/16 chunks + 10240 B + SHA-256 MATCH` is true — in seconds, not after a 90 s plan.
+5. Tap **COPY RESULT / 复制结果** and send the JSON. It is small by design: buildId, mode, status,
+   timings, the camera/decode counters, chunks, `assembledBytes`, the two local digests,
+   `shaResult`, the geometry numbers and `networkPayloadPath: NONE`.
+
+**STATIC CHECK / 静态检查** is the quick alignment aid: PASS at 10 valid decodes within 5 s, with no
+sender progress needed.
+
+**Bounds (not schedules):** receive 30 s, static check 5 s. Nothing waits for a fixed dwell time
+after a PASS, and once the verdict is in, camera frames are dropped before the decoder.
+
+**Where the diagnostics went.** The r13–r20 harness — AUTO PHYSICAL TEST (SETUP gate + A1–A5),
+STATIC PROBE, phase timing, camera timing, failure fingerprints, sampling geometry, rotation
+histograms, KEY STATUS, the holdMs declaration and the mode buttons — is all still present, behind
+**ADVANCED DIAGNOSTICS / 高级诊断**, which is **OFF by default**. The default runtime does not
+compute any of it; a test proves zero diagnostic receiver calls per frame.
+
+`utils/tf012-simple.js` holds the entire decision surface of the minimal path (pure, no platform,
+no network, unit-tested).
+
+The steps in §7 below describe the ORIGINAL r5 camera-frame spike UI, which now lives behind
+**ADVANCED DIAGNOSTICS** (mode buttons + KEY STATUS).
+
 ## 7. How to run the test
 
 1. Point the rear camera at any well-lit, high-contrast scene.
