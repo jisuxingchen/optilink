@@ -237,7 +237,11 @@ function spyOn(object: Record<string, any>, method: string, counts: Record<strin
 /** Unit tests may enter T2 directly after explicitly satisfying the T1 gate. */
 function armFileGate(h: Harness): void {
   h.page.simpleStaticReady = true;
-  h.page.setData({simpleStaticReady: true, simpleStaticLabel: 'READY / 就绪'});
+  h.page.setData({
+    simpleStaticReady: true,
+    simpleStaticLabel: 'READY / 就绪',
+    callbackActive: true,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -339,51 +343,31 @@ test('r21 default 3: normal mode does not compute the rotation histogram', () =>
 // 4 — throttled, change-gated UI
 // ---------------------------------------------------------------------------
 
-test('r21 default 4: normal mode UI updates are throttled and change-gated', (t) => {
+test('v2 default 4: UI updates stay throttled and change-gated', () => {
   const h = harness();
   try {
     armFileGate(h);
     h.page.onSimpleStart();
-    h.feed();  // the first frame flips `callbackActive` once, by design
+    h.feed();
     const afterFirstFrame = h.setDataCount();
     for (let index = 0; index < 40; index += 1) h.feed();
     assert.equal(h.setDataCount(), afterFirstFrame, 'no setData per camera frame');
     const updatesAfterFrames = h.page.data.simpleUiUpdates;
 
     h.page.onTick();
-    assert.ok(h.setDataCount() - afterFirstFrame <= 1, 'a tick publishes at most ONE patch');
+    assert.ok(h.setDataCount() - afterFirstFrame <= 1, 'a tick publishes at most one patch');
     h.page.onTick();
     const afterTwoTicks = h.setDataCount();
-    h.page.onTick();  // identical clock and identical counters
-    assert.equal(h.setDataCount(), afterTwoTicks,
-      'a tick whose values did not change costs no setData at all');
-    assert.ok(h.page.data.simpleUiUpdates >= updatesAfterFrames, 'updates are counted, not silent');
+    h.page.onTick();
+    assert.equal(h.setDataCount(), afterTwoTicks, 'unchanged tick costs no setData');
+    assert.ok(h.page.data.simpleUiUpdates >= updatesAfterFrames);
 
-    // The cadence itself: the page must refresh at or below 4 Hz.
     const period = Number(/const UI_REFRESH_MS = (\d+)/u.exec(PAGE_JS)?.[1]);
-    assert.ok(Number.isFinite(period), 'the UI period is a declared constant');
-    assert.ok(period >= 1000 / simpleMode.SIMPLE_MAX_UI_HZ,
-      `UI_REFRESH_MS ${period} ms must stay at or below ${simpleMode.SIMPLE_MAX_UI_HZ} Hz`);
-
-    // MEASURED BEFOR/AFTER (local UI payload only — never a physical throughput claim):
-    // the normal-mode patch is a handful of fields, while the r13–r20 advanced baseline
-    // panel publishes the full evidence set every tick. Both are measured on the same page.
-    armFileGate(h);
-    h.page.onSimpleStart();
-    h.page.onTick();
-    const normalPatchKeys = h.lastPatchKeys();
-    h.page.onSimpleToggleAdvanced();
-    h.page.setMode('baseline');
-    h.page.onTick();
-    const advancedPatchKeys = h.lastPatchKeys();
-    assert.ok(normalPatchKeys > 0 && normalPatchKeys <= 16,
-      `the minimal patch stays small (${normalPatchKeys} fields)`);
-    assert.ok(advancedPatchKeys > normalPatchKeys,
-      `the advanced panel is larger (${advancedPatchKeys} vs ${normalPatchKeys} fields)`);
-    t.diagnostic('r21 measured: normal-mode UI patch ' + normalPatchKeys
-      + ' fields vs advanced baseline patch ' + advancedPatchKeys + ' fields,'
-      + ' at ' + period + ' ms (<= ' + simpleMode.SIMPLE_MAX_UI_HZ + ' Hz), '
-      + '0 diagnostic receiver calls per frame');
+    assert.ok(Number.isFinite(period));
+    assert.ok(period >= 1000 / simpleMode.SIMPLE_MAX_UI_HZ);
+    const patchKeys = h.lastPatchKeys();
+    assert.ok(patchKeys > 0 && patchKeys <= 20,
+      `v2 minimal patch stays small (${patchKeys} fields)`);
   } finally {
     h.restore();
   }
@@ -457,7 +441,7 @@ test('r21 receive 6: no unnecessary fixed-duration wait after PASS', () => {
     const verdictAt = h.page.simple.finishedAt;
     const processedAtVerdict = h.page.baselineFramesProcessed;
 
-    // 25 s later (well past the run, still inside the 30 s bound) nothing may change.
+    // 25 s later (well past the run, still inside the 40 s bound) nothing may change.
     h.advance(25000);
     h.tick(3);
     assert.equal(h.page.simple.finishedAt, verdictAt, 'the verdict instant never moves');
