@@ -61,6 +61,30 @@ The page permanently shows **"OPTICAL CAMERA FRAME — LOCAL ONLY"** and
 - If previously denied, re-enable camera in WeChat settings. The status panel
   shows `granted` / `denied` / `not-requested`.
 
+## TF-012 Physical Acceptance v2 — fast path
+
+The old r13–r20 diagnostic surface is no longer part of the active physical acceptance UI.
+Its evidence remains in git history. The default phone screen now has only two gates:
+
+1. **T1 STATIC READY** — PC sender is opened directly as `?diagnostic=chunk0`.
+   The phone must produce **10 CRC-valid chunk-0 decodes within 2 s**. Decodes of any
+   other chunk do not count. A CRC-failed candidate can never replace the persistent
+   tracking lock.
+2. **T2 FILE** — without moving the phone, switch the sender to cyclic **1000 ms**.
+   The receiver resets file/chunk evidence while preserving only the last CRC-verified
+   T1 lock. PASS is **16/16 unique + 10,240 B + local SHA-256 MATCH** within 40 s.
+   Require **3 consecutive T2 PASS** runs.
+
+The active acceptance path opens **no relay/control socket**, has no IP/token/presence setup,
+and never carries payload over network. `networkPayloadPath = NONE`.
+
+The small COPY RESULT JSON remains the failure evidence surface. Geometry remains available
+there for support, but camera width / px-per-cell / contrast are not acceptance thresholds.
+
+Once T2 reaches 3/3, stop optimizing this 640 B/chunk single-code baseline and move to the
+tiled/parallel path for the final 100 KB/s G0 performance target.
+
+
 ## 7. How to run the test
 
 1. Point the rear camera at any well-lit, high-contrast scene.

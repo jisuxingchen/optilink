@@ -1,147 +1,126 @@
 .page {
   padding: 16rpx;
   box-sizing: border-box;
+  background: #020617;
+  min-height: 100vh;
 }
 
-.banner {
-  background: #166534;
-  color: #dcfce7;
-  font-weight: 700;
-  text-align: center;
-  padding: 18rpx;
-  border-radius: 12rpx;
-  margin-bottom: 10rpx;
-  letter-spacing: 0.06em;
+.topstrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10rpx 18rpx;
+  align-items: center;
+  margin-bottom: 12rpx;
+  font-size: 22rpx;
 }
 
-.netbanner {
-  background: #111827;
-  color: #f87171;
-  font-weight: 700;
-  text-align: center;
-  padding: 12rpx;
-  border-radius: 12rpx;
-  margin-bottom: 16rpx;
-  letter-spacing: 0.04em;
-  border: 1rpx solid #7f1d1d;
-}
-
-.receivebanner {
-  background: #14532d;
-  color: #bbf7d0;
-  font-weight: 800;
-  text-align: center;
-  padding: 14rpx;
-  border-radius: 12rpx;
-  margin-bottom: 10rpx;
-  letter-spacing: 0.04em;
-  border: 1rpx solid #16a34a;
-}
-
-.benchbanner {
-  background: #1e3a8a;
-  color: #bfdbfe;
-  font-weight: 800;
-  text-align: center;
-  padding: 14rpx;
-  border-radius: 12rpx;
-  margin-bottom: 10rpx;
-  letter-spacing: 0.04em;
-  border: 1rpx solid #2563eb;
-}
-
-.modebtn.modeactive {
-  background: #065f46;
-  color: #d1fae5;
-  border-color: #10b981;
-}
-
-.pipeline-error {
-  background: #7f1d1d;
-  color: #fecaca;
-  font-weight: 700;
-  padding: 12rpx;
-  border-radius: 8rpx;
-  margin-bottom: 10rpx;
-  text-align: center;
-}
+.tsid { color: #f8fafc; font-weight: 700; }
+.tsbuild, .tsnet { color: #94a3b8; }
+.tsok { color: #34d399; font-weight: 700; }
+.tsbad { color: #f87171; font-weight: 700; }
 
 .camera {
   width: 100%;
   height: 520rpx;
+  background: #000;
   border-radius: 12rpx;
-  margin-bottom: 16rpx;
 }
 
-.controls {
+.simple {
+  margin-top: 12rpx;
+  padding: 20rpx 22rpx 24rpx;
+  background: #0b1220;
+  border: 3rpx solid #1d4ed8;
+  border-radius: 14rpx;
+}
+
+.srow {
   display: flex;
-  flex-wrap: wrap;
-  gap: 12rpx;
-  margin-bottom: 16rpx;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8rpx;
 }
 
-.btn {
-  font-size: 26rpx;
-  padding: 0 24rpx;
-  line-height: 2.4;
+.sk { font-size: 28rpx; color: #94a3b8; }
+.sv { font-size: 30rpx; font-weight: 700; color: #e2e8f0; }
+.svok { color: #34d399; }
+.svbad { color: #f87171; }
+
+.step {
+  margin-top: 18rpx;
+  padding: 12rpx;
   border-radius: 8rpx;
+  background: #111827;
+  color: #cbd5e1;
+  font-size: 24rpx;
+  line-height: 1.6;
+}
+
+.sbtn {
+  margin: 16rpx 0 0;
+  font-size: 36rpx;
+  font-weight: 700;
+  line-height: 2.6;
+  border-radius: 10rpx;
+  background: #1d4ed8;
+  color: #fff;
+}
+
+.sbtn[disabled] { opacity: .4; }
+
+.sbtns {
+  display: flex;
+  flex-direction: row;
+  gap: 12rpx;
+}
+
+.sbtn2 {
+  flex: 1;
+  font-size: 25rpx;
+  font-weight: 500;
+  line-height: 2.4;
   background: #1e293b;
   color: #e2e8f0;
   border: 1rpx solid #334155;
 }
 
-.btn.primary {
-  background: #1d4ed8;
-  color: #fff;
+.sbig {
+  margin-top: 20rpx;
+  font-size: 44rpx;
+  font-weight: 700;
+  color: #f8fafc;
 }
 
-.panel {
-  background: #111827;
-  border: 1rpx solid #1f2937;
-  border-radius: 12rpx;
-  padding: 20rpx;
-  margin-bottom: 16rpx;
+.sline {
+  margin-top: 6rpx;
+  font-size: 26rpx;
+  color: #cbd5e1;
 }
 
-.section {
+.sres {
+  margin-top: 18rpx;
+  font-size: 42rpx;
+  font-weight: 700;
+  text-align: center;
+  padding: 12rpx;
+  border-radius: 10rpx;
+}
+
+.sres.pending { background: #1e293b; color: #cbd5e1; }
+.sres.ok { background: #065f46; color: #d1fae5; }
+.sres.bad { background: #7f1d1d; color: #fecaca; }
+
+.sdetail, .snote {
+  margin-top: 8rpx;
   font-size: 24rpx;
   color: #94a3b8;
-  margin-bottom: 10rpx;
+  text-align: center;
+  line-height: 1.5;
 }
 
-.row {
-  display: flex;
-  justify-content: space-between;
-  font-size: 26rpx;
-  line-height: 1.9;
-}
-
-.row .k {
-  color: #94a3b8;
-}
-
-.row .v {
-  color: #fbbf24;
-  font-weight: 600;
-}
-
-.err {
-  font-size: 22rpx;
-  color: #f87171;
-  line-height: 1.7;
-  word-break: break-all;
-}
-
-.frozen {
-  font-size: 22rpx;
-  color: #93c5fd;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-
-.log {
-  font-size: 22rpx;
-  color: #64748b;
-  white-space: pre-wrap;
-  word-break: break-all;
+.spass {
+  margin-top: 10rpx;
+  text-align: center;
+  font-size: 28rpx;
+  font-weight: 700;
 }

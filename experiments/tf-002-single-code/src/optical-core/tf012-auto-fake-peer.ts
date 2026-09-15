@@ -1,0 +1,593 @@
+/**
+ * TF-012 r14 — TEST-ONLY fake sender peer.
+ *
+ * The physical r13 run proved that a phone socket connected to the relay is NOT a
+ * sender: every frozen step carried the default sender sample while the carrier kept
+ * cycling. These tests therefore need a peer that can be made to misbehave in every way
+ * the control plane claims to detect:
+ *
+ *   - it can refuse to announce itself (no HELLO)
+ *   - it can stay silent (no telemetry) or send stale telemetry
+ *   - it can ignore SET_MODE / SET_HOLD_MS / START / PAUSE / STOP individually
+ *   - it can keep decoding other chunks during a "static" step
+ *
+ * Nothing here runs on a phone or in a browser: the orchestrator is deterministic and
+ * clock-injected, so every one of those scenarios is provable in Node.
+ */
+import {
+  validateTf012AutoControlMessage,
+  type Tf012AutoEnvelope,
+  type Tf012AutoStep,
+} from './tf012-auto-plan.ts';
+import {
+  createTf012AutoOrchestrator,
+  emptyReceiverSample,
+  type Tf012AutoAbortSource,
+  type Tf012AutoCameraStatus,
+  type Tf012AutoProgress,
+  type Tf012AutoReceiverSample,
+  type Tf012AutoRunResult,
+  type Tf012AutoSenderSample,
+  type Tf012AutoStepResult,
+} from './tf012-auto-orchestrator.ts';
+import {Tf012AutoCameraTimingTracker} from './tf012-auto-camera-timing.ts';
+import {SingleBaselineRotationTracker} from './single-baseline.ts';
+
+export interface FakePeerOptions {
+  startAt?: number;
+  tickMs?: number;
+  maxTicks?: number;
+  /** Sender announces itself with HELLO. False = the phone never sees a sender peer. */
+  hello?: boolean;
+  /** Sender emits TELEMETRY at all. */
+  telemetry?: boolean;
+  /** Age added to the telemetry timestamp; > TF012_AUTO_TELEMETRY_FRESH_MS is stale. */
+  telemetryAgeMs?: number;
+  /** Stop refreshing telemetry after N ticks (simulates a sender that went away). */
+  staleAfterTick?: number;
+  obeyMode?: boolean;
+  obeyHoldMs?: boolean;
+  obeyStart?: boolean;
+  obeyPause?: boolean;
+  obeyStop?: boolean;
+  /**
+   * Ticks the sender needs before it actually applies SET_MODE. Models a slow sender so
+   * the "measurement starts only after confirmation" rule is provable.
+   */
+  confirmationDelayTicks?: number;
+  /**
+   * What a STATIC step decodes: 'chunk0' is a healthy static carrier, 'many' and
+   * 'other' are the optical proof that the sender was not actually static.
+   */
+  staticDecode?: 'chunk0' | 'many' | 'other';
+  /** Setup-gate readiness: false makes the gate abort before A1. */
+  ready?: boolean;
+  /** Force the r13 UI-window artefact (e.g. 1000) into the receiver sample. */
+  windowFps?: number | null;
+  /** Extra control messages injected at a given tick index (for hostile-input tests). */
+  injectAtTick?: number;
+  /**
+   * Runs BEFORE `orchestrator.tick()` on the requested tick — or on EVERY tick when
+   * `injectAtTick` is omitted, which is what a test needs when the tick it cares about
+   * depends on how the run progressed (e.g. "the first tick after A1 was issued").
+   */
+  inject?: (context: FakePeerContext) => void;
+
+  // ---- r17 camera acquisition -------------------------------------------------
+  /** The frame listener exists and was started. False = the phone never started it. */
+  cameraListening?: boolean;
+  /** At least one CameraFrame callback has fired. False = the view is dead. */
+  cameraCallbackActive?: boolean;
+  /** Camera frames delivered per tick while "running". */
+  cameraFramesPerTick?: number;
+  /** The camera only starts delivering once this tick index is reached. */
+  cameraStartsAfterTicks?: number;
+  /** The camera stops delivering once this tick index is reached. */
+  cameraStopsAfterTicks?: number;
+  /**
+   * Frames delivered but NOT ingested by the single-code baseline pipeline. False models
+   * a page that is not running the baseline receiver (the r15b signature: the receiver
+   * the gate reads stays at zero while the camera is perfectly live).
+   */
+  cameraFeedsBaseline?: boolean;
+  /** Simulate a page whose receiver stopped producing frames mid-setup. */
+  receiverFramesStopAfterTicks?: number;
+  /** The carrier is already broadcasting when the run starts (a leftover session). */
+  broadcastingAtStart?: boolean;
+  /**
+   * The mode the carrier is in BEFORE any command arrives. Default 'static' (chunk 0).
+   * 'cyclic' models the realistic case that matters for SETUP: the PC sender was left
+   * cycling, so the run can only confirm "static chunk 0" after SET_MODE actually lands.
+   */
+  initialMode?: 'static' | 'cyclic';
+  /** r18: call `orchestrator.abort()` on this tick (PO pressing Stop). */
+  abortAtTick?: number;
+  abortReason?: string;
+  abortSource?: Tf012AutoAbortSource;
+  /**
+   * r18: inject a SYNTHETIC scheduler stall of this many ms. The clock jumps but the
+   * machine is not ticked, which is exactly what a blocked event loop looks like from the
+   * orchestrator's side (the r17 physical run stalled for 19 s and 30 s).
+   */
+  stallMs?: number;
+  /** Injected on ticks whose LAST progress entry satisfies this predicate. */
+  stallOn?: (progress: Tf012AutoProgress) => boolean;
+  /** How many stalls may be injected (default 1). */
+  stallTimes?: number;
+  // ---- r19 evidence -----------------------------------------------------------
+  /** Synthetic per-frame processing duration fed to the camera timing model. */
+  frameProcessingMs?: number;
+  /** Fingerprint hash used for every rejected frame (a repeat = stable sampling). */
+  failureFingerprint?: string;
+  /** Bits reported as identical across all analysed failed frames. */
+  failureStableBits?: number;
+  /** Mean Hamming distance between consecutive failed frames. */
+  failureMeanBitFlip?: number;
+  /** Refinement score of the best rejected frame. */
+  failureRefinementScore?: number;
+  /**
+   * r20: the sampling rotation of each counted frame, cycled in order and restarted at
+   * every metric reset. `[0]` (the default) is a perfectly stable orientation; `[1, 3]`
+   * alternates, which is the physical r19 signature of orientation instability.
+   */
+  rotationSequence?: readonly number[];
+  /** r19: run a different plan (the static probe) instead of the shipped A1..A5 sweep. */
+  steps?: readonly Tf012AutoStep[];
+  /** r19: mark the artefact as the short diagnostic probe. */
+  probe?: boolean;
+}
+
+/** One metric reset, recorded so tests can prove WHEN it happened. */
+export interface FakePeerReset {
+  tickIndex: number;
+  now: number;
+}
+
+export interface FakePeerContext {
+  tickIndex: number;
+  now: number;
+  orchestrator: ReturnType<typeof createTf012AutoOrchestrator>;
+  commands: Tf012AutoEnvelope[];
+}
+
+export interface FakePeer {
+  commands: Tf012AutoEnvelope[];
+  frozen: Tf012AutoStepResult[];
+  progress: Tf012AutoProgress[];
+  finalResult: () => Tf012AutoRunResult | null;
+  now: () => number;
+  tickIndex: () => number;
+  /** Advance the clock by one tick and tick the orchestrator. */
+  tick: (times?: number) => void;
+  runUntilFinal: () => Tf012AutoRunResult | null;
+  sender: Tf012AutoSenderSample;
+  receiver: Tf012AutoReceiverSample;
+  /** Telemetry timestamp the orchestrator sees. */
+  telemetryAt: () => number | null;
+  setTelemetryAt: (value: number | null) => void;
+  setHelloAt: (value: number | null) => void;
+  /** Command actions in emission order. */
+  actions: () => string[];
+  /** r17: every metric reset, with the tick it happened on. */
+  resets: FakePeerReset[];  /** r18: the tick the abort was requested on, or null. */
+  abortTick: () => number | null;
+  /** r18: synthetic stalls injected, in order. */
+  stalls: Array<{tickIndex: number; ms: number}>;
+  /** r19: the last raw failure sample the fake produced. */
+  failureFingerprint: () => {hash: string; raw: Uint8Array} | null;  /** r17: the tick index of the first command with this action, or -1. */
+  tickOfAction: (action: string) => number;
+  /** r17: live camera state the orchestrator reads. */
+  cameraStatus: () => Tf012AutoCameraStatus;
+}
+
+const FRAMES_PER_TICK = 15;
+
+export function createFakePeer(options: FakePeerOptions = {}): FakePeer {
+  const tickMs = options.tickMs ?? 500;
+  const maxTicks = options.maxTicks ?? 400;
+  const commands: Tf012AutoEnvelope[] = [];
+  /** Tick index each command was emitted on (parallel to `commands`). */
+  const commandTicks: number[] = [];
+  const frozen: Tf012AutoStepResult[] = [];
+  const progress: Tf012AutoProgress[] = [];
+  let final: Tf012AutoRunResult | null = null;
+  let now = options.startAt ?? 1000;
+  let tickIndex = 0;
+  let helloAt: number | null = options.hello === false ? null : (options.startAt ?? 1000) - 100;
+  let telemetryAt: number | null = options.telemetry === false ? null : now;
+  let connected = true;
+  let cyclicCursor = 0;
+  /** Ticks before a pending SET_MODE is applied (see confirmationDelayTicks). */
+  let pendingMode: {mode: 'static' | 'cyclic'; chunkIndex: number | null; applyAtTick: number} | null = null;
+  const applyPendingMode = (): void => {
+    if (!pendingMode || tickIndex < pendingMode.applyAtTick) return;
+    sender.mode = pendingMode.mode;
+    if (pendingMode.mode === 'static') sender.cursor = pendingMode.chunkIndex ?? 0;
+    pendingMode = null;
+  };
+
+  const sender: Tf012AutoSenderSample = {
+    mode: options.initialMode ?? 'static', holdMs: null, cursor: 0, paused: false,
+    broadcasting: options.broadcastingAtStart === true,
+    canvasDevicePx: 1020, canvasHash: 'aaaa', pausedAt: null, resumedAt: null,
+  };
+  const receiver = emptyReceiverSample();
+
+  // ---- r19 camera + failure evidence ------------------------------------------
+  /** Camera callback/processing timing, reset with the receiver metrics (the contract). */
+  const cameraTiming = new Tf012AutoCameraTimingTracker();
+  /** Frames the fake decoder rejected, with the fingerprint it rejected them under. */
+  let failureFingerprint: {hash: string; raw: Uint8Array} | null = null;
+
+  // ---- r20 rotation model -----------------------------------------------------
+  /** Per-frame sampling rotation, cycled; restarted at every metric reset. */
+  const rotationSequence = options.rotationSequence ?? [0];
+  let rotationFrame = 0;
+  const rotationTracker = new SingleBaselineRotationTracker();
+  /**
+   * One frame that reached the decode attempt: its rotation and its outcome. Called once
+   * per modelled frame, so the counts add up to the frames the fake says it decoded.
+   */
+  const noteRotationFrame = (outcome: 'accepted' | 'crc-failed'): void => {
+    const rotation = rotationSequence[rotationFrame % rotationSequence.length] ?? 0;
+    rotationFrame += 1;
+    rotationTracker.note(rotation, outcome);
+    receiver.rotations = rotationTracker.diagnostics();
+    receiver.frameRotationIndex = rotation;
+  };
+  const noteRotations = (count: number, outcome: 'accepted' | 'crc-failed'): void => {
+    for (let index = 0; index < count; index += 1) noteRotationFrame(outcome);
+  };
+
+  const noteFailure = (): void => {
+    receiver.crcDiagnostics.failedFrames += 1;
+    const hash = options.failureFingerprint ?? 'deadbeef';
+    receiver.crcDiagnostics.fingerprintHistogram[hash] =
+      (receiver.crcDiagnostics.fingerprintHistogram[hash] ?? 0) + 1;
+    receiver.crcDiagnostics.distinctFingerprints =
+      Object.keys(receiver.crcDiagnostics.fingerprintHistogram).length;
+    receiver.crcDiagnostics.topFingerprint = hash;
+    receiver.crcDiagnostics.topFingerprintCount = receiver.crcDiagnostics.fingerprintHistogram[hash] ?? 0;
+    receiver.crcDiagnostics.crcMismatchFrames += 1;
+    receiver.crcDiagnostics.analysedFrames += 1;
+    receiver.crcDiagnostics.analysedBitCount = 708 * 8;
+    if (options.failureStableBits !== undefined) {
+      receiver.crcDiagnostics.stableBitCount = options.failureStableBits;
+    }
+    if (options.failureMeanBitFlip !== undefined) {
+      receiver.crcDiagnostics.meanBitFlipVsPrevious = options.failureMeanBitFlip;
+    }
+    failureFingerprint = {hash, raw: new Uint8Array(8).fill(0) };
+    receiver.geometry = {
+      ...receiver.geometry,
+      failure: {
+        boundingBox: {x: 100, y: 200, width: 310, height: 310},
+        pixelsPerCell: 3.23, phaseX: 0.5, phaseY: 0.5, rotation: 0,
+        refinementScore: options.failureRefinementScore ?? 0.41,
+        reservedPatternScore: 0.966, contrast: 172, threshold: 128,
+        candidates: 6, seeds: 12, refined: 5, bestSeedScore: 0.9,
+        secondSeedScore: 0.7, selectedCandidate: 0, stage: 'G7c',
+        stageReason: 'crc-fail',
+      },
+    };
+  };
+
+  const noteSuccess = (index: number): void => {
+    receiver.geometry = {
+      ...receiver.geometry,
+      success: {
+        boundingBox: {x: 100, y: 200, width: 310, height: 310},
+        pixelsPerCell: 3.23, phaseX: 0.5, phaseY: 0.5, rotation: 0,
+        refinementScore: 0.99, reservedPatternScore: 0.999, contrast: 178, threshold: 128,
+        candidates: 6, seeds: 12, refined: 6, bestSeedScore: 0.99,
+        secondSeedScore: 0.8, selectedCandidate: 0, stage: 'G7d', stageReason: 'crc-pass',
+      },
+    };
+    void index;
+  };
+
+  // ---- r17 camera model -------------------------------------------------------
+  // The camera is a SEPARATE source from the optical link: it delivers frames on its own
+  // schedule, and only frames that reach the baseline pipeline count as acquisition.
+  const resets: FakePeerReset[] = [];
+  /** r18: every injected synthetic stall, for assertions. */
+  const stalls: Array<{tickIndex: number; ms: number}> = [];
+  let cameraSeq = 0;
+  let cameraPipelineSeq = 0;
+  let cameraLastFrameAt: number | null = null;
+  const cameraListening = (): boolean => options.cameraListening !== false;
+  const cameraDelivering = (): boolean => {
+    if (!cameraListening() || options.cameraCallbackActive === false) return false;
+    if (options.cameraStartsAfterTicks !== undefined && tickIndex < options.cameraStartsAfterTicks) return false;
+    if (options.cameraStopsAfterTicks !== undefined && tickIndex > options.cameraStopsAfterTicks) return false;
+    return true;
+  };
+  const deliverCameraFrames = (): void => {
+    if (!cameraDelivering()) return;
+    const perTick = options.cameraFramesPerTick ?? 3;
+    cameraSeq += perTick;
+    if (options.cameraFeedsBaseline !== false && cameraDelivering()) cameraPipelineSeq += perTick;
+    cameraLastFrameAt = now;
+  };
+  const receiverAcceptsFrames = (): boolean => !(options.receiverFramesStopAfterTicks !== undefined
+    && tickIndex > options.receiverFramesStopAfterTicks);
+
+  const addIndex = (index: number): void => {
+    if (!receiver.decodedChunkIndexes.includes(index)) {
+      receiver.decodedChunkIndexes.push(index);
+      receiver.decodedChunkIndexes.sort((a, b) => a - b);
+      receiver.uniqueReceived = receiver.decodedChunkIndexes.length;
+    }
+  };
+
+  /**
+   * r18: one accepted optical decode, mirrored into BOTH local signals the orchestrator
+   * reads — the accepted index set and the per-index histogram (duplicates included).
+   */
+  const noteDecode = (index: number): void => {
+    receiver.acceptedDecodeCountByChunkIndex[String(index)] =
+      (receiver.acceptedDecodeCountByChunkIndex[String(index)] ?? 0) + 1;
+  };
+
+  /** The r13 artefact: a UI-window FPS that must never reach a frozen result. */
+  const windowFps = (): number | null => (options.windowFps === undefined ? null : options.windowFps);
+
+  /** Frames the fake optical link delivered during the CURRENT step. */
+  const receiveFrames = (): void => {
+    if (!sender.broadcasting || !receiverAcceptsFrames()) return;
+    // r19: every delivered frame feeds the camera timing model too, using the host's own
+    // clock and a synthetic processing duration (options.frameProcessingMs).
+    cameraTiming.note(now, options.frameProcessingMs ?? 25);
+    receiver.cameraTiming = cameraTiming.snapshot();
+    receiver.cameraFrames += FRAMES_PER_TICK;
+    receiver.processedFrames += FRAMES_PER_TICK;
+    receiver.decodeAttempts += FRAMES_PER_TICK;
+    receiver.callbackFps = windowFps();
+    receiver.processingFps = windowFps();
+    if (sender.paused) {
+      // A frozen carrier still decodes: that is the whole point of A4.
+      receiver.successfulDecodes += 10;
+      noteRotations(FRAMES_PER_TICK, 'accepted');
+      noteDecode(sender.cursor ?? 0);
+      addIndex(sender.cursor ?? 0);
+      return;
+    }
+    if (sender.mode === 'static') {
+      const behaviour = options.staticDecode ?? 'chunk0';
+      receiver.observedCodeWidthPx = 253;
+      receiver.pixelsPerCellX = 2.64;
+      receiver.pixelsPerCellY = 2.65;
+      receiver.reservedPatternScore = 0.999;
+      receiver.contrast = 178;
+      receiver.frameRotationIndex = 0;
+      if (options.ready === false) {
+        // An unusable setup: the locator finds the carrier but nothing decodes.
+        receiver.crcFailures += FRAMES_PER_TICK;
+        receiver.locateFailures += 2;
+        // r20: the two locate failures are frames with NO lock, so they carry no rotation.
+        rotationTracker.noteUnlocated();
+        rotationTracker.noteUnlocated();
+        receiver.rotations = rotationTracker.diagnostics();
+        noteRotations(FRAMES_PER_TICK, 'crc-failed');
+        noteFailure();
+        return;
+      }
+      receiver.successfulDecodes += 14;
+      noteRotations(FRAMES_PER_TICK, 'accepted');
+      const accepted = behaviour === 'chunk0' ? [0] : behaviour === 'many' ? [0, 1, 2] : [3];
+      for (const index of accepted) {
+        noteDecode(index);
+        addIndex(index);
+        noteSuccess(index);
+      }
+      return;
+    }
+    receiver.successfulDecodes += 13;
+    noteRotations(FRAMES_PER_TICK, 'accepted');
+    receiver.observedCodeWidthPx = 253;
+    receiver.pixelsPerCellX = 2.64;
+    receiver.pixelsPerCellY = 2.65;
+    receiver.reservedPatternScore = 0.999;
+    receiver.contrast = 178;
+    noteDecode(cyclicCursor % 16);
+    addIndex(cyclicCursor % 16);
+    cyclicCursor += 1;
+  };
+
+  const orchestrator = createTf012AutoOrchestrator({
+    runId: 'run-r14-test',
+    buildId: 'tf012-r14-test',
+    device: 'node-test-rig',
+    ...(options.steps ? {steps: options.steps} : {}),
+    ...(options.probe ? {probe: true} : {}),
+    ports: {
+      send: (message) => {
+        const check = validateTf012AutoControlMessage(message);
+        if (!check.ok) throw new Error(`illegal control message: ${check.reason}`);
+        commands.push(message);
+        commandTicks.push(tickIndex);
+        switch (message.action) {
+          case 'SET_MODE': {
+            if (options.obeyMode === false) break;
+            const mode = message.mode as 'static' | 'cyclic';
+            if (options.confirmationDelayTicks) {
+              pendingMode = {
+                mode,
+                chunkIndex: message.chunkIndex === null || message.chunkIndex === undefined
+                  ? null : Number(message.chunkIndex),
+                applyAtTick: tickIndex + options.confirmationDelayTicks,
+              };
+              break;
+            }
+            sender.mode = mode;
+            if (mode === 'static') {
+              sender.cursor = Number(message.chunkIndex ?? 0);
+              sender.holdMs = null;
+            } else {
+              sender.holdMs = null;
+            }
+            break;
+          }
+          case 'SET_HOLD_MS':
+            if (options.obeyHoldMs !== false) sender.holdMs = Number(message.holdMs);
+            break;
+          case 'START':
+            if (options.obeyStart !== false) sender.broadcasting = true;
+            break;
+          case 'PAUSE':
+            if (options.obeyPause !== false) {
+              sender.paused = true;
+              sender.pausedAt = now;
+            }
+            break;
+          case 'RESUME':
+            sender.paused = false;
+            sender.resumedAt = now;
+            break;
+          case 'STOP':
+            if (options.obeyStop !== false) {
+              sender.broadcasting = false;
+              sender.paused = false;
+            }
+            break;
+          default:
+            break;
+        }
+      },
+      senderSample: () => {
+        // Mirror the browser sender: the cyclic cursor advances, a static carrier is
+        // pinned to its chunk.
+        if (sender.mode === 'cyclic' && sender.broadcasting && !sender.paused) {
+          sender.cursor = ((sender.cursor ?? 0) + 1) % 16;
+        }        return {...sender};
+      },
+      receiverSample: () => ({
+        ...receiver,
+        decodedChunkIndexes: [...receiver.decodedChunkIndexes],
+        // r18: the histogram is an OBJECT — a shallow copy would alias it and every
+        // interval delta would silently collapse to {}. The port contract is a fresh
+        // snapshot, so the fake obeys it exactly like the phone does.
+        acceptedDecodeCountByChunkIndex: {...receiver.acceptedDecodeCountByChunkIndex},
+        // r20: the rotation histogram is three more objects — same hazard.
+        rotations: {
+          ...receiver.rotations,
+          rotations: {...receiver.rotations.rotations},
+          accepted: {...receiver.rotations.accepted},
+          crcFailures: {...receiver.rotations.crcFailures},
+        },
+      }),
+      resetReceiverMetrics: () => {
+        const fresh = emptyReceiverSample();
+        Object.assign(receiver, fresh);
+        // The host resets its camera timing counters at the same boundary (r19 contract).
+        cameraTiming.reset();
+        // ...and its rotation histogram, which therefore reports exactly one scope (r20).
+        rotationTracker.reset();
+        rotationFrame = 0;
+        resets.push({tickIndex, now});
+      },
+      cameraStatus: (): Tf012AutoCameraStatus => ({
+        listening: cameraListening(),
+        callbackActive: options.cameraCallbackActive !== false && cameraLastFrameAt != null,
+        framesReceived: cameraSeq,
+        baselineFrames: cameraPipelineSeq,
+        lastFrameAt: cameraLastFrameAt,
+      }),
+      link: {
+        controlConnected: () => connected,
+        senderHelloAt: () => helloAt,
+        telemetryAt: () => telemetryAt,
+      },
+      onStepResult: (result) => frozen.push(result),
+      onRunResult: (result) => {
+        final = result;
+      },
+      onProgress: (entry) => progress.push(entry),
+    },
+  });
+
+  /** r18: the tick the abort was requested on, for PO_STOP tests. */
+  let abortTick: number | null = null;
+  let stallsLeft = options.stallTimes ?? 1;
+
+  const tick = (times = 1): void => {
+    for (let index = 0; index < times; index += 1) {
+      now += tickMs;
+      tickIndex += 1;
+      if (options.stallMs !== undefined && stallsLeft > 0 && options.stallOn) {
+        const last = progress.at(-1);
+        if (last && options.stallOn(last)) {
+          stallsLeft -= 1;
+          now += options.stallMs;
+          stalls.push({tickIndex, ms: options.stallMs});
+        }
+      }
+      if (options.abortAtTick === tickIndex) {
+        abortTick = tickIndex;
+        orchestrator.abort(options.abortReason ?? 'STOPPED_BY_PO', {
+          source: options.abortSource ?? 'PO_STOP', nowMs: now,
+        });
+      }
+      if (options.telemetry !== false
+        && (options.staleAfterTick === undefined || tickIndex <= options.staleAfterTick)) {
+        telemetryAt = options.telemetryAgeMs === undefined ? now : now - options.telemetryAgeMs;
+      }
+      if (options.inject && (options.injectAtTick === undefined || options.injectAtTick === tickIndex)) {
+        options.inject({tickIndex, now, orchestrator, commands});
+      }
+      applyPendingMode();
+      deliverCameraFrames();
+      receiveFrames();
+      orchestrator.tick(now);
+      if (final) return;
+    }
+  };
+
+  orchestrator.start(now);
+
+  return {
+    commands,
+    frozen,
+    progress,
+    finalResult: () => final,
+    now: () => now,
+    tickIndex: () => tickIndex,
+    tick,
+    runUntilFinal: () => {
+      for (let index = 0; index < maxTicks && !final; index += 1) tick(1);
+      return final;
+    },
+    sender,
+    receiver,
+    telemetryAt: () => telemetryAt,
+    setTelemetryAt: (value) => {
+      telemetryAt = value;
+    },
+    setHelloAt: (value) => {
+      helloAt = value;
+    },
+    actions: () => commands.map((message) => String(message.action)),
+    resets,
+    abortTick: () => abortTick,
+    stalls,
+    failureFingerprint: () => failureFingerprint,
+    tickOfAction: (action) => {
+      const index = commands.findIndex((message) => String(message.action) === action);
+      return index < 0 ? -1 : commandTicks[index] ?? -1;
+    },
+    cameraStatus: () => ({
+      listening: cameraListening(),
+      callbackActive: options.cameraCallbackActive !== false && cameraLastFrameAt != null,
+      framesReceived: cameraSeq,
+      baselineFrames: cameraPipelineSeq,
+      lastFrameAt: cameraLastFrameAt,
+    }),
+  };
+}
+
+/** Convenience: build a healthy peer and run the whole plan. */
+export function runAutoPlan(options: FakePeerOptions = {}): FakePeer {
+  const peer = createFakePeer(options);
+  peer.runUntilFinal();
+  return peer;
+}

@@ -1,0 +1,277 @@
+{
+  "evidenceClass": "SIMULATED REAL-TIME FRAME-CADENCE STRESS",
+  "generatedAt": "2026-09-11T13:59:48.448Z",
+  "gitHead": "e0ed40d4814201fafc8dbde688a98b21f1d2cdb6",
+  "senderEntry": "/tiled-physical-v5.html?role=sender&standalone=broadcast&sessions=2&replayEvery=16",
+  "replayEvery": 16,
+  "acquisitionBeacon": "orientation(64) + preamble(96) emitted at the start of every broadcast cycle",
+  "boundedModel": "one frame actively processing + one latest pending frame (maxQueueDepth <= 1)",
+  "networkPayloadPath": "NONE",
+  "oracleInputs": [],
+  "beaconGate": {
+    "nonBeaconSamples": 13,
+    "beaconSamples": 8,
+    "falsePositives": 0,
+    "falseNegatives": 0
+  },
+  "budgetInventory": {
+    "wrapMs": {
+      "n": 10,
+      "avg": 59.86,
+      "p50": 59.7,
+      "p95": 63.3,
+      "max": 67.8
+    },
+    "beaconProbeAcceptMs": {
+      "n": 10,
+      "avg": 46.57,
+      "p50": 40.7,
+      "p95": 48.7,
+      "max": 110
+    },
+    "beaconProbeRejectMs": {
+      "n": 10,
+      "avg": 32.39,
+      "p50": 31.3,
+      "p95": 36.9,
+      "max": 40.5
+    },
+    "orientationFiducialMs": {
+      "n": 5,
+      "avg": 1083.16,
+      "p50": 1044.3,
+      "p95": 1161.3,
+      "max": 1228.8
+    },
+    "preambleLockMs": {
+      "n": 5,
+      "avg": 3236.02,
+      "p50": 2993.2,
+      "p95": 3275.4,
+      "max": 4194
+    },
+    "manifestDecodeMs": {
+      "n": 5,
+      "avg": 87.88,
+      "p50": 85.5,
+      "p95": 91.6,
+      "max": 109.6
+    },
+    "dynamicDecodeMs": {
+      "n": 5,
+      "avg": 86.02,
+      "p50": 89,
+      "p95": 89.7,
+      "max": 91
+    },
+    "checkpointMs": {
+      "n": 5,
+      "avg": 0.18,
+      "p50": 0.1,
+      "p95": 0.2,
+      "max": 0.5
+    },
+    "reconstructMs": {
+      "n": 1,
+      "avg": 0.5,
+      "p50": 0.5,
+      "p95": 0.5,
+      "max": 0.5
+    },
+    "sha256Ms": {
+      "n": 6,
+      "avg": 2.767,
+      "p50": 1.8,
+      "p95": 4.2,
+      "max": 4.5
+    },
+    "note": "dynamicDecodeMs includes track + decode + Fountain addSymbol (items 8+9). CameraFrame callback rate, UI setData, and local file write are measured on-device (Mini Program adapter)."
+  },
+  "fpsRuns": [
+    {
+      "targetFps": 15,
+      "framePeriodMs": 66.7,
+      "complete": true,
+      "shaMatch": true,
+      "reconstructedSha": "191e27f4a771896d849e8d66c60a89996b6b974c5177dfcae75819195f11d819",
+      "producerFps": 5.09,
+      "processedFps": 5.09,
+      "producerFrames": 58,
+      "processedFrames": 58,
+      "skippedBusyFrames": 0,
+      "replacedFrames": 0,
+      "maxQueueDepth": 1,
+      "usefulSymbolRate": 11.23,
+      "elapsedMs": 11401.3,
+      "reconstructMs": 0.3,
+      "shaMs": 2.3,
+      "orientationMs": 1020.8,
+      "stageTimes": {
+        "idle": {
+          "n": 1,
+          "avg": 1020.8,
+          "p50": 1020.8,
+          "p95": 1020.8,
+          "max": 1020.8
+        },
+        "oriented": {
+          "n": 1,
+          "avg": 2690.5,
+          "p50": 2690.5,
+          "p95": 2690.5,
+          "max": 2690.5
+        },
+        "preamble": {
+          "n": 1,
+          "avg": 87.1,
+          "p50": 87.1,
+          "p95": 87.1,
+          "max": 87.1
+        },
+        "receiving": {
+          "n": 55,
+          "avg": 81.313,
+          "p50": 72,
+          "p95": 124,
+          "max": 148.9
+        }
+      },
+      "coreStats": {
+        "capturedFrames": 55,
+        "decodedSymbols": 128,
+        "duplicateSymbols": 0,
+        "redundantSymbols": 1,
+        "decodeFailures": 0,
+        "trackFallbacks": 6,
+        "rejectedFrames": 0
+      }
+    },
+    {
+      "targetFps": 20,
+      "framePeriodMs": 50,
+      "complete": true,
+      "shaMatch": true,
+      "reconstructedSha": "191e27f4a771896d849e8d66c60a89996b6b974c5177dfcae75819195f11d819",
+      "producerFps": 4.82,
+      "processedFps": 4.82,
+      "producerFrames": 58,
+      "processedFrames": 58,
+      "skippedBusyFrames": 0,
+      "replacedFrames": 0,
+      "maxQueueDepth": 1,
+      "usefulSymbolRate": 10.63,
+      "elapsedMs": 12043.9,
+      "reconstructMs": 0.1,
+      "shaMs": 0.5,
+      "orientationMs": 1033.9,
+      "stageTimes": {
+        "idle": {
+          "n": 1,
+          "avg": 1033.9,
+          "p50": 1033.9,
+          "p95": 1033.9,
+          "max": 1033.9
+        },
+        "oriented": {
+          "n": 1,
+          "avg": 2508.4,
+          "p50": 2508.4,
+          "p95": 2508.4,
+          "max": 2508.4
+        },
+        "preamble": {
+          "n": 1,
+          "avg": 70.1,
+          "p50": 70.1,
+          "p95": 70.1,
+          "max": 70.1
+        },
+        "receiving": {
+          "n": 55,
+          "avg": 91.789,
+          "p50": 74,
+          "p95": 169.4,
+          "max": 235.3
+        }
+      },
+      "coreStats": {
+        "capturedFrames": 55,
+        "decodedSymbols": 128,
+        "duplicateSymbols": 0,
+        "redundantSymbols": 1,
+        "decodeFailures": 0,
+        "trackFallbacks": 6,
+        "rejectedFrames": 0
+      }
+    },
+    {
+      "targetFps": 30,
+      "framePeriodMs": 33.3,
+      "complete": true,
+      "shaMatch": true,
+      "reconstructedSha": "191e27f4a771896d849e8d66c60a89996b6b974c5177dfcae75819195f11d819",
+      "producerFps": 3.67,
+      "processedFps": 3.67,
+      "producerFrames": 58,
+      "processedFrames": 58,
+      "skippedBusyFrames": 0,
+      "replacedFrames": 0,
+      "maxQueueDepth": 1,
+      "usefulSymbolRate": 8.1,
+      "elapsedMs": 15798.5,
+      "reconstructMs": 0.2,
+      "shaMs": 0.9,
+      "orientationMs": 781.4,
+      "stageTimes": {
+        "idle": {
+          "n": 1,
+          "avg": 781.4,
+          "p50": 781.4,
+          "p95": 781.4,
+          "max": 781.4
+        },
+        "oriented": {
+          "n": 1,
+          "avg": 2586.5,
+          "p50": 2586.5,
+          "p95": 2586.5,
+          "max": 2586.5
+        },
+        "preamble": {
+          "n": 1,
+          "avg": 203.5,
+          "p50": 203.5,
+          "p95": 203.5,
+          "max": 203.5
+        },
+        "receiving": {
+          "n": 55,
+          "avg": 138.475,
+          "p50": 133.4,
+          "p95": 209.5,
+          "max": 431.1
+        }
+      },
+      "coreStats": {
+        "capturedFrames": 55,
+        "decodedSymbols": 128,
+        "duplicateSymbols": 0,
+        "redundantSymbols": 1,
+        "decodeFailures": 0,
+        "trackFallbacks": 6,
+        "rejectedFrames": 0
+      }
+    }
+  ],
+  "summary": {
+    "runs": 3,
+    "allComplete": true,
+    "allShaMatch": true,
+    "allBounded": true
+  },
+  "timings": {
+    "totalMs": 80265,
+    "timingNote": "DESKTOP / SIMULATION timing only"
+  },
+  "note": "SIMULATION EVIDENCE ONLY. Not physical raw optical ingress. Not Net Goodput."
+}

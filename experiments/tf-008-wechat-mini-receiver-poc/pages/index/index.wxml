@@ -1,8 +1,10 @@
 <view class="page">
-  <view class="banner">OPTICAL CAMERA FRAME — LOCAL ONLY</view>
-  <view class="netbanner">Network payload path: NONE</view>
-  <view class="receivebanner" wx:if="{{mode === 'receive'}}">SHARED RECEIVE PIPELINE ACTIVE · buildId {{buildId}}</view>
-  <view class="benchbanner" wx:if="{{mode === 'benchmark'}}">CAMERA BENCHMARK MODE ACTIVE · buildId {{buildId}}</view>
+  <view class="topstrip">
+    <text class="tsid">OptiLink · TF-012 v2</text>
+    <text class="tsbuild">buildId {{buildId}}</text>
+    <text class="tsnet">payload path NONE</text>
+    <text class="{{bootStatus === 'BOOT OK' ? 'tsok' : 'tsbad'}}">{{bootStatus}}{{bootError ? ' · ' + bootError : ''}}</text>
+  </view>
 
   <camera
     device-position="back"
@@ -15,106 +17,42 @@
     binderror="onCameraError"
   />
 
-  <view class="controls">
-    <button class="btn primary" bindtap="startCamera" disabled="{{running}}">Start Camera</button>
-    <button class="btn" bindtap="stopCamera" disabled="{{!running}}">Stop Camera</button>
-    <button class="btn" bindtap="resetMetrics">Reset Metrics</button>
-    <button class="btn modebtn {{mode === 'receive' ? 'modeactive' : ''}}" data-mode="receive" bindtap="onSelectMode">Shared Receive Pipeline</button>
-    <button class="btn modebtn {{mode === 'benchmark' ? 'modeactive' : ''}}" data-mode="benchmark" bindtap="onSelectMode">Camera Benchmark</button>
-    <button class="btn" wx:if="{{mode === 'benchmark'}}" bindtap="toggleHeavy">{{heavy ? 'Normalization 1280x720: ON' : 'Normalization 1280x720: OFF'}}</button>
-  </view>
+  <view class="simple">
+    <view class="srow">
+      <text class="sk">Camera / 相机</text>
+      <text class="sv {{simpleCameraLabel === 'READY / 就绪' ? 'svok' : 'svbad'}}">{{simpleCameraLabel}}</text>
+    </view>
+    <view class="srow">
+      <text class="sk">T1 STATIC READY</text>
+      <text class="sv {{simpleStaticReady ? 'svok' : 'svbad'}}">{{simpleStaticLabel}}</text>
+    </view>
 
-  <view class="panel">
-    <view class="section">status</view>
-    <view class="row"><text class="k">camera permission</text><text class="v">{{permissionStatus}}</text></view>
-    <view class="row"><text class="k">buildId</text><text class="v">{{buildId}}</text></view>
-    <view class="row"><text class="k">active mode</text><text class="v">{{mode}}</text></view>
-    <view class="row"><text class="k">camera running</text><text class="v">{{running ? 'running' : 'stopped'}}</text></view>
-    <view class="row"><text class="k">frame callback</text><text class="v">{{callbackActive ? 'active' : 'inactive'}}</text></view>
-    <view class="row"><text class="k">maxZoom</text><text class="v">{{maxZoom}}</text></view>
-  </view>
+    <view class="step">1 · PC sender: open static chunk 0 directly (?diagnostic=chunk0). Keep the whole carrier visible.</view>
+    <button class="sbtn sbtn2" bindtap="onSimpleStaticCheck" disabled="{{simpleStatus === 'RECEIVING'}}">
+      CHECK STATIC READY / 静态预检
+    </button>
 
-  <view class="panel">
-    <view class="section">live frame metrics</view>
-    <view class="row"><text class="k">frame</text><text class="v">{{frameWidth}} × {{frameHeight}}</text></view>
-    <view class="row"><text class="k">frame format</text><text class="v">{{frameFormat}}</text></view>
-    <view class="row"><text class="k">frame buffer bytes</text><text class="v">{{frameBufferBytes}}</text></view>
-    <view class="row"><text class="k">callback FPS</text><text class="v">{{callbackFps}}</text></view>
-    <view class="row"><text class="k">processing FPS</text><text class="v">{{processingFps}}</text></view>
-    <view class="row"><text class="k">total received frames</text><text class="v">{{totalReceived}}</text></view>
-    <view class="row"><text class="k">processed frames</text><text class="v">{{processed}}</text></view>
-    <view class="row"><text class="k">skipped / dropped</text><text class="v">{{skipped}}</text></view>
-    <view class="row"><text class="k">skip ratio</text><text class="v">{{skipRatio}}</text></view>
-    <view class="row"><text class="k">avg process time</text><text class="v">{{avgProcessMs}}</text></view>
-    <view class="row"><text class="k">p95 process time</text><text class="v">{{p95ProcessMs}}</text></view>
-    <view class="row"><text class="k">data ingress</text><text class="v">{{ingressMBps}} MB/s</text></view>
-  </view>
+    <view class="step">2 · When READY: keep phone fixed, switch PC sender to cyclic 1000 ms, then start the file test.</view>
+    <button class="sbtn" bindtap="onSimpleStart" disabled="{{simpleStatus === 'RECEIVING' || !simpleStaticReady}}">
+      START FILE TEST / 开始文件测试
+    </button>
 
-  <view class="panel" wx:if="{{mode === 'receive'}}">
-    <view class="section">shared receive pipeline</view>
-    <view class="pipeline-error" wx:if="{{receivePipelineError}}">{{receivePipelineError}}</view>
-    <view class="row"><text class="k">self-check</text><text class="v">{{receiveSelfCheck}}</text></view>
-    <view class="row"><text class="k">product state</text><text class="v">{{productStage}}</text></view>
-    <view class="row"><text class="k">file</text><text class="v">{{fileName}}</text></view>
-    <view class="row"><text class="k">stage</text><text class="v">{{receiveStage}}</text></view>
-    <view class="row"><text class="k">selected transform</text><text class="v">{{receiveSelectedTransform}}</text></view>
-    <view class="row"><text class="k">triplet valid</text><text class="v">{{receiveTripletValid}}</text></view>
-    <view class="row"><text class="k">locator support</text><text class="v">{{receiveSupport}}</text></view>
-    <view class="row"><text class="k">exact tiles</text><text class="v">{{receiveExactTiles}}</text></view>
-    <view class="row"><text class="k">manifest</text><text class="v">{{manifestStatus}}</text></view>
-    <view class="row"><text class="k">manifest file size</text><text class="v">{{manifestFileSize}}</text></view>
-    <view class="row"><text class="k">decoded symbols</text><text class="v">{{decodedSymbols}}</text></view>
-    <view class="row"><text class="k">solved blocks</text><text class="v">{{solvedBlocks}}</text></view>
-    <view class="row"><text class="k">reconstruction</text><text class="v">{{reconstructionStatus}}</text></view>
-    <view class="row"><text class="k">SHA-256</text><text class="v">{{shaStatus}}</text></view>
-    <view class="row"><text class="k">local file</text><text class="v">{{localFilePath}}</text></view>
-    <view class="row" wx:for="{{tileStatus}}" wx:key="*this"><text class="k">per-tile</text><text class="v">{{item}}</text></view>
-  </view>
+    <view class="sbig">Progress / 进度: {{simpleProgress}}</view>
+    <view class="sline">Decode: {{simpleDecode}}</view>
+    <view class="sline">Elapsed / 用时: {{simpleElapsed}}</view>
+    <view class="sline">T2 consecutive PASS / 连续通过: {{simplePassStreak}}</view>
 
-  <view class="panel" wx:if="{{mode === 'benchmark'}}">
-    <view class="section">luminance / contrast (sampled pixels)</view>
-    <view class="row"><text class="k">mean luma</text><text class="v">{{meanLuma}}</text></view>
-    <view class="row"><text class="k">min luma</text><text class="v">{{minLuma}}</text></view>
-    <view class="row"><text class="k">max luma</text><text class="v">{{maxLuma}}</text></view>
-    <view class="row"><text class="k">contrast range</text><text class="v">{{contrastRange}}</text></view>
-  </view>
+    <view class="sres {{simpleResultClass}}">Result / 结果: {{simpleResult}}</view>
+    <view class="sdetail">{{simpleDetail}}</view>
+    <view class="spass" wx:if="{{simpleResult === 'PASS'}}">
+      <text class="svok">{{simplePassBytes}} · {{simplePassElapsed}} · {{simplePassSha}}</text>
+    </view>
 
-  <view class="panel" wx:if="{{mode === 'benchmark' && heavy}}">
-    <view class="section">1280×720 normalization benchmark</view>
-    <view class="row"><text class="k">average</text><text class="v">{{normalizeAvgMs}}</text></view>
-    <view class="row"><text class="k">p95</text><text class="v">{{normalizeP95Ms}}</text></view>
-    <view class="row"><text class="k">effective FPS</text><text class="v">{{normalizeFps}}</text></view>
-    <view class="row"><text class="k">samples</text><text class="v">{{normalizeSamples}}</text></view>
-  </view>
+    <view class="sbtns">
+      <button class="sbtn sbtn2" bindtap="onSimpleAgain" disabled="{{simpleStatus === 'RECEIVING'}}">RUN AGAIN / 再跑一次</button>
+      <button class="sbtn sbtn2" bindtap="onSimpleCopy">COPY RESULT / 复制结果</button>
+    </view>
 
-  <view class="panel">
-    <view class="section">Physical Device Evidence</view>
-    <view class="row"><text class="k">timestamp</text><text class="v">{{deviceTimestamp}}</text></view>
-    <view class="row"><text class="k">model</text><text class="v">{{model}}</text></view>
-    <view class="row"><text class="k">brand</text><text class="v">{{brand}}</text></view>
-    <view class="row"><text class="k">system</text><text class="v">{{system}}</text></view>
-    <view class="row"><text class="k">platform</text><text class="v">{{platform}}</text></view>
-    <view class="row"><text class="k">pixel ratio</text><text class="v">{{pixelRatio}}</text></view>
-    <view class="row"><text class="k">screen</text><text class="v">{{screenSize}}</text></view>
-    <view class="row"><text class="k">WeChat version</text><text class="v">{{wechatVersion}}</text></view>
-    <view class="row"><text class="k">base library</text><text class="v">{{baseLibVersion}}</text></view>
-    <view class="row"><text class="k">SDK</text><text class="v">{{sdkVersion}}</text></view>
+    <view class="snote">T1 = 10 CRC-valid chunk-0 decodes / 2 s · T2 = 16/16 + 10240 B + local SHA MATCH / 40 s · need 3 consecutive T2 PASS · network payload path NONE</view>
   </view>
-
-  <view class="panel" wx:if="{{errors.length}}">
-    <view class="section">errors / warnings ({{errors.length}})</view>
-    <view class="err" wx:for="{{errors}}" wx:key="*this">{{item}}</view>
-  </view>
-
-  <view class="controls">
-    <button class="btn" bindtap="freezeResult">Freeze Test Result</button>
-    <button class="btn" bindtap="copyResult" disabled="{{!frozenResult}}">Copy Result</button>
-  </view>
-
-  <view class="panel" wx:if="{{frozenResult}}">
-    <view class="section">frozen result ({{frozenAt}})</view>
-    <text class="frozen" selectable="true">{{frozenResult}}</text>
-  </view>
-
-  <view class="log">{{log}}</view>
 </view>

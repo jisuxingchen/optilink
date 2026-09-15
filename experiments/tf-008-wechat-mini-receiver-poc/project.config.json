@@ -42,8 +42,7 @@
     "showES6CompileOption": false,
     "useCompilerPlugins": false,
     "compileWorklet": false,
-    "localPlugins": false,
-    "condition": false
+    "localPlugins": false
   },
   "compileType": "miniprogram",
   "libVersion": "2.33.0",
@@ -53,6 +52,5 @@
   "editorSetting": {
     "tabIndent": "insertSpaces",
     "tabSize": 2
-  },
-  "simulatorPluginLibVersion": {}
+  }
 }

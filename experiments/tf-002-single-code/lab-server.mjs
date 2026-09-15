@@ -5,13 +5,45 @@ import {promisify} from 'node:util';
 import {WebSocketServer, WebSocket} from 'ws';
 import {createServer as createViteServer} from 'vite';
 import {allowTiledHello, allowTiledLabResult, allowTiledRelay} from './tiled-control-policy.mjs';
+import {
+  TF012_AUTO_RECEIVER_ROLE,
+  TF012_AUTO_SENDER_ROLE,
+  allowTf012AutoHello,
+  allowTf012AutoLabResult,
+  allowTf012AutoRelay,
+} from './tf012-auto-policy.mjs';
+import {createTf012PeerRegistry, TF012_AUTO_RECEIVER_ROLE as PEER_RECEIVER, TF012_AUTO_SENDER_ROLE as PEER_SENDER} from './tf012-auto-peers.mjs';
+import {
+  isTf012AutoHelloMessage,
+  validateTf012AutoHelloMessage,
+} from './src/optical-core/tf012-auto-plan.ts';
+
+/** The opposite of a TF-012 auto-test role, for addressing a presence notice. */
+function tf012AutoOppositeRole(role) {
+  if (role === PEER_SENDER) return PEER_RECEIVER;
+  if (role === PEER_RECEIVER) return PEER_SENDER;
+  return null;
+}
+
+const TF012_AUTO_MODE = 'tf012auto';
+
+/**
+ * r15: peer presence must not depend on connection order, and must survive a socket being
+ * replaced by a newer one. The registry is keyed by SOCKET, so closing one of several
+ * sockets never withdraws the role's presence.
+ */
+const tf012PeerRegistry = createTf012PeerRegistry();
+
+/** Identity of THIS relay process, surfaced in /api/lab/health and the startup banner. */
+const RELAY_BUILD = 'tf-012-r15b socket-keyed-presence';
+let nextSocketId = 1;
 
 const execFileAsync = promisify(execFile);
 const port = Number(process.env.PORT || 5173);
 const host = process.env.HOST || '0.0.0.0';
 const labToken = process.env.OPTILINK_LAB_TOKEN || '';
 const requestedMode = process.env.OPTILINK_LAB_PAGE || 'baseline';
-const labMode = ['baseline', 'fountain', 'optigrid', 'tiled'].includes(requestedMode) ? requestedMode : 'baseline';
+const labMode = ['baseline', 'fountain', 'optigrid', 'tiled', TF012_AUTO_MODE].includes(requestedMode) ? requestedMode : 'baseline';
 const labInstanceId = process.env.OPTILINK_LAB_INSTANCE_ID || '';
 const clients = new Map();
 let latestRun = null;
@@ -44,6 +76,7 @@ function maybeSetAuthCookie(req, res) {
 }
 
 function htmlEntryForPath(pathname) {
+  if (pathname === '/single-baseline.html') return 'single-baseline.html';
   if (pathname === '/fountain.html') return 'fountain.html';
   if (pathname === '/optigrid.html') return 'optigrid.html';
   if (pathname === '/tiled-physical.html') return 'tiled-physical.html';
@@ -73,7 +106,7 @@ const server = createServer((req, res) => {
   if (pathname === '/api/lab/health') {
     res.setHeader('content-type', 'application/json; charset=utf-8');
     res.setHeader('cache-control', 'no-store');
-    res.end(JSON.stringify({status: 'OK', service: 'optilink-lab', port, protected: Boolean(labToken), mode: labMode, instanceId: labInstanceId || null}, null, 2));
+    res.end(JSON.stringify({status: 'OK', service: 'optilink-lab', port, protected: Boolean(labToken), mode: labMode, instanceId: labInstanceId || null, relay: RELAY_BUILD, peerRegistry: tf012PeerRegistry.counts(), peerSockets: labMode === TF012_AUTO_MODE ? tf012PeerRegistry.socketsFor(TF012_AUTO_SENDER_ROLE).length + tf012PeerRegistry.socketsFor(TF012_AUTO_RECEIVER_ROLE).length : undefined}, null, 2));
     return;
   }
   if (!requestAuthorized(req)) {
@@ -116,6 +149,42 @@ function broadcastTiled(payload, except, sourceRole) {
   if (!targetRole) return;
   for (const [ws, meta] of clients.entries()) {
     if (ws !== except && meta.role === targetRole) safeSend(ws, payload);
+  }
+}
+
+/** TF-012 r13: relay between the phone (orchestrator) and the PC sender only. */
+function broadcastTf012Auto(payload, except, sourceRole) {
+  const targetRole = sourceRole === TF012_AUTO_SENDER_ROLE
+    ? TF012_AUTO_RECEIVER_ROLE
+    : sourceRole === TF012_AUTO_RECEIVER_ROLE
+      ? TF012_AUTO_SENDER_ROLE
+      : null;
+  if (!targetRole) return;
+  for (const [ws, meta] of clients.entries()) {
+    if (ws !== except && meta.role === targetRole) safeSend(ws, payload);
+  }
+}
+
+/**
+ * r15: send a notice to every socket whose registered role is `role`.
+ * Presence notices are addressed by ROLE, not by "everyone except the sender", so they
+ * work in both connection orders.
+ */
+function sendToTf012Role(role, payload) {
+  for (const [ws, meta] of clients.entries()) {
+    if (meta.role === role) safeSend(ws, payload);
+  }
+}
+
+/**
+ * r15b diagnostics: tell every registered TF-012 socket the current live counts. This is
+ * what makes "both connected, neither sees a peer" self-diagnosing — the PC panel shows
+ * the coordinator's identity and how many registered sockets it holds.
+ */
+function broadcastTf012RegistryCounts() {
+  const payload = {type: 'server', event: 'peer-registry', relay: RELAY_BUILD, counts: tf012PeerRegistry.counts()};
+  for (const [ws, meta] of clients.entries()) {
+    if (meta.role !== 'unknown') safeSend(ws, payload);
   }
 }
 async function persistResult(run) {
@@ -228,13 +297,51 @@ wss.on('connection', (ws, req) => {
     ws.close(1008, 'OptiLink lab token required');
     return;
   }
-  clients.set(ws, {role: 'unknown'});
-  safeSend(ws, {type: 'server', event: 'connected'});
+  clients.set(ws, {role: 'unknown', socketId: `s${nextSocketId++}`});
+  // Identify THIS coordinator and report its live registry counts. Sent on the client's
+  // existing lab socket, so the baseline pages need no extra network path.
+  safeSend(ws, {type: 'server', event: 'connected', relay: RELAY_BUILD, mode: labMode});
+  if (labMode === TF012_AUTO_MODE) broadcastTf012RegistryCounts();
   ws.on('message', async raw => {
     let message;
     try { message = JSON.parse(String(raw)); } catch { return; }
     const meta = clients.get(ws) || {role: 'unknown'};
+    // r15 — MESSAGE CLASS 1: handshake / registration.
+    // The canonical spelling is `{type:'hello'}`; the legacy `{type:'command',
+    // action:'HELLO'}` spelling is still recognised so the coordinator does not depend on
+    // which build a client runs. Either way it is validated by the HELLO validator and
+    // NEVER by the control relay validator (which rejected it as "unknown role" before
+    // the role was registered — the r14 physical failure).
+    if (labMode === TF012_AUTO_MODE && isTf012AutoHelloMessage(message)) {
+      const verdict = validateTf012AutoHelloMessage(message);
+      if (!verdict.ok) {
+        console.log(`TF012 peer registry: REJECTED hello on ${meta.socketId} (${verdict.reason})`);
+        safeSend(ws, {type: 'server', event: 'policy-rejected', reason: verdict.reason});
+        return;
+      }
+      meta.role = message.role;
+      clients.set(ws, meta);
+      // Socket-keyed presence: this socket is the unit of presence, not the role.
+      const plan = tf012PeerRegistry.registerSocket(meta.socketId, meta.role);
+      for (const notice of plan.toOppositeRole) sendToTf012Role(tf012AutoOppositeRole(meta.role), notice.message);
+      for (const notice of plan.toThisSocket) safeSend(ws, notice.message);
+      console.log(`TF012 peer registry: register ${meta.socketId} role=${meta.role} clientBuild=${String(message.buildId ?? 'n/a')} ${plan.roleBecamePresent ? '(role became present)' : '(role already present)'} -> ${tf012PeerRegistry.describe()}`);
+      safeSend(ws, {type: 'server', event: 'registered', role: meta.role, peers: tf012PeerRegistry.present(), counts: plan.counts});
+      broadcastTf012RegistryCounts();
+      return;
+    }
     if (message.type === 'hello') {
+      if (labMode === TF012_AUTO_MODE) {
+        const verdict = allowTf012AutoHello(message);
+        if (!verdict.ok) {
+          safeSend(ws, {type: 'server', event: 'policy-rejected', reason: verdict.reason});
+          return;
+        }
+        meta.role = message.role;
+        clients.set(ws, meta);
+        broadcastTf012Auto({type: 'peer', event: 'hello', role: meta.role}, ws, meta.role);
+        return;
+      }
       if (labMode === 'tiled') {
         if (!allowTiledHello(message)) {
           safeSend(ws, {type: 'server', event: 'policy-rejected', reason: 'TF-007 tiled hello boundary'});
@@ -251,6 +358,17 @@ wss.on('connection', (ws, req) => {
       return;
     }
     if (message.type === 'telemetry' || message.type === 'command' || message.type === 'state') {
+      if (labMode === TF012_AUTO_MODE) {
+        // r15 — MESSAGE CLASS 3: validated control/telemetry. A client that has not
+        // registered yet cannot relay anything, and the strict allowlist still applies.
+        const verdict = allowTf012AutoRelay(meta.role, message);
+        if (!verdict.ok) {
+          safeSend(ws, {type: 'server', event: 'policy-rejected', reason: verdict.reason});
+          return;
+        }
+        broadcastTf012Auto(message, ws, meta.role);
+        return;
+      }
       if (labMode === 'tiled') {
         if (!allowTiledRelay(meta.role, message)) {
           safeSend(ws, {type: 'server', event: 'policy-rejected', reason: 'TF-007 tiled control-plane boundary'});
@@ -263,6 +381,13 @@ wss.on('connection', (ws, req) => {
       return;
     }
     if (message.type === 'lab-result') {
+      if (labMode === TF012_AUTO_MODE) {
+        const verdict = allowTf012AutoLabResult(meta.role, message);
+        if (!verdict.ok) {
+          safeSend(ws, {type: 'server', event: 'policy-rejected', reason: verdict.reason});
+          return;
+        }
+      }
       if (labMode === 'tiled' && !allowTiledLabResult(meta.role, message)) {
         safeSend(ws, {type: 'server', event: 'policy-rejected', reason: 'TF-007 tiled result boundary'});
         return;
@@ -274,17 +399,33 @@ wss.on('connection', (ws, req) => {
       safeSend(ws, {type: 'server', event: 'result-saved', publish});
     }
   });
-  ws.on('close', () => clients.delete(ws));
+  ws.on('close', () => {
+    const meta = clients.get(ws);
+    clients.delete(ws);
+    // r15b: unregister THIS SOCKET only. A bye is emitted only when the role's last live
+    // socket went away, so a reload/recompile overlap cannot withdraw a live presence.
+    if (labMode === TF012_AUTO_MODE && meta && meta.role !== 'unknown') {
+      const plan = tf012PeerRegistry.unregisterSocket(meta.socketId);
+      for (const notice of plan.toOppositeRole) sendToTf012Role(tf012AutoOppositeRole(meta.role), notice.message);
+      console.log(`TF012 peer registry: close ${meta.socketId} role=${meta.role} ${plan.roleBecameAbsent ? '(role became absent -> bye)' : '(other socket still holds the role -> no bye)'} -> ${tf012PeerRegistry.describe()}`);
+      broadcastTf012RegistryCounts();
+    }
+  });
 });
 
 server.listen(port, host, () => {
   console.log(`OptiLink lab coordinator listening on http://${host}:${port}`);
+  // r15b: the relay identifies itself so a STALE coordinator (an older process still holding
+  // the port, which silently rejects everything) can be spotted immediately.
+  console.log(`Relay build: ${RELAY_BUILD}`);
   console.log(`Lab mode: ${labMode}${labInstanceId ? ` · instance ${labInstanceId}` : ''}`);
   console.log(`Lab control protection: ${labToken ? 'token enabled' : 'disabled'}`);
+  console.log(`TF012 peer registry: ${tf012PeerRegistry.describe()} (empty until clients register)`);
   console.log('Health URL:   /api/lab/health');
   console.log('Baseline:     /?role=sender|receiver');
   console.log('Fountain:     /fountain.html?role=sender|receiver');
   console.log('OptiGrid:     /optigrid.html?role=sender|receiver');
   console.log('TF-007 tiled: /tiled-physical.html?role=sender|receiver');
+  console.log('TF-012 auto:   /single-baseline.html?lab=wss://<host>/lab&role=' + TF012_AUTO_RECEIVER_ROLE);
   console.log('Latest result endpoint: /api/lab/latest');
 });

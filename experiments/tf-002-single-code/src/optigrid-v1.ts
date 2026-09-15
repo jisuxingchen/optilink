@@ -133,10 +133,56 @@ export function reservedScoreV1(cells: Uint8Array, matrixSize: number): number {
   return expected ? matches / expected : 0;
 }
 
-export function decodeFrameCellsV1(cells: Uint8Array, matrixSize: number): OptiGridV1DecodedFrame | null {
+/**
+ * Where a sampled frame stopped being accepted, and what the raw sampling looked like.
+ *
+ * TF-012 r19: a physical run reported "locator PASS 111/111, CRC FAIL 111/111" with
+ * geometry that looked healthy, and there was no way to tell a stable sampling-phase bias
+ * from random noise. This inspection reports the stages the decoder already goes through —
+ * magic/version/matrix, payload length, CRC field comparison — plus the raw sampled bits,
+ * so repeated failures can be compared WITHOUT any oracle over the network: everything here
+ * is computed locally from the camera frame.
+ */
+export interface OptiGridV1Inspection {
+  ok: boolean;
+  /** The stage that rejected the frame, or '' when it decoded. */
+  failedAt: '' | 'size' | 'magic' | 'version' | 'matrix' | 'payload-length' | 'crc';
+  /** Packed data bits exactly as the decoder read them (empty unless requested). */
+  rawBytes: Uint8Array;
+  byteCapacity: number;
+  bitCount: number;
+  header: {
+    magic0: number;
+    magic1: number;
+    version: number;
+    matrixSize: number;
+    sequence: number;
+    payloadLength: number;
+  };
+  /** expected = the CRC field carried by the frame; computed = CRC over the frame bytes. */
+  crc: {expected: number | null; computed: number | null};
+  decoded: OptiGridV1DecodedFrame | null;
+}
+
+/**
+ * Inspect one sampled frame. `decodeFrameCellsV1` delegates here, so the accepted/rejected
+ * decision has exactly ONE implementation and the diagnostics can never drift from it.
+ */
+export function inspectFrameCellsV1(
+  cells: Uint8Array,
+  matrixSize: number,
+  options?: {withRawBytes?: boolean},
+): OptiGridV1Inspection {
+  const header = {magic0: -1, magic1: -1, version: -1, matrixSize: -1, sequence: -1, payloadLength: -1};
+  const crc: {expected: number | null; computed: number | null} = {expected: null, computed: null};
+  const empty = (failedAt: OptiGridV1Inspection['failedAt']): OptiGridV1Inspection => ({
+    ok: false, failedAt, rawBytes: new Uint8Array(0), byteCapacity: 0, bitCount: 0,
+    header, crc, decoded: null,
+  });
   validateSize(matrixSize);
-  if (cells.length !== matrixSize * matrixSize) return null;
+  if (cells.length !== matrixSize * matrixSize) return empty('size');
   const byteCapacity = Math.floor(dataCellCountV1(matrixSize) / 8);
+  if (byteCapacity < OPTIGRID_V1_HEADER_BYTES + OPTIGRID_V1_CRC_BYTES) return empty('size');
   const bytes = new Uint8Array(byteCapacity);
   let bitIndex = 0;
   for (let row = OPTIGRID_V1_BORDER; row < matrixSize - OPTIGRID_V1_BORDER; row += 1) {
@@ -146,20 +192,61 @@ export function decodeFrameCellsV1(cells: Uint8Array, matrixSize: number): OptiG
       bitIndex += 1;
     }
   }
-  if (bytes.length < OPTIGRID_V1_HEADER_BYTES + OPTIGRID_V1_CRC_BYTES) return null;
-  if (bytes[0] !== MAGIC_0 || bytes[1] !== MAGIC_1 || bytes[2] !== OPTIGRID_V1_VERSION || bytes[3] !== matrixSize) return null;
-  const sequence = readU32(bytes, 4);
-  const payloadLength = readU16(bytes, 8);
-  const totalLength = OPTIGRID_V1_HEADER_BYTES + payloadLength + OPTIGRID_V1_CRC_BYTES;
-  if (payloadLength > payloadCapacityForMatrixV1(matrixSize) || totalLength > bytes.length) return null;
-  const expected = readU32(bytes, totalLength - OPTIGRID_V1_CRC_BYTES);
-  const actual = crc32(bytes.subarray(0, totalLength - OPTIGRID_V1_CRC_BYTES));
-  if (actual !== expected) return null;
+  const rawBytes = options?.withRawBytes ? bytes.slice() : new Uint8Array(0);
+  const finish = (failedAt: OptiGridV1Inspection['failedAt']): OptiGridV1Inspection => ({
+    ok: false, failedAt, rawBytes, byteCapacity, bitCount: bitIndex, header, crc, decoded: null,
+  });
+  header.magic0 = bytes[0] ?? -1;
+  header.magic1 = bytes[1] ?? -1;
+  header.version = bytes[2] ?? -1;
+  header.matrixSize = bytes[3] ?? -1;
+  if (header.magic0 !== MAGIC_0 || header.magic1 !== MAGIC_1) return finish('magic');
+  if (header.version !== OPTIGRID_V1_VERSION) return finish('version');
+  if (header.matrixSize !== matrixSize) return finish('matrix');
+  header.sequence = readU32(bytes, 4);
+  header.payloadLength = readU16(bytes, 8);
+  const totalLength = OPTIGRID_V1_HEADER_BYTES + header.payloadLength + OPTIGRID_V1_CRC_BYTES;
+  if (header.payloadLength > payloadCapacityForMatrixV1(matrixSize) || totalLength > bytes.length) {
+    return finish('payload-length');
+  }
+  crc.expected = readU32(bytes, totalLength - OPTIGRID_V1_CRC_BYTES);
+  crc.computed = crc32(bytes.subarray(0, totalLength - OPTIGRID_V1_CRC_BYTES));
+  if (crc.computed !== crc.expected) return finish('crc');
   return {
-    version: OPTIGRID_V1_VERSION,
-    matrixSize,
-    sequence,
-    payload: bytes.slice(OPTIGRID_V1_HEADER_BYTES, OPTIGRID_V1_HEADER_BYTES + payloadLength),
-    crc32: expected,
+    ok: true,
+    failedAt: '',
+    rawBytes,
+    byteCapacity,
+    bitCount: bitIndex,
+    header,
+    crc,
+    decoded: {
+      version: OPTIGRID_V1_VERSION,
+      matrixSize,
+      sequence: header.sequence,
+      payload: bytes.slice(OPTIGRID_V1_HEADER_BYTES, OPTIGRID_V1_HEADER_BYTES + header.payloadLength),
+      crc32: crc.expected,
+    },
   };
+}
+
+export function decodeFrameCellsV1(cells: Uint8Array, matrixSize: number): OptiGridV1DecodedFrame | null {
+  // ONE implementation: the diagnostics are a view of this exact decision.
+  return inspectFrameCellsV1(cells, matrixSize).decoded;
+}
+
+/**
+ * Short stable fingerprint of a sampled frame (FNV-1a over the packed data bytes).
+ *
+ * Two frames whose SAMPLING is identical produce the same fingerprint, so a histogram of
+ * these values separates "the same wrong sampling repeats" (stable phase/geometry bias)
+ * from "every frame differs" (noise). It is a local comparison only — never an oracle.
+ */
+export function fingerprintBytesV1(bytes: Uint8Array): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < bytes.length; index += 1) {
+    hash ^= bytes[index]!;
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, '0');
 }
