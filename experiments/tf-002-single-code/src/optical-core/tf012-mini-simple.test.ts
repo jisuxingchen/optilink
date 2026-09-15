@@ -298,8 +298,12 @@ test('r21 default 2: normal mode does not compute fingerprint diagnostics', () =
     }
     for (let index = 0; index < 40; index += 1) h.feed();
     h.tick(5);
+    assert.deepEqual(counts, {}, 'the hot path never asks for diagnostic or terminal summary evidence');
     h.page.simpleResultPayload();
-    assert.deepEqual(counts, {}, 'the default path never asks for diagnostic evidence');
+    assert.equal(counts.receivedIndices, 1, 'terminal result reads received indexes once');
+    assert.equal(counts.decodedChunkCounts, 1, 'terminal result reads decode counts once');
+    assert.equal(counts.crcFailureDiagnostics, undefined, 'terminal result does not read heavy CRC diagnostics');
+    assert.equal(counts.geometryDiagnostics, undefined, 'terminal result does not read heavy geometry diagnostics');
     const diag = h.page.baselineReceiver.crcFailureDiagnostics();
     const geometry = h.page.baselineReceiver.geometryDiagnostics();
     assert.equal(diag.failedFrames, 0, 'failure fingerprints were not accumulated internally');
@@ -623,7 +627,7 @@ test('r21 result 10: the result JSON is small and contains only allowed fields',
     assert.equal(payload.mode, 'simple-receive');
     assert.equal(payload.receivedChunkIndexes, '0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15');
     assert.equal(payload.missingChunkIndexes, '');
-    assert.match(String(payload.decodedChunkCounts), /(?:^|,)0:\\d+(?:,|$)/u);
+    assert.match(String(payload.decodedChunkCounts), /(?:^|,)0:\d+(?:,|$)/u);
     assert.equal(payload.metadataRejects, 0);
     assert.equal(payload.foreignChunkRejects, 0);
     assert.equal(payload.buildId, h.page.data.buildId);
