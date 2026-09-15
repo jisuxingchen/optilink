@@ -165,6 +165,9 @@ Page({
     simpleElapsed: '0.0 s',
     simpleCameraLabel: 'NOT READY / 未就绪',
     simpleSenderLabel: 'NOT CONNECTED / 未连接',
+    simpleStaticReady: false,
+    simpleStaticLabel: 'NOT READY / 未就绪',
+    simplePassStreak: '0 / 3',
     simplePassBytes: '—',
     simplePassElapsed: '—',
     simplePassSha: '—',
@@ -515,6 +518,8 @@ Page({
   simplePeerPresent: false,
   simpleSenderBroadcasting: false,
   simpleAfterFinishFrames: 0,  // camera frames dropped after the run ended (idle proof)
+  simpleStaticReady: false,
+  simplePassStreakCount: 0,
 
   onLoad() {
     this.collectDeviceEvidence();
@@ -583,13 +588,9 @@ Page({
     this.persistCheckpoint();
   },
 
-  /**
-   * r21: the DEFAULT experience is "open the Mini Program and it is ready". The control
-   * channel is OPTIONAL in the minimal path — a receive never depends on it, and a
-   * failure to connect can only ever cost the Sender status line.
-   */
+  /** v2: default acceptance is deliberately network-independent. */
   onReady() {
-    this.simpleEnsureControl();
+    // No relay, presence, IP or token setup on the active physical acceptance path.
   },
 
   onUnload() {
@@ -1304,6 +1305,9 @@ Page({
       cameraFrames: metrics ? metrics.cameraFrames : 0,
       decodeAttempts: metrics ? metrics.decodeAttempts : 0,
       successfulDecodes: metrics ? metrics.decodeSuccess : 0,
+      chunkZeroDecodes: receiver && typeof receiver.decodedCountForChunk === 'function'
+        ? receiver.decodedCountForChunk(0)
+        : 0,
       crcFailures: metrics ? metrics.crcFailures : 0,
       locateFailures: metrics ? metrics.locateFailures : 0,
       uniqueReceived: receiver ? receiver.receivedUniqueCount : 0,
@@ -1318,49 +1322,93 @@ Page({
     };
   },
 
-  /** START RECEIVE / 开始接收 — the primary (and only) default action. */
+  /** T2 — file receive. The UI and method both enforce a successful T1 preflight. */
   onSimpleStart() {
+    if (!this.simpleStaticReady) {
+      wx.showToast({title: 'Run STATIC READY first / 先通过静态预检', icon: 'none'});
+      return;
+    }
+    if (!this.data.running || !this.data.callbackActive) {
+      this.simpleStaticReady = false;
+      this.setData({simpleStaticReady: false, simpleStaticLabel: 'NOT READY / 未就绪'});
+      wx.showToast({title: 'Camera changed — rerun STATIC READY', icon: 'none'});
+      return;
+    }
     this.simpleStart(simpleMode.SIMPLE_KIND_RECEIVE);
   },
 
-  /** STATIC DECODE CHECK — a 5 s alignment check that passes at N valid decodes. */
+  /** T1 — exactly chunk 0, 10 CRC-valid decodes inside the 2 s bound. */
   onSimpleStaticCheck() {
     this.simpleStart(simpleMode.SIMPLE_KIND_STATIC);
   },
 
-  /** RUN AGAIN / 重新运行 — same kind, fresh receiver, fresh clock. */
+  /** RUN AGAIN repeats the current gate; T2 remains gated by the same T1 proof. */
   onSimpleAgain() {
-    this.simpleStart(this.simpleKind || simpleMode.SIMPLE_KIND_RECEIVE);
+    if (this.simpleKind === simpleMode.SIMPLE_KIND_RECEIVE && this.simpleStaticReady) {
+      this.simpleStart(simpleMode.SIMPLE_KIND_RECEIVE);
+    } else {
+      this.simpleStart(simpleMode.SIMPLE_KIND_STATIC);
+    }
   },
 
   /**
-   * Begin a run. The receiver state is reset so 16/16 is THIS run's evidence, never the
-   * previous run's, and the camera is already running (auto-started) — so a run costs one
-   * tap and starts measuring immediately.
+   * Reset T2 transfer evidence while keeping the last CRC-verified optical lock from T1.
+   * No diagnostic state, network state or previous chunks cross this boundary.
    */
+  simpleResetReceivePreservingLock() {
+    const receiver = this.baselineReceiver;
+    if (!receiver || typeof receiver.begin !== 'function') {
+      this.resetMetrics();
+      return;
+    }
+    if (typeof receiver.setDiagnosticsEnabled === 'function') receiver.setDiagnosticsEnabled(false);
+    receiver.begin(clockMs(), true);
+    this.baselineBusy = false;
+    this.baselinePending = null;
+    this.baselineFramesReceived = 0;
+    this.baselineFramesProcessed = 0;
+    this.baselineFramesReplaced = 0;
+    this.baselineTimes = [];
+    this.baselinePostCompleteFrames = 0;
+    this.baselineFinalized = false;
+    this.baselineResult = null;
+    this.windowStartAt = Date.now();
+    this.windowReceived = 0;
+    this.windowProcessed = 0;
+    this.baselineStartAt = Date.now();
+  },
+
+  /** Begin T1 or T2. */
   simpleStart(kind) {
     if (!simpleMode) {
       wx.showToast({title: 'simple module unavailable: ' + simpleModeLoadError, icon: 'none'});
       return;
     }
-    this.simpleKind = kind === simpleMode.SIMPLE_KIND_STATIC
-      ? simpleMode.SIMPLE_KIND_STATIC
-      : simpleMode.SIMPLE_KIND_RECEIVE;
-    // The single-code receiver IS the receive path: locate → decode → chunk → dedupe.
-    if (this.data.mode !== 'baseline') {
-      this.setMode('baseline');
+    const isStatic = kind === simpleMode.SIMPLE_KIND_STATIC;
+    this.simpleKind = isStatic ? simpleMode.SIMPLE_KIND_STATIC : simpleMode.SIMPLE_KIND_RECEIVE;
+
+    if (isStatic) {
+      // A new T1 starts a new acceptance sequence.
+      this.simpleStaticReady = false;
+      this.simplePassStreakCount = 0;
+      this.setData({
+        simpleStaticReady: false,
+        simpleStaticLabel: 'CHECKING / 检查中',
+        simplePassStreak: '0 / 3'
+      });
+      if (this.data.mode !== 'baseline') this.setMode('baseline');
+      else this.resetMetrics();
     } else {
-      this.resetMetrics();
+      this.simpleResetReceivePreservingLock();
     }
+
     this.baselineFinalized = false;
     this.simpleFinalized = false;
     this.simpleAfterFinishFrames = 0;
     this.simple = simpleMode.simpleRun(this.simpleKind, Date.now());
-    // A run never waits for the camera to be started by hand.
     if (!this.data.running) this.startCamera();
-    this.simpleEnsureControl();
     this.simpleFlush(true);
-    this.appendLog('SIMPLE ' + this.simpleKind + ' started');
+    this.appendLog('V2 ' + this.simpleKind + ' started');
   },
 
   /**
@@ -1417,7 +1465,12 @@ Page({
       simpleGeometry: simpleMode.simpleGeometryText(counters),
       simpleElapsed: simpleMode.simpleElapsedText(elapsedMs),
       simpleCameraLabel: simpleMode.simpleCameraText(this.data.running, this.data.callbackActive),
-      simpleSenderLabel: simpleMode.simpleSenderText(this.simplePeerPresent, this.simpleClientConnected),
+      simpleSenderLabel: 'NOT USED / 不使用',
+      simpleStaticReady: this.simpleStaticReady,
+      simpleStaticLabel: this.simpleStaticReady ? 'READY / 就绪' : (run && run.kind === simpleMode.SIMPLE_KIND_STATIC && !run.finished
+        ? 'CHECKING / 检查中'
+        : 'NOT READY / 未就绪'),
+      simplePassStreak: this.simplePassStreakCount + ' / 3',
       simplePassBytes: counters.assembledBytes > 0 ? counters.assembledBytes + ' B' : '—',
       simplePassElapsed: finished ? simpleMode.simpleElapsedText(elapsedMs) : '—',
       simplePassSha: counters.shaResult === 'MATCH'
@@ -1448,6 +1501,15 @@ Page({
     run.finishedAt = Date.now();
     run.status = decision.status;
     run.reason = decision.reason;
+
+    if (run.kind === simpleMode.SIMPLE_KIND_STATIC) {
+      this.simpleStaticReady = decision.status === simpleMode.SIMPLE_STATUS_PASS;
+      if (!this.simpleStaticReady) this.simplePassStreakCount = 0;
+    } else if (decision.status === simpleMode.SIMPLE_STATUS_PASS) {
+      this.simplePassStreakCount += 1;
+    } else {
+      this.simplePassStreakCount = 0;
+    }
     this.simpleFlush(true);
     this.appendLog('SIMPLE ' + decision.status + ' (' + decision.reason + ') in '
       + simpleMode.simpleElapsedText(decision.elapsedMs));
@@ -1489,6 +1551,7 @@ Page({
       elapsedMs: Math.max(0, finishedAt - startedAt),
       sha256: result ? result.sha256Hex : null,
       manifestSha256: result ? result.expectedSha256 : null,
+      passStreak: this.simplePassStreakCount,
       receivedChunkIndexes,
       missingChunkIndexes,
       decodedChunkCounts,

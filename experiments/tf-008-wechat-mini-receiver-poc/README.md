@@ -61,51 +61,29 @@ The page permanently shows **"OPTICAL CAMERA FRAME — LOCAL ONLY"** and
 - If previously denied, re-enable camera in WeChat settings. The status panel
   shows `granted` / `denied` / `not-requested`.
 
-## TF-012 r21 — MINIMAL RECEIVE (the default flow)
+## TF-012 Physical Acceptance v2 — fast path
 
-Since r21 the Mini Program opens on the **minimal physical receiver**, not on the diagnostic
-harness:
+The old r13–r20 diagnostic surface is no longer part of the active physical acceptance UI.
+Its evidence remains in git history. The default phone screen now has only two gates:
 
-```
-open → camera auto-starts → sender connected → tap ONE button → receive → PASS/FAIL → COPY RESULT
-```
+1. **T1 STATIC READY** — PC sender is opened directly as `?diagnostic=chunk0`.
+   The phone must produce **10 CRC-valid chunk-0 decodes within 2 s**. Decodes of any
+   other chunk do not count. A CRC-failed candidate can never replace the persistent
+   tracking lock.
+2. **T2 FILE** — without moving the phone, switch the sender to cyclic **1000 ms**.
+   The receiver resets file/chunk evidence while preserving only the last CRC-verified
+   T1 lock. PASS is **16/16 unique + 10,240 B + local SHA-256 MATCH** within 40 s.
+   Require **3 consecutive T2 PASS** runs.
 
-CameraFrame → locate → sample → CRC → chunk → dedupe → reconstruct → SHA-256, and nothing else.
+The active acceptance path opens **no relay/control socket**, has no IP/token/presence setup,
+and never carries payload over network. `networkPayloadPath = NONE`.
 
-**How to run it**
+The small COPY RESULT JSON remains the failure evidence surface. Geometry remains available
+there for support, but camera width / px-per-cell / contrast are not acceptance thresholds.
 
-1. Open the Mini Program. The first screen must read `buildId tf012-r21-c945172`. The camera
-   starts by itself (allow `scope.camera` if asked).
-2. On the PC, start the single-code baseline sender (the 16-chunk transfer).
-3. Wait until the phone shows **Camera: READY** and **Sender: CONNECTED**
-   (`SOCKET ONLY` = the relay is reachable but the PC sender is not announcing itself).
-4. Tap **START RECEIVE / 开始接收** once. The run ends the moment
-   `16/16 chunks + 10240 B + SHA-256 MATCH` is true — in seconds, not after a 90 s plan.
-5. Tap **COPY RESULT / 复制结果** and send the JSON. It is small by design: buildId, mode, status,
-   timings, the camera/decode counters, chunks, `assembledBytes`, the two local digests,
-   `shaResult`, the geometry numbers and `networkPayloadPath: NONE`. After P4 it also carries
-   compact scalar chunk-identity summaries — `receivedChunkIndexes`, `missingChunkIndexes`,
-   `decodedChunkCounts`, `metadataRejects`, `foreignChunkRejects`, and `duplicateChunks`.
-   They are read only when the terminal result is copied; no r19/r20 per-frame diagnostics are
-   re-enabled.
+Once T2 reaches 3/3, stop optimizing this 640 B/chunk single-code baseline and move to the
+tiled/parallel path for the final 100 KB/s G0 performance target.
 
-**STATIC CHECK / 静态检查** is the quick alignment aid: PASS at 10 valid decodes within 5 s, with no
-sender progress needed.
-
-**Bounds (not schedules):** receive 30 s, static check 5 s. Nothing waits for a fixed dwell time
-after a PASS, and once the verdict is in, camera frames are dropped before the decoder.
-
-**Where the diagnostics went.** The r13–r20 harness — AUTO PHYSICAL TEST (SETUP gate + A1–A5),
-STATIC PROBE, phase timing, camera timing, failure fingerprints, sampling geometry, rotation
-histograms, KEY STATUS, the holdMs declaration and the mode buttons — is all still present, behind
-**ADVANCED DIAGNOSTICS / 高级诊断**, which is **OFF by default**. The default runtime does not
-compute any of it; a test proves zero diagnostic receiver calls per frame.
-
-`utils/tf012-simple.js` holds the entire decision surface of the minimal path (pure, no platform,
-no network, unit-tested).
-
-The steps in §7 below describe the ORIGINAL r5 camera-frame spike UI, which now lives behind
-**ADVANCED DIAGNOSTICS** (mode buttons + KEY STATUS).
 
 ## 7. How to run the test
 

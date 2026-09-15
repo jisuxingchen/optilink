@@ -58,8 +58,8 @@ const SIMPLE_FILE_BYTES = 10240;
 
 /** Bounds, not schedules. A completed receive never waits for these. */
 const SIMPLE_CAMERA_READY_TIMEOUT_MS = 5000;
-const SIMPLE_RECEIVE_TIMEOUT_MS = 30000;
-const SIMPLE_STATIC_TIMEOUT_MS = 5000;
+const SIMPLE_RECEIVE_TIMEOUT_MS = 40000;
+const SIMPLE_STATIC_TIMEOUT_MS = 2000;
 /** The static alignment check passes as soon as this many decodes succeeded. */
 const SIMPLE_STATIC_MIN_DECODES = 10;
 
@@ -110,7 +110,7 @@ function simpleDecision(run, counters, nowMs) {
   const counts = counters || {};
 
   if (run.kind === SIMPLE_KIND_STATIC) {
-    const decodes = numberOr(counts.successfulDecodes, 0);
+    const decodes = numberOr(counts.chunkZeroDecodes, 0);
     if (decodes >= run.minDecodes) {
       return {status: SIMPLE_STATUS_PASS, reason: 'static-decodes', elapsedMs};
     }
@@ -209,12 +209,12 @@ function simpleDetailText(status, reason, counters) {
   const counts = counters || {};
   if (status === SIMPLE_STATUS_PASS) {
     return reason === 'static-decodes'
-      ? 'static alignment OK (' + numberOr(counts.successfulDecodes, 0) + ' decodes)'
+      ? 'STATIC READY (' + numberOr(counts.chunkZeroDecodes, 0) + ' chunk-0 decodes)'
       : 'SHA-256 MATCH · ' + numberOr(counts.assembledBytes, 0) + ' B';
   }
   if (status === SIMPLE_STATUS_FAIL) {
-    if (reason === 'static-timeout') return 'only ' + numberOr(counts.successfulDecodes, 0)
-      + ' decodes in ' + (SIMPLE_STATIC_TIMEOUT_MS / 1000) + ' s — align the phone';
+    if (reason === 'static-timeout') return 'only ' + numberOr(counts.chunkZeroDecodes, 0)
+      + ' CRC-valid chunk-0 decodes in ' + (SIMPLE_STATIC_TIMEOUT_MS / 1000) + ' s';
     if (reason === 'receive-timeout') return 'timeout after ' + (SIMPLE_RECEIVE_TIMEOUT_MS / 1000)
       + ' s at ' + numberOr(counts.uniqueReceived, 0) + ' / ' + numberOr(counts.totalChunks, SIMPLE_TOTAL_CHUNKS) + ' chunks';
     if (reason === 'sha-mismatch') return 'all chunks received but SHA-256 MISMATCH';
@@ -249,6 +249,8 @@ function simpleResultJson(input) {
     cameraFrames: numberOr(counts.cameraFrames, 0),
     decodeAttempts: numberOr(counts.decodeAttempts, 0),
     successfulDecodes: numberOr(counts.successfulDecodes, 0),
+    staticChunk0Decodes: numberOr(counts.chunkZeroDecodes, 0),
+    passStreak: numberOr(state.passStreak, 0),
     crcFailures: numberOr(counts.crcFailures, 0),
     locateFailures: numberOr(counts.locateFailures, 0),
 

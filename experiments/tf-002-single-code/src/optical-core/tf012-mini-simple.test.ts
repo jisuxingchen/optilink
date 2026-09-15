@@ -48,7 +48,6 @@ import {
   buildSingleBaselineTransfer,
   renderSingleBaselineFrame,
 } from './single-baseline.ts';
-import {TF012_AUTO_RECEIVER_ROLE, TF012_AUTO_SENDER_ROLE} from './index.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const EXPERIMENTS = join(HERE, '..', '..', '..');
@@ -235,41 +234,33 @@ function spyOn(object: Record<string, any>, method: string, counts: Record<strin
   };
 }
 
+/** Unit tests may enter T2 directly after explicitly satisfying the T1 gate. */
+function armFileGate(h: Harness): void {
+  h.page.simpleStaticReady = true;
+  h.page.setData({simpleStaticReady: true, simpleStaticLabel: 'READY / 就绪'});
+}
+
 // ---------------------------------------------------------------------------
 // 1 — the default path never builds the diagnostic harness
 // ---------------------------------------------------------------------------
 
-test('r21 default 1: normal mode does not instantiate the auto orchestrator', () => {
+test('v2 default 1: active UI has only T1/T2 and opens no control channel', () => {
   const h = harness();
   try {
-    assert.equal(h.page.data.showAdvanced, false, 'advanced diagnostics is OFF by default');
-    assert.ok(!h.page.autoRunner, 'onLoad built no auto runner');
-    // The camera really is running (auto-start), which is what makes the default one-tap.
-    assert.equal(h.page.data.running, true, 'the camera auto-started');
-    assert.equal(h.page.frameListener != null, true, 'and the frame listener is live');
+    assert.equal(h.page.data.running, true, 'camera auto-starts');
+    assert.equal(h.page.frameListener != null, true, 'frame listener is live');
+    assert.equal(h.page.simpleStaticReady, false, 'T2 starts locked behind T1');
 
     h.page.onSimpleStart();
-    assert.ok(!h.page.autoRunner, 'a minimal run builds no auto runner');
-    // A control channel is allowed (presence + telemetry only) — an orchestrator is not.
-    h.openSocket();
-    h.deliver({type: 'peer', event: 'hello', role: TF012_AUTO_SENDER_ROLE});
-    h.deliver({type: 'command', action: 'TELEMETRY', runId: null, mode: 'cyclic', cursor: 3, broadcasting: true});
-    assert.ok(!h.page.autoRunner, 'a full handshake still builds no orchestrator');
-    assert.equal(h.page.data.simpleSenderLabel, 'CONNECTED / 已连接', 'the peer notice reaches the UI');
+    assert.equal(h.page.simple, null, 'T2 cannot start before STATIC READY');
+    assert.ok(h.toasts.some((value) => value.includes('STATIC READY')));
 
-    // And the source proves it: the simple path has no runner/orchestrator/socket I/O.
-    const region = PAGE_JS.slice(
-      PAGE_JS.indexOf('  simpleCounters() {'), PAGE_JS.indexOf('  autoStepReceiverSample() {'));
-    assert.ok(region.length > 1000, 'the simple block is present');
-    for (const forbidden of ['createAutoTestRunner', 'createTf012AutoOrchestrator', 'startProbe', 'autoRunner']) {
-      assert.ok(!region.includes(forbidden), `the simple path must not reference ${forbidden}`);
+    assert.equal(h.socketSent().length, 0, 'active path opens/sends no control socket');
+    for (const forbidden of ['ADVANCED DIAGNOSTICS', 'AUTO PHYSICAL TEST', 'SETUP', 'A1', 'autoControlUrl']) {
+      assert.ok(!PAGE_WXML.includes(forbidden), `v2 WXML removes ${forbidden}`);
     }
-    // The default UI shows no harness field at all.
-    const view = PAGE_WXML.slice(PAGE_WXML.indexOf('class="simple"'), PAGE_WXML.indexOf('BACK TO SIMPLE RECEIVE'));
-    assert.ok(view.length > 200, 'the minimal view is present');
-    for (const forbidden of ['A1', 'SETUP', 'phaseTiming', 'autoSetupWindowCounters', 'G7', 'holdMsDeclared']) {
-      assert.ok(!view.includes(forbidden), `the minimal view must not show ${forbidden}`);
-    }
+    assert.ok(PAGE_WXML.includes('CHECK STATIC READY'));
+    assert.ok(PAGE_WXML.includes('START FILE TEST'));
   } finally {
     h.restore();
   }
@@ -282,12 +273,14 @@ test('r21 default 1: normal mode does not instantiate the auto orchestrator', ()
 test('r21 default 2: normal mode does not compute fingerprint diagnostics', () => {
   const h = harness();
   try {
+    armFileGate(h);
     h.page.onSimpleStart();
     const counts: Record<string, number> = {};
     const receiver = h.page.baselineReceiver;
     for (const method of ['crcFailureDiagnostics', 'geometryDiagnostics', 'decodedChunkCounts', 'receivedIndices']) {
       spyOn(receiver, method, counts);
     }
+    armFileGate(h);
     h.page.onSimpleStart();
     // Reset creates a NEW receiver: spy on the one the run actually uses.
     const runReceiver = h.page.baselineReceiver;
@@ -320,6 +313,7 @@ test('r21 default 2: normal mode does not compute fingerprint diagnostics', () =
 test('r21 default 3: normal mode does not compute the rotation histogram', () => {
   const h = harness();
   try {
+    armFileGate(h);
     h.page.onSimpleStart();
     const counts: Record<string, number> = {};
     spyOn(h.page.baselineReceiver, 'rotationDiagnostics', counts);
@@ -348,6 +342,7 @@ test('r21 default 3: normal mode does not compute the rotation histogram', () =>
 test('r21 default 4: normal mode UI updates are throttled and change-gated', (t) => {
   const h = harness();
   try {
+    armFileGate(h);
     h.page.onSimpleStart();
     h.feed();  // the first frame flips `callbackActive` once, by design
     const afterFirstFrame = h.setDataCount();
@@ -373,6 +368,7 @@ test('r21 default 4: normal mode UI updates are throttled and change-gated', (t)
     // MEASURED BEFOR/AFTER (local UI payload only — never a physical throughput claim):
     // the normal-mode patch is a handful of fields, while the r13–r20 advanced baseline
     // panel publishes the full evidence set every tick. Both are measured on the same page.
+    armFileGate(h);
     h.page.onSimpleStart();
     h.page.onTick();
     const normalPatchKeys = h.lastPatchKeys();
@@ -400,6 +396,7 @@ test('r21 default 4: normal mode UI updates are throttled and change-gated', (t)
 test('r21 receive 5: the minimal receive PASSes on 16/16 + SHA MATCH through the real pipeline', () => {
   const h = harness();
   try {
+    armFileGate(h);
     h.page.onSimpleStart();
     assert.equal(h.page.data.simpleStatus, 'RECEIVING');
     h.advance(3000);
@@ -452,6 +449,7 @@ test('r21 receive 5: the minimal receive PASSes on 16/16 + SHA MATCH through the
 test('r21 receive 6: no unnecessary fixed-duration wait after PASS', () => {
   const h = harness();
   try {
+    armFileGate(h);
     h.page.onSimpleStart();
     h.advance(1500);
     for (const frame of transferFrames()) h.feed(frame);
@@ -487,6 +485,7 @@ test('r21 receive 6: no unnecessary fixed-duration wait after PASS', () => {
 test('r21 receive 7: the run FAILs at its bound when it never completes', () => {
   const h = harness();
   try {
+    armFileGate(h);
     h.page.onSimpleStart();
     h.feed();
     // Just inside the bound: still running, and NOT failed early.
@@ -509,7 +508,7 @@ test('r21 receive 7: the run FAILs at its bound when it never completes', () => 
     const verdict = simpleMode.simpleDecision(run, {uniqueReceived: 3, totalChunks: 16}, 30000);
     assert.equal(verdict.status, 'FAIL');
     assert.equal(verdict.reason, 'receive-timeout');
-    assert.equal(verdict.elapsedMs, 30000);
+    assert.equal(verdict.elapsedMs, 40000);
   } finally {
     h.restore();
   }
@@ -518,6 +517,7 @@ test('r21 receive 7: the run FAILs at its bound when it never completes', () => 
 test('r21 receive 8: RUN AGAIN resets the run, the receiver and the verdict', () => {
   const h = harness();
   try {
+    armFileGate(h);
     h.page.onSimpleStart();
     const first = h.page.simple;
     for (const frame of transferFrames()) h.feed(frame);
@@ -552,49 +552,48 @@ test('r21 receive 8: RUN AGAIN resets the run, the receiver and the verdict', ()
 // 9 — the small static alignment check
 // ---------------------------------------------------------------------------
 
-test('r21 static 9: the static decode check PASSes immediately at N decodes', () => {
+test('v2 static 9: T1 requires ten CRC-valid chunk-0 decodes inside 2 s', () => {
   const h = harness();
   try {
     h.page.onSimpleStaticCheck();
-    assert.equal(h.page.simpleKind, 'static', 'a static check is its own run kind');
-    assert.equal(h.page.data.simpleStatus, 'RECEIVING');
+    assert.equal(h.page.simpleKind, 'static');
+    const frames = transferFrames();
+    for (let index = 0; index < 9; index += 1) h.feed(frames[0]);
+    assert.equal(h.page.data.simpleResult, 'RECEIVING');
 
-    // Not enough decodes yet, and the bound has not passed: no verdict.
-    h.page.baselineReceiver.metrics.decodeSuccess = simpleMode.SIMPLE_STATIC_MIN_DECODES - 1;
-    h.advance(1200);
-    h.tick();
-    assert.equal(h.page.data.simpleResult, 'RECEIVING', 'nine decodes is not a PASS');
-
-    // The tenth decode PASSes at once — 1.2 s, not the 5 s bound.
-    h.page.baselineReceiver.metrics.decodeSuccess = simpleMode.SIMPLE_STATIC_MIN_DECODES;
-    h.advance(1);
-    h.tick();
+    h.feed(frames[0]);
     assert.equal(h.page.data.simpleResult, 'PASS');
+    assert.equal(h.page.simpleStaticReady, true);
+    assert.equal(h.page.data.simpleStaticReady, true);
     assert.equal(h.page.simple.reason, 'static-decodes');
-    assert.match(h.page.data.simpleDetail, /static alignment OK/);
-    const payload = h.page.simpleResultPayload();
-    assert.equal(payload.elapsedMs, 1201, 'the static check ends on the decode, not on the timer');
-    assert.ok(payload.elapsedMs < simpleMode.SIMPLE_STATIC_TIMEOUT_MS);
+    assert.equal(h.page.simpleResultPayload().staticChunk0Decodes, 10);
 
-    // The decision unit: PASS at the threshold, FAIL at the 5 s bound.
-    const run = simpleMode.simpleRun('static', 0);
-    assert.equal(simpleMode.simpleDecision(run, {successfulDecodes: 9}, 4999), null);
-    assert.equal(simpleMode.simpleDecision(run, {successfulDecodes: 10}, 100).reason, 'static-decodes');
-    assert.equal(simpleMode.simpleDecision(run, {successfulDecodes: 2}, 5000).reason, 'static-timeout');
+    const trusted = (h.page.baselineReceiver as any).lock;
+    assert.ok(trusted, 'T1 leaves a CRC-verified tracking lock');
 
-    // A static check does not require 16/16 and does not touch the transfer.
-    const fresh = harness();
-    try {
-      fresh.page.onSimpleStaticCheck();
-      fresh.page.baselineReceiver.metrics.decodeSuccess = 10;
-      fresh.tick();
-      assert.equal(fresh.page.data.simpleResult, 'PASS');
-      assert.equal(fresh.page.baselineReceiver.receivedUniqueCount, 0, 'no chunks were needed');
-    } finally {
-      fresh.restore();
-    }
+    h.page.onSimpleStart();
+    assert.equal((h.page.baselineReceiver as any).lock, trusted,
+      'T2 reset preserves exactly the verified T1 lock');
+    assert.equal(h.page.baselineReceiver.receivedUniqueCount, 0,
+      'T2 starts with a fresh chunk store');
   } finally {
     h.restore();
+  }
+
+  const wrong = harness();
+  try {
+    wrong.page.onSimpleStaticCheck();
+    const frames = transferFrames();
+    for (let index = 0; index < 12; index += 1) wrong.feed(frames[9]);
+    assert.equal(wrong.page.data.simpleResult, 'RECEIVING',
+      'many CRC-valid decodes of the wrong chunk cannot satisfy T1');
+    wrong.advance(simpleMode.SIMPLE_STATIC_TIMEOUT_MS);
+    wrong.tick();
+    assert.equal(wrong.page.data.simpleResult, 'FAIL');
+    assert.equal(wrong.page.simpleStaticReady, false);
+    assert.equal(wrong.page.simpleResultPayload().staticChunk0Decodes, 0);
+  } finally {
+    wrong.restore();
   }
 });
 
@@ -605,12 +604,14 @@ test('r21 static 9: the static decode check PASSes immediately at N decodes', ()
 test('r21 result 10: the result JSON is small and contains only allowed fields', () => {
   const h = harness();
   try {
+    armFileGate(h);
     h.page.onSimpleStart();
     for (const frame of transferFrames()) h.feed(frame);
     const payload = h.page.simpleResultPayload();
     const allowed = [
       'buildId', 'mode', 'status', 'reason', 'startedAtIso', 'finishedAtIso', 'elapsedMs',
-      'cameraFrames', 'decodeAttempts', 'successfulDecodes', 'crcFailures', 'locateFailures',
+      'cameraFrames', 'decodeAttempts', 'successfulDecodes', 'staticChunk0Decodes', 'passStreak',
+      'crcFailures', 'locateFailures',
       'uniqueReceived', 'totalChunks', 'assembledBytes', 'fileLength',
       'receivedChunkIndexes', 'missingChunkIndexes', 'decodedChunkCounts',
       'metadataRejects', 'foreignChunkRejects', 'duplicateChunks',
@@ -651,84 +652,33 @@ test('r21 result 10: the result JSON is small and contains only allowed fields',
   }
 });
 
-test('r21 advanced 11: advanced diagnostics still work when explicitly enabled', () => {
+test('v2 cleanup 11: diagnostic UI and relay setup are absent from the active surface', () => {
   const h = harness();
   try {
     assert.equal(h.page.data.showAdvanced, false);
-    h.page.onSimpleToggleAdvanced();
-    assert.equal(h.page.data.showAdvanced, true, 'the toggle turns the harness on');
-    assert.equal(h.page.data.showDiagnostics, true, 'and reveals the evidence panels');
-    assert.equal(typeof h.page.baselineReceiver.setDiagnosticsEnabled, 'function',
-      'the shipped receiver exposes the diagnostics gate');
-
-    // With advanced on, the full periodic panel runs again (r13–r20 unchanged) — and it
-    // dispatches by MODE, exactly as before.
-    let baselineTicks = 0;
-    let receiveTicks = 0;
-    const originalBaseline = h.page.onBaselineTick;
-    const originalReceive = h.page.onReceiveTick;
-    h.page.onBaselineTick = () => { baselineTicks += 1; return originalBaseline.call(h.page); };
-    h.page.onReceiveTick = () => { receiveTicks += 1; return originalReceive.call(h.page); };
-    assert.equal(h.page.data.mode, 'receive', 'the page is still in its default mode');
-    h.page.onTick();
-    assert.equal(receiveTicks, 1, 'the advanced tick runs for the active mode');
-    assert.equal(baselineTicks, 0, 'and only for the active mode');
-    h.page.setMode('baseline');
-    h.page.onTick();
-    assert.equal(baselineTicks, 1, 'the baseline panel runs in baseline mode');
-
-    // ...and in NORMAL mode neither of them runs at all.
-    h.page.onSimpleToggleAdvanced();
-    assert.equal(h.page.data.showAdvanced, false);
-    const advancedTicks = baselineTicks + receiveTicks;
-    h.page.onTick();
-    h.page.onTick();
-    assert.equal(baselineTicks + receiveTicks, advancedTicks,
-      'no advanced panel runs while advanced diagnostics is off');
-    h.page.onBaselineTick = originalBaseline;
-    h.page.onReceiveTick = originalReceive;
-
-    // The harness entry points switch it on by themselves.
-    const fresh = harness();
-    try {
-      fresh.page.data.autoControlUrl = 'ws://127.0.0.1:5173/lab';
-      fresh.page.onAutoTest();
-      assert.equal(fresh.page.data.showAdvanced, true, 'the A1..A5 sweep turns advanced on');
-      assert.equal(fresh.page.data.showDiagnostics, true);
-      assert.ok(fresh.page.autoRunner, 'and the r13..r20 harness still runs');
-      assert.equal(fresh.page.autoRunner.isRunning(), true);
-      // The r21 additions did not touch the diagnostic path's own gating.
-      assert.equal(fresh.page.data.mode, 'baseline');
-    } finally {
-      fresh.restore();
+    assert.equal(h.socketSent().length, 0);
+    for (const forbidden of [
+      'ADVANCED DIAGNOSTICS', 'BACK TO SIMPLE RECEIVE', 'AUTO PHYSICAL TEST',
+      'autoControlUrl', 'autoControlToken', 'STATIC PROBE', 'KEY STATUS'
+    ]) {
+      assert.ok(!PAGE_WXML.includes(forbidden), `removed active UI: ${forbidden}`);
     }
   } finally {
     h.restore();
   }
 });
 
-test('r21 network 12: networkPayloadPath remains NONE and nothing but control is sent', () => {
+test('v2 network 12: active acceptance opens no control channel and sends no bytes', () => {
   const h = harness();
   try {
     assert.equal(h.page.data.networkPath, 'NONE');
-    h.openSocket();
+    armFileGate(h);
     h.page.onSimpleStart();
     for (const frame of transferFrames()) h.feed(frame);
     assert.equal(h.page.data.simpleResult, 'PASS');
     h.page.onSimpleCopy();
-
-    const sent = h.socketSent();
-    assert.equal(sent.length, 1, 'the minimal path sends ONLY the handshake');
-    const hello = JSON.parse(sent[0]);
-    assert.equal(hello.type, 'hello', 'and it is the declared message class');
-    assert.equal(hello.role, TF012_AUTO_RECEIVER_ROLE, 'from the shared role constant');
-    // Nothing about the transfer travels: not the digest, not a chunk, not a frame.
-    const wire = sent.join('\n');
-    for (const forbidden of ['sha256', '1e21881b', 'chunk', 'payload', 'base64', 'manifest']) {
-      assert.ok(!wire.includes(forbidden), `the control channel must not carry ${forbidden}`);
-    }
-    assert.equal(h.page.simpleResultPayload().networkPayloadPath, 'NONE', 'the result declares the path');
-    assert.ok(PAGE_JS.includes("networkPayloadPath: 'NONE'"), 'and the page still states it');
+    assert.deepEqual(h.socketSent(), [], 'no control/payload socket traffic exists on active v2 path');
+    assert.equal(h.page.simpleResultPayload().networkPayloadPath, 'NONE');
   } finally {
     h.restore();
   }
