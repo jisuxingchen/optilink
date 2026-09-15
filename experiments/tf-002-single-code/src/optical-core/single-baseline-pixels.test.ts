@@ -163,6 +163,54 @@ test('G9 tracking keeps a held frame cheap and still exact', () => {
   assert.equal(receiver.metrics.locateFailures, 0);
 });
 
+test('G9 v2 tracking lock is CRC-valid-only and survives the T1→T2 reset', () => {
+  const receiver = new SingleCodeBaselineReceiver();
+  receiver.begin(0);
+  const first = receiver.ingestFrame(
+    render(2, {width: 720, height: 1280, fill: 0.7}),
+    SINGLE_BASELINE_MATRIX,
+    0,
+  );
+  assert.equal(first.result, 'stored');
+  const trusted = (receiver as any).lock;
+  assert.ok(trusted, 'a CRC-valid frame establishes the trusted tracking lock');
+
+  // Corrupt only the central data area. Reserved borders remain intact, so the locator
+  // should still produce a candidate, but the sampled frame must fail CRC.
+  const corrupted = render(3, {width: 720, height: 1280, fill: 0.7});
+  const cx = Math.floor(corrupted.width / 2);
+  const cy = Math.floor(corrupted.height / 2);
+  for (let y = cy - 28; y <= cy + 28; y += 1) {
+    for (let x = cx - 28; x <= cx + 28; x += 1) {
+      const offset = (y * corrupted.width + x) * 4;
+      corrupted.data[offset] = 255 - corrupted.data[offset];
+      corrupted.data[offset + 1] = 255 - corrupted.data[offset + 1];
+      corrupted.data[offset + 2] = 255 - corrupted.data[offset + 2];
+    }
+  }
+  const failed = receiver.ingestFrame(corrupted, SINGLE_BASELINE_MATRIX, 100);
+  assert.equal(failed.located, true, 'the corrupted frame still has candidate geometry');
+  assert.equal(failed.result, 'crc-failed');
+  assert.equal((receiver as any).lock, trusted,
+    'CRC-failed candidate geometry must not poison the persistent tracking seed');
+
+  receiver.begin(200, true);
+  assert.equal((receiver as any).lock, trusted, 'T1→T2 reset preserves the verified lock');
+  assert.equal(receiver.receivedUniqueCount, 0, 'transfer chunks are reset');
+  assert.equal(receiver.decodedCountForChunk(2), 0, 'per-chunk decode counts are reset');
+
+  const resumed = receiver.ingestFrame(
+    render(4, {width: 720, height: 1280, fill: 0.7}),
+    SINGLE_BASELINE_MATRIX,
+    300,
+  );
+  assert.equal(resumed.result, 'stored');
+  assert.equal(receiver.decodedCountForChunk(4), 1);
+
+  receiver.begin(400);
+  assert.equal((receiver as any).lock, null, 'ordinary fresh reset clears the tracking lock');
+});
+
 test('G7 every chunk index survives the full pixel path independently', () => {
   for (let index = 0; index < 16; index += 1) {
     const frame = render(index, {width: 720, height: 1280, fill: 0.72});

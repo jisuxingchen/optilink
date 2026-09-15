@@ -2104,8 +2104,15 @@ export class SingleCodeBaselineReceiver {
     }
   }
 
-  /** Reset for a fresh transfer. `now` is injectable so tests stay deterministic. */
-  begin(now = Date.now()): void {
+  /**
+   * Reset for a fresh transfer. `now` is injectable so tests stay deterministic.
+   *
+   * v2: `preserveVerifiedLock` is used only when T1 STATIC READY hands off to T2 FILE.
+   * `this.lock` is now CRC-verified-only, so preserving it cannot carry a failed candidate
+   * into the next transfer.
+   */
+  begin(now = Date.now(), preserveVerifiedLock = false): void {
+    const verifiedLock = preserveVerifiedLock ? this.lock : null;
     this.stage = 'waiting';
     this.activeFileId = null;
     this.totalChunks = 0;
@@ -2129,7 +2136,7 @@ export class SingleCodeBaselineReceiver {
     this.reconstruction = null;
     this.startedAt = now;
     this.begun = true;
-    this.lock = null;
+    this.lock = verifiedLock;
   }
 
   get receivedUniqueCount(): number {
@@ -2147,6 +2154,11 @@ export class SingleCodeBaselineReceiver {
    */
   receivedIndices(): number[] {
     return [...this.received.keys()].sort((a, b) => a - b);
+  }
+
+  /** Cheap hot-path count used by the v2 STATIC READY gate; no allocation. */
+  decodedCountForChunk(index: number): number {
+    return this.decodedByChunk.get(index) ?? 0;
   }
 
   /**
@@ -2354,7 +2366,8 @@ export class SingleCodeBaselineReceiver {
       if (this.diagnosticsEnabled) this.rotations.noteUnlocated();
       return {located: false, decoded: false, result: 'locate-failed', chunkIndex: -1};
     }
-    this.lock = lock;
+    // Candidate geometry is observable immediately, but it is NOT trusted for future
+    // tracking until the frame passes the OptiGrid CRC below.
     this.metrics.reservedScore = lock.score;
     this.metrics.threshold = lock.threshold;
     this.metrics.contrast = lock.contrast;
@@ -2375,6 +2388,9 @@ export class SingleCodeBaselineReceiver {
       }
       return {located: true, decoded: false, result: 'crc-failed', chunkIndex: -1};
     }
+    // v2 anti-poison rule: only a CRC-valid frame may become the persistent tracking seed.
+    // A false candidate that reaches sampling but fails CRC is discarded after this frame.
+    this.lock = lock;
     this.metrics.decodeSuccess += 1;
     if (this.diagnosticsEnabled) {
       this.rotations.note(lock.rotation, 'accepted');
