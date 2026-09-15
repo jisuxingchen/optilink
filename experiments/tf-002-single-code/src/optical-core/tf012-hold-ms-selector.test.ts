@@ -94,38 +94,23 @@ const chip = (holdMs: number): Record<string, unknown> => ({currentTarget: {data
 // 1. The control is on the first screen, above the viewfinder
 // ---------------------------------------------------------------------------
 
-test('all Stage B values and the 750 ms outlier have one-tap chips', () => {
+test('v2 removes the phone Stage B selector from the active acceptance UI', () => {
   for (const holdMs of STAGE_B_AND_OUTLIER) {
-    assert.ok(
-      PAGE_WXML.includes(`data-hms="${holdMs}"`),
-      'the phone must offer a ' + holdMs + ' ms chip',
-    );
+    assert.ok(!PAGE_WXML.includes(`data-hms="${holdMs}"`), 'no phone timing chip: ' + holdMs);
   }
-  assert.ok(PAGE_WXML.includes('bindtap="onHoldMsChip"'), 'the chips are tappable');
-  assert.ok(PAGE_JS.includes('onHoldMsChip'), 'the tap handler exists on the page');
+  assert.ok(!PAGE_WXML.includes('onHoldMsChip'));
+  assert.ok(!PAGE_WXML.includes('Sender holdMs declaration'));
+  assert.ok(!PAGE_WXML.includes('showDiagnostics'));
 });
 
-test('the holdMs control sits above the camera and outside the collapsed diagnostics', () => {
-  const holdBar = PAGE_WXML.indexOf('Sender holdMs declaration');
-  const camera = PAGE_WXML.indexOf('<camera');
-  const diagnostics = PAGE_WXML.indexOf('wx:if="{{showDiagnostics}}"');
-  assert.ok(holdBar > 0, 'the declaration bar is rendered');
-  assert.ok(camera > 0, 'the viewfinder exists');
-  assert.ok(diagnostics > 0, 'the diagnostics block exists');
-  // First screen: the control must come BEFORE the viewfinder and must not be
-  // inside the block that is hidden by default.
-  assert.ok(holdBar < camera, 'the holdMs bar is above the viewfinder');
-  assert.ok(holdBar < diagnostics, 'the holdMs bar is not inside the collapsed diagnostics');
-});
-
-test('the phone states the PC/phone consistency rule without any network sync', () => {
-  assert.ok(PAGE_WXML.includes('Must match sender'), 'the rule is shown in English');
-  assert.ok(PAGE_WXML.includes('必须与电脑发送端一致'), 'the rule is shown in Chinese');
-  // No hidden oracle: the phone never reads the sender over the network.
+test('v2 states the single T2 sender setting instead of asking the phone to mirror holdMs', () => {
+  assert.ok(PAGE_WXML.includes('cyclic 1000 ms'));
+  assert.ok(PAGE_WXML.includes('T2 = 16/16 + 10240 B + local SHA MATCH / 40 s'));
+  assert.ok(PAGE_WXML.includes('network payload path NONE'));
   for (const pattern of ['wx.request', 'wx.connectSocket', 'new WebSocket', 'XMLHttpRequest', 'fetch(']) {
-    assert.ok(!PAGE_JS.includes(pattern), 'no network path may be added: ' + pattern);
+    assert.ok(!PAGE_JS.includes(pattern), 'active page adds no direct network path: ' + pattern);
   }
-  assert.ok(PAGE_JS.includes("networkPayloadPath: 'NONE'"), 'the payload path is still declared NONE');
+  assert.ok(PAGE_JS.includes("networkPayloadPath: 'NONE'"));
 });
 
 // ---------------------------------------------------------------------------

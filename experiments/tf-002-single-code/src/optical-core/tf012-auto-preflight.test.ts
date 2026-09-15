@@ -438,11 +438,15 @@ test('r17 ui 12: the phone displays the gate window, not live counters', () => {
   assert.ok(modals[0].includes('2026-09-13T10:00:00.000Z'), 'the modal names the window');
   assert.ok(modals[0].includes('frames=0'), 'and shows the window counters, not live ones');
   assert.ok(modals[0].includes('no valid decode yet'), 'with the gate reasons verbatim');
-  // The live grid keeps its own explicit label so the two windows are never confused.
-  assert.match(PAGE_WXML, /LIVE counters \(since last reset\)/);
-  assert.match(PAGE_WXML, /SETUP window \(gate evidence\)/);
-  assert.match(PAGE_WXML, /autoSetupWindowCounters/);
-  assert.match(PAGE_WXML, /autoPrereqCamera/);
+  // v2 deliberately removes the historical setup/auto UI from the active phone surface.
+  // The orchestration object is still testable here as historical support code, but a PO
+  // can no longer enter it from the physical acceptance screen.
+  for (const removed of ['LIVE counters (since last reset)', 'SETUP window (gate evidence)',
+    'autoSetupWindowCounters', 'autoPrereqCamera', 'AUTO PHYSICAL TEST']) {
+    assert.ok(!PAGE_WXML.includes(removed), 'v2 active WXML removes ' + removed);
+  }
+  assert.match(PAGE_WXML, /T1 STATIC READY/u);
+  assert.match(PAGE_WXML, /START FILE TEST/u);
 });
 
 test('r17 ui 12b: the phone tells an acquisition fault apart from an optics fault', () => {

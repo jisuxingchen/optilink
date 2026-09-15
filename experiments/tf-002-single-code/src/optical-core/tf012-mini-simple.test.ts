@@ -236,6 +236,7 @@ function spyOn(object: Record<string, any>, method: string, counts: Record<strin
 
 /** Unit tests may enter T2 directly after explicitly satisfying the T1 gate. */
 function armFileGate(h: Harness): void {
+  if (h.page.data.mode !== 'baseline') h.page.setMode('baseline');
   h.page.simpleStaticReady = true;
   h.page.setData({
     simpleStaticReady: true,
@@ -483,13 +484,13 @@ test('r21 receive 7: the run FAILs at its bound when it never completes', () => 
     assert.equal(h.page.data.simpleResultClass, 'bad');
     assert.equal(h.page.simple.reason, 'receive-timeout');
     assert.match(h.page.data.simpleDetail, /timeout/i);
-    assert.ok(h.page.data.simpleDetail.includes('30 s'), 'the detail names the bound');
+    assert.ok(h.page.data.simpleDetail.includes('40 s'), 'the detail names the bound');
     assert.equal(h.page.simpleResultPayload().status, 'FAIL');
 
     // And the decision unit: null before the bound, FAIL at it, exactly once.
     const run = simpleMode.simpleRun('receive', 0);
-    assert.equal(simpleMode.simpleDecision(run, {uniqueReceived: 3, totalChunks: 16}, 29999), null);
-    const verdict = simpleMode.simpleDecision(run, {uniqueReceived: 3, totalChunks: 16}, 30000);
+    assert.equal(simpleMode.simpleDecision(run, {uniqueReceived: 3, totalChunks: 16}, 39999), null);
+    const verdict = simpleMode.simpleDecision(run, {uniqueReceived: 3, totalChunks: 16}, 40000);
     assert.equal(verdict.status, 'FAIL');
     assert.equal(verdict.reason, 'receive-timeout');
     assert.equal(verdict.elapsedMs, 40000);

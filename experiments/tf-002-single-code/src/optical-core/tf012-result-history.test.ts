@@ -328,26 +328,20 @@ test('Reset Metrics resets live counters only and never wipes the history', () =
 // 4. UI wiring + no new network path
 // ---------------------------------------------------------------------------
 
-test('the page exposes the r8 history surface and the first-screen key panel', () => {
-  for (const method of ['freezeResult', 'copyLatestResult', 'copyAllResults', 'clearHistory', 'loadHistory', 'persistHistory', 'buildHistoryEntry', 'historySummaryPatch', 'buildKeyStatusPatch', 'refreshKeyStatus', 'toggleDiagnostics', 'modeLabelText']) {
-    assert.ok(PAGE_JS.includes(method) || PAGE_WXML.includes(method), 'page exposes ' + method);
+test('v2 keeps local history helpers out of the active acceptance surface', () => {
+  for (const method of ['freezeResult', 'copyLatestResult', 'copyAllResults', 'clearHistory',
+    'loadHistory', 'persistHistory', 'buildHistoryEntry']) {
+    assert.ok(PAGE_JS.includes(method), 'historical local helper remains available in code: ' + method);
   }
-  for (const field of ['historyCount', 'lastFreezeAt', 'historyShaResult', 'historyChunks', 'historyMax', 'showDiagnostics']) {
-    assert.ok(PAGE_WXML.includes(field), 'the history panel shows ' + field);
+  for (const removed of ['historyCount', 'KEY STATUS', 'keyHoldMs', 'showDiagnostics']) {
+    assert.ok(!PAGE_WXML.includes(removed), 'v2 WXML removes legacy panel field: ' + removed);
   }
-  // The key fields required on the first screen.
-  for (const field of ['keyBuildId', 'keyModeLabel', 'keyHoldMs', 'keyChunks', 'keyMissing', 'keyFirstChunkMs', 'keyAllChunksMs', 'keySha', 'keyReconstruction', 'keyDeepestStage', 'keyStageReason', 'keyLocateFailures', 'keyCrcFailures', 'keyDuplicates', 'keyCodeWidth', 'keyPixPerCell']) {
-    assert.ok(PAGE_WXML.includes(field), 'the key panel shows ' + field);
+  for (const forbidden of ['wx.request', 'wx.connectSocket', 'wx.uploadFile', 'wx.downloadFile',
+    'wx.sendSocketMessage', 'XMLHttpRequest', 'sendBeacon', 'https://']) {
+    assert.ok(!PAGE_JS.includes(forbidden), 'history code must not add ' + forbidden);
   }
-  assert.ok(PAGE_WXML.includes('KEY STATUS'), 'the key panel is labelled');
-  assert.ok(PAGE_WXML.includes('showDiagnostics'), 'low-priority diagnostics are collapsible');
-  assert.ok(PAGE_WXML.indexOf('KEY STATUS') < PAGE_WXML.indexOf('showDiagnostics'), 'key fields precede the diagnostics block');
-
-  // Clipboard + storage only: no network API may appear in the history feature.
-  for (const forbidden of ['wx.request', 'wx.connectSocket', 'wx.uploadFile', 'wx.downloadFile', 'wx.sendSocketMessage', 'XMLHttpRequest', 'sendBeacon', 'https://']) {
-    assert.ok(!PAGE_JS.includes(forbidden), 'history feature must not add ' + forbidden);
-  }
-  assert.ok(PAGE_JS.includes("'optilink.tf012.testHistory.v1'"), 'history uses one dedicated local storage key');
+  assert.ok(PAGE_JS.includes("'optilink.tf012.testHistory.v1'"));
+  assert.ok(PAGE_WXML.includes('COPY RESULT / 复制结果'));
 });
 
 // ---------------------------------------------------------------------------
@@ -360,7 +354,7 @@ test('every event handler bound in the WXML exists on the page', () => {
   for (const match of PAGE_WXML.matchAll(/bind(?:tap|input|change|initdone|stop|error)="([A-Za-z_$][\w$]*)"/gu)) {
     bindings.add(match[1]);
   }
-  assert.ok(bindings.size >= 8, 'the page really binds handlers');
+  assert.equal(bindings.size, 7, 'v2 binds exactly four actions plus three camera events');
   for (const handler of bindings) {
     assert.equal(typeof ctx[handler], 'function', 'WXML binds ' + handler + '() and the page must define it');
   }
