@@ -299,7 +299,13 @@ test('r21 default 2: normal mode does not compute fingerprint diagnostics', () =
     for (let index = 0; index < 40; index += 1) h.feed();
     h.tick(5);
     h.page.simpleResultPayload();
-    assert.deepEqual(counts, {}, 'the default path computes no diagnostic evidence');
+    assert.deepEqual(counts, {}, 'the default path never asks for diagnostic evidence');
+    const diag = h.page.baselineReceiver.crcFailureDiagnostics();
+    const geometry = h.page.baselineReceiver.geometryDiagnostics();
+    assert.equal(diag.failedFrames, 0, 'failure fingerprints were not accumulated internally');
+    assert.equal(diag.analysedFrames, 0, 'no raw failure ring was retained');
+    assert.equal(geometry.failure, null, 'no diagnostic failure geometry was retained');
+    assert.equal(geometry.success, null, 'no diagnostic success geometry was retained');
     // It still counted frames and decode attempts — the cheap counters the minimal UI shows.
     assert.ok(h.page.data.simpleDecode.includes('OK'), 'the cheap counters still reach the UI');
   } finally {
@@ -316,7 +322,10 @@ test('r21 default 3: normal mode does not compute the rotation histogram', () =>
     for (let index = 0; index < 20; index += 1) h.feed();
     h.tick(3);
     const payload = h.page.simpleResultPayload();
-    assert.deepEqual(counts, {}, 'rotationDiagnostics is never called on the default path');
+    assert.deepEqual(counts, {}, 'rotationDiagnostics is never called by the default path');
+    const rotationDiag = h.page.baselineReceiver.rotationDiagnostics();
+    assert.equal(rotationDiag.framesCounted, 0, 'rotation histogram is not accumulated internally');
+    assert.equal(rotationDiag.unlocatedFrames, 0, 'unlocated-frame histogram is also disabled');
     const serialised = JSON.stringify(payload);
     for (const forbidden of ['rotations', 'dominantRotation', 'transitions', 'fingerprint', 'stableBit', 'phaseTiming']) {
       assert.ok(!serialised.includes(forbidden), `the small result carries no ${forbidden}`);
@@ -638,6 +647,8 @@ test('r21 advanced 11: advanced diagnostics still work when explicitly enabled',
     h.page.onSimpleToggleAdvanced();
     assert.equal(h.page.data.showAdvanced, true, 'the toggle turns the harness on');
     assert.equal(h.page.data.showDiagnostics, true, 'and reveals the evidence panels');
+    assert.equal(typeof h.page.baselineReceiver.setDiagnosticsEnabled, 'function',
+      'the shipped receiver exposes the diagnostics gate');
 
     // With advanced on, the full periodic panel runs again (r13–r20 unchanged) — and it
     // dispatches by MODE, exactly as before.

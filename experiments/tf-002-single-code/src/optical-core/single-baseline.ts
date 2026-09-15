@@ -2084,6 +2084,25 @@ export class SingleCodeBaselineReceiver {
   private startedAt = 0;
   private begun = false;
   private lock: SingleCodeLock | null = null;
+  /**
+   * r21 minimal path disables r19/r20 evidence collection on the hot path.
+   * Legacy/advanced callers keep diagnostics ON by default.
+   */
+  private diagnosticsEnabled = true;
+
+  setDiagnosticsEnabled(enabled: boolean): void {
+    this.diagnosticsEnabled = Boolean(enabled);
+    if (!this.diagnosticsEnabled) {
+      this.failureFingerprints.clear();
+      this.failureRing.length = 0;
+      this.failureCount = 0;
+      this.failureHeaderInvalid = 0;
+      this.failureCrcMismatch = 0;
+      this.worstFailureGeometry = null;
+      this.lastSuccessGeometry = null;
+      this.rotations.reset();
+    }
+  }
 
   /** Reset for a fresh transfer. `now` is injectable so tests stay deterministic. */
   begin(now = Date.now()): void {
@@ -2324,12 +2343,15 @@ export class SingleCodeBaselineReceiver {
     this.metrics.cameraHeight = frame.height;
     this.metrics.decodeAttempts += 1;
 
-    const capture = captureSingleBaselineCode(frame, matrixSize, {previous: this.lock, failureSink: true});
-    this.applyCaptureDiagnostics(capture.diagnostics);
+    const capture = captureSingleBaselineCode(frame, matrixSize, {
+      previous: this.lock,
+      failureSink: this.diagnosticsEnabled,
+    });
+    if (this.diagnosticsEnabled) this.applyCaptureDiagnostics(capture.diagnostics);
     const lock = capture.lock;
     if (!lock) {
       this.metrics.locateFailures += 1;
-      this.rotations.noteUnlocated();
+      if (this.diagnosticsEnabled) this.rotations.noteUnlocated();
       return {located: false, decoded: false, result: 'locate-failed', chunkIndex: -1};
     }
     this.lock = lock;
@@ -2347,14 +2369,18 @@ export class SingleCodeBaselineReceiver {
     const decoded = capture.decoded;
     if (!decoded) {
       this.metrics.crcFailures += 1;
-      this.rotations.note(lock.rotation, 'crc-failed');
-      this.noteDecodeFailure(capture);
+      if (this.diagnosticsEnabled) {
+        this.rotations.note(lock.rotation, 'crc-failed');
+        this.noteDecodeFailure(capture);
+      }
       return {located: true, decoded: false, result: 'crc-failed', chunkIndex: -1};
     }
     this.metrics.decodeSuccess += 1;
-    this.rotations.note(lock.rotation, 'accepted');
-    this.lastSuccessGeometry = singleBaselineGeometrySample(
-      lock, capture.diagnostics, capture.candidates, capture.refined);
+    if (this.diagnosticsEnabled) {
+      this.rotations.note(lock.rotation, 'accepted');
+      this.lastSuccessGeometry = singleBaselineGeometrySample(
+        lock, capture.diagnostics, capture.candidates, capture.refined);
+    }
     const result = this.ingestDecoded(decoded, now);
     return {located: true, decoded: true, result, chunkIndex: this.metrics.lastChunkIndex};
   }

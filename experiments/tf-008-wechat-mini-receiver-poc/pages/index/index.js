@@ -526,7 +526,12 @@ Page({
     this.baselineReceiver = (opticalCore && typeof opticalCore.SingleCodeBaselineReceiver === 'function')
       ? new opticalCore.SingleCodeBaselineReceiver()
       : null;
-    if (this.baselineReceiver) this.baselineReceiver.begin(clockMs());
+    if (this.baselineReceiver) {
+      if (typeof this.baselineReceiver.setDiagnosticsEnabled === 'function') {
+        this.baselineReceiver.setDiagnosticsEnabled(false);
+      }
+      this.baselineReceiver.begin(clockMs());
+    }
 
     // TF-012 r6/r7 speed ladder: expose Stage A + Stage B presets to the picker
     // and derive the declared theoretical rates for the default hold time.
@@ -679,7 +684,12 @@ Page({
     this.baselineReceiver = (opticalCore && typeof opticalCore.SingleCodeBaselineReceiver === 'function')
       ? new opticalCore.SingleCodeBaselineReceiver()
       : null;
-    if (this.baselineReceiver) this.baselineReceiver.begin(clockMs());
+    if (this.baselineReceiver) {
+      if (typeof this.baselineReceiver.setDiagnosticsEnabled === 'function') {
+        this.baselineReceiver.setDiagnosticsEnabled(Boolean(this.data.showAdvanced));
+      }
+      this.baselineReceiver.begin(clockMs());
+    }
     this.baselineBusy = false;
     this.baselinePending = null;
     this.baselineFramesReceived = 0;
@@ -1476,6 +1486,9 @@ Page({
     const patch = {showAdvanced: next};
     if (next) Object.assign(patch, {showDiagnostics: true}, this.buildKeyStatusPatch());
     this.setData(patch);
+    if (this.baselineReceiver && typeof this.baselineReceiver.setDiagnosticsEnabled === 'function') {
+      this.baselineReceiver.setDiagnosticsEnabled(next);
+    }
     this.appendLog(next
       ? 'advanced diagnostics ON / 已开启高级诊断'
       : 'advanced diagnostics OFF / 已关闭高级诊断 (minimal receive UI)');
@@ -1655,6 +1668,9 @@ Page({
     // r21: the A1..A5 sweep is ADVANCED-only. Tapping it here switches the advanced surface
     // on, so the evidence it produces is visible without hunting for a second toggle.
     this.setData({showAdvanced: true, showDiagnostics: true});
+    if (this.baselineReceiver && typeof this.baselineReceiver.setDiagnosticsEnabled === 'function') {
+      this.baselineReceiver.setDiagnosticsEnabled(true);
+    }
     // The auto plan is a SINGLE-CODE BASELINE plan: switch the page first, then start the
     // camera. Both are idempotent, so a second tap never disturbs a running session.
     if (this.data.mode !== 'baseline') {
@@ -1721,6 +1737,9 @@ Page({
     }
     // r21: the static probe is ADVANCED-only, like the sweep.
     this.setData({showAdvanced: true, showDiagnostics: true});
+    if (this.baselineReceiver && typeof this.baselineReceiver.setDiagnosticsEnabled === 'function') {
+      this.baselineReceiver.setDiagnosticsEnabled(true);
+    }
     if (this.data.mode !== 'baseline') this.setMode('baseline');
     if (!this.data.running) this.startCamera();
     const runner = createAutoTestRunner({
