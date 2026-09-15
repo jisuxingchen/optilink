@@ -83,7 +83,11 @@ CameraFrame → locate → sample → CRC → chunk → dedupe → reconstruct �
    `16/16 chunks + 10240 B + SHA-256 MATCH` is true — in seconds, not after a 90 s plan.
 5. Tap **COPY RESULT / 复制结果** and send the JSON. It is small by design: buildId, mode, status,
    timings, the camera/decode counters, chunks, `assembledBytes`, the two local digests,
-   `shaResult`, the geometry numbers and `networkPayloadPath: NONE`.
+   `shaResult`, the geometry numbers and `networkPayloadPath: NONE`. After P4 it also carries
+   compact scalar chunk-identity summaries — `receivedChunkIndexes`, `missingChunkIndexes`,
+   `decodedChunkCounts`, `metadataRejects`, `foreignChunkRejects`, and `duplicateChunks`.
+   They are read only when the terminal result is copied; no r19/r20 per-frame diagnostics are
+   re-enabled.
 
 **STATIC CHECK / 静态检查** is the quick alignment aid: PASS at 10 valid decodes within 5 s, with no
 sender progress needed.

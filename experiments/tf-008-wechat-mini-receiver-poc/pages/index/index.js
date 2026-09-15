@@ -1453,13 +1453,32 @@ Page({
       + simpleMode.simpleElapsedText(decision.elapsedMs));
   },
 
-  /** The SMALL result artefact: local measurements and local digests only. */
+  /**
+   * The SMALL result artefact: local measurements and local digests only.
+   *
+   * r21 P4: chunk-identity summaries are read HERE, at COPY RESULT time only. The receiver
+   * already maintains these maps for dedupe/identity; reading them here adds no per-frame
+   * diagnostic work and keeps r19/r20 evidence disabled on the minimal hot path.
+   */
   simpleResultPayload() {
     const run = this.simple;
     const counters = this.simpleCounters();
     const startedAt = run ? run.startedAt : Date.now();
     const finishedAt = (run && run.finishedAt) ? run.finishedAt : Date.now();
     const result = this.baselineResult;
+    const receiver = this.baselineReceiver;
+    const metrics = (receiver && receiver.metrics) ? receiver.metrics : null;
+    const receivedChunkIndexes = receiver && typeof receiver.receivedIndices === 'function'
+      ? receiver.receivedIndices().join(',')
+      : '';
+    const missingChunkIndexes = receiver && typeof receiver.missingIndices === 'function'
+      ? receiver.missingIndices().join(',')
+      : '';
+    const decodedChunkCounts = receiver && typeof receiver.decodedChunkCounts === 'function'
+      ? Object.entries(receiver.decodedChunkCounts())
+        .map(([index, count]) => index + ':' + count)
+        .join(',')
+      : '';
     return simpleMode.simpleResultJson({
       buildId: BUILD_ID,
       mode: 'simple-receive',
@@ -1470,6 +1489,12 @@ Page({
       elapsedMs: Math.max(0, finishedAt - startedAt),
       sha256: result ? result.sha256Hex : null,
       manifestSha256: result ? result.expectedSha256 : null,
+      receivedChunkIndexes,
+      missingChunkIndexes,
+      decodedChunkCounts,
+      metadataRejects: metrics ? metrics.metadataRejects : 0,
+      foreignChunkRejects: metrics ? metrics.foreignChunkRejects : 0,
+      duplicateChunks: metrics ? metrics.duplicateChunks : 0,
       counters
     });
   },

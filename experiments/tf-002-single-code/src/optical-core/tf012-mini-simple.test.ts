@@ -608,6 +608,8 @@ test('r21 result 10: the result JSON is small and contains only allowed fields',
       'buildId', 'mode', 'status', 'reason', 'startedAtIso', 'finishedAtIso', 'elapsedMs',
       'cameraFrames', 'decodeAttempts', 'successfulDecodes', 'crcFailures', 'locateFailures',
       'uniqueReceived', 'totalChunks', 'assembledBytes', 'fileLength',
+      'receivedChunkIndexes', 'missingChunkIndexes', 'decodedChunkCounts',
+      'metadataRejects', 'foreignChunkRejects', 'duplicateChunks',
       'sha256', 'manifestSha256', 'shaResult',
       'observedCodeWidthPx', 'pixelsPerCell', 'contrast', 'rotation',
       'networkPayloadPath',
@@ -617,8 +619,13 @@ test('r21 result 10: the result JSON is small and contains only allowed fields',
       assert.ok(value === null || typeof value !== 'object', `${key} is a scalar (no diagnostic tree)`);
     }
     const text = JSON.stringify(payload);
-    assert.ok(text.length < 1200, `the result stays small (${text.length} chars)`);
+    assert.ok(text.length < 1800, `the result stays small (${text.length} chars)`);
     assert.equal(payload.mode, 'simple-receive');
+    assert.equal(payload.receivedChunkIndexes, '0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15');
+    assert.equal(payload.missingChunkIndexes, '');
+    assert.match(String(payload.decodedChunkCounts), /(?:^|,)0:\\d+(?:,|$)/u);
+    assert.equal(payload.metadataRejects, 0);
+    assert.equal(payload.foreignChunkRejects, 0);
     assert.equal(payload.buildId, h.page.data.buildId);
     // Field names must not look like a payload/oracle channel to the lab's guards.
     const guards = ['payload', 'filebytes', 'filecontent', 'filedata', 'chunkbytes',
@@ -728,7 +735,8 @@ test('r21 network 13: no network payload or oracle path is introduced', () => {
   for (const forbidden of ['wx.', 'connectSocket', 'fetch', 'XMLHttpRequest', 'require(', 'Buffer', 'process.']) {
     assert.ok(!SIMPLE_JS.includes(forbidden), `utils/tf012-simple.js must not contain ${forbidden}`);
   }
-  // The minimal page region sends nothing, and never reads the receiver's diagnostics.
+  // The minimal page region sends nothing and never reads HEAVY receiver diagnostics.
+  // Cheap chunk-identity summaries are allowed only in simpleResultPayload(), after the run.
   const region = PAGE_JS.slice(
     PAGE_JS.indexOf('  simpleCounters() {'), PAGE_JS.indexOf('  autoStepReceiverSample() {'));
   for (const forbidden of [
@@ -737,10 +745,19 @@ test('r21 network 13: no network payload or oracle path is introduced', () => {
   ]) {
     assert.ok(!region.includes(forbidden), `the simple path must not use ${forbidden}`);
   }
-  // The result carries LOCAL digests only — never a per-frame payload or an oracle object.
+  const hotRegion = PAGE_JS.slice(
+    PAGE_JS.indexOf('  simpleCounters() {'), PAGE_JS.indexOf('  simpleResultPayload() {'));
+  for (const terminalOnly of ['receivedIndices', 'missingIndices', 'decodedChunkCounts']) {
+    assert.ok(!hotRegion.includes(terminalOnly),
+      `${terminalOnly} must not run in the per-frame/tick hot path`);
+  }
+  // The result carries LOCAL digests + compact LOCAL chunk identity summaries only.
   const allowedValueSources = ['sha256Hex', 'expectedSha256'];
   const source = PAGE_JS.slice(
     PAGE_JS.indexOf('  simpleResultPayload() {'), PAGE_JS.indexOf('  onSimpleCopy() {'));
+  for (const terminalOnly of ['receivedIndices', 'missingIndices', 'decodedChunkCounts']) {
+    assert.ok(source.includes(terminalOnly), `terminal result includes ${terminalOnly}`);
+  }
   for (const token of allowedValueSources) {
     assert.ok(source.includes(token), `the result takes its digests from ${token}`);
   }

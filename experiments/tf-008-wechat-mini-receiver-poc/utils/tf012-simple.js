@@ -257,6 +257,13 @@ function simpleResultJson(input) {
     assembledBytes: numberOr(counts.assembledBytes, 0),
     fileLength: numberOr(counts.fileLength, SIMPLE_FILE_BYTES),
 
+    receivedChunkIndexes: state.receivedChunkIndexes || '',
+    missingChunkIndexes: state.missingChunkIndexes || '',
+    decodedChunkCounts: state.decodedChunkCounts || '',
+    metadataRejects: numberOr(state.metadataRejects, 0),
+    foreignChunkRejects: numberOr(state.foreignChunkRejects, 0),
+    duplicateChunks: numberOr(state.duplicateChunks, 0),
+
     sha256: state.sha256 || null,
     manifestSha256: state.manifestSha256 || null,
     shaResult: counts.shaResult || 'INCOMPLETE',
